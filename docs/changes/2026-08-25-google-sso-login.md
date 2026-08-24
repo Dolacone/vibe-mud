@@ -4,7 +4,11 @@ status: Ready-to-implement
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
+  - go.mod
+  - go.sum
 req_ref: REQ-001
 base_branch: main
 scope: "Tracks the Google-only login API from design through review."
@@ -42,7 +46,7 @@ The source of truth is `REQ-001`.
 
 Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
 
-- [ ] Task 1 - Add SQLite identity and session persistence. [parallel: no]
+- [x] Task 1 - Add SQLite identity and session persistence. [parallel: no]
   - Source scope: `internal/authapi/store.go`
   - Tests: `internal/authapi/store_test.go`
   - Supporting files: `go.mod`, `go.sum`
