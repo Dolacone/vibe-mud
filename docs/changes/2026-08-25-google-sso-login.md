@@ -45,12 +45,14 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
 - [ ] Task 1 - Add SQLite identity and session persistence. [parallel: no]
   - Source scope: `internal/authapi/store.go`
   - Tests: `internal/authapi/store_test.go`
+  - Supporting files: `go.mod`, `go.sum`
   - Acceptance criteria:
     - REQ-001 condition 7: 同一個 Google 帳號重複登入時，系統必須辨識為同一個應用程式使用者。
   - Test intent: prove issuer-plus-subject identity stability across profile changes, distinguish different subjects, atomically consume OAuth attempts once, reject expired attempts, and reject expired sessions.
 - [ ] Task 2 - Add the HTTP login and current-user API. [parallel: no]
   - Source scope: `internal/authapi/server.go`
   - Tests: `internal/authapi/server_test.go`
+  - Supporting files: `go.mod`, `go.sum`
   - Acceptance criteria:
     - REQ-001 condition 1: 後端只提供 HTTP API，不產生遊戲前端或登入頁面。
     - REQ-001 condition 2: Google 登入所需的導向回應不受純 JSON 回應限制。
@@ -81,3 +83,5 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
 - [x] The frontend and API deploy on different origins, but the plan defines neither credentialed CORS nor the cookie origin, `SameSite`, `Secure`, and redirect topology. Resolve this architecture so the Cloudflare Pages frontend can call `GET /api/me` without weakening the session boundary, and document the required public URLs.
 - [x] Task 3 packages Docker only and omits the required single-Machine Fly.io deployment with a mounted Fly Volume for SQLite. Add the Fly configuration, persistent database path, deployment dependency, and README setup steps, or narrow the task title and record a separate required deployment task.
 - [x] The OAuth-attempt design persists a hashed PKCE verifier, but the callback must recover the original verifier for the token exchange. Persist the verifier in a recoverable protected form until atomic consumption; continue hashing state for lookup and nonce for claim comparison.
+- [x] Dependency-manifest scope is incomplete. Task 2 introduces chi and Task 3 introduces `golang.org/x/oauth2` plus `coreos/go-oidc`, but only Task 1 lists `go.mod` and `go.sum`. List those supporting-file updates under every task that changes them, or state that Task 1 declares all planned dependencies and explain how its commit preserves dependencies not imported until later tasks.
+- [x] Task 1 cannot run its required Go tests while `go.mod` and `go.sum` belong to Task 3. Move module initialization and the SQLite dependency to Task 1, then let later tasks extend the module dependencies.
