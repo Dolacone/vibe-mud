@@ -1,0 +1,1 @@
+- 純 API 後端提供安全的 Google SSO、應用程式 session 與 JSON 身分回應 -> REQ-001
