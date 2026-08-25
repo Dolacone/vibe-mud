@@ -36,7 +36,7 @@ func loadConfig(getenv func(string) string) (runtimeConfig, error) {
 	if cfg.FrontendURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.RedirectURL == "" {
 		return runtimeConfig{}, errors.New("FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URL are required")
 	}
-	cfg.CookieSecure = getenv("COOKIE_SECURE") != "false"
+	cfg.CookieSecure = true
 	return cfg, nil
 }
 
