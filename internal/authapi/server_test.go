@@ -84,9 +84,10 @@ func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
 				t.Fatalf("CORS origin = %q, want %q", corsResponse.Header().Get("Access-Control-Allow-Origin"), test.origin)
 			}
 
-			state := loginState(t, handler)
+			state, flowCookie := loginState(t, handler)
 			provider.identity = ProviderIdentity{Issuer: "https://accounts.google.com", Subject: "subject-1", Nonce: provider.authorization.nonce}
 			callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code", nil)
+			callback.AddCookie(flowCookie)
 			callbackResponse := httptest.NewRecorder()
 			handler.ServeHTTP(callbackResponse, callback)
 			location, err := callbackResponse.Result().Location()
@@ -100,7 +101,7 @@ func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
 	}
 }
 
-func loginState(t *testing.T, handler http.Handler) string {
+func loginState(t *testing.T, handler http.Handler) (string, *http.Cookie) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/login", nil)
 	res := httptest.NewRecorder()
@@ -112,18 +113,18 @@ func loginState(t *testing.T, handler http.Handler) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return location.Query().Get("state")
+	return location.Query().Get("state"), res.Result().Cookies()[0]
 }
 
 func TestLoginRedirectIncludesStateNonceAndPKCE(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	provider := &fakeProvider{}
 	server, store := newTestServer(t, provider, &now)
-	state := loginState(t, server.Routes())
+	state, flowCookie := loginState(t, server.Routes())
 	if state == "" || provider.authorization.nonce == "" || provider.authorization.challenge == "" {
 		t.Fatal("login redirect did not receive state, nonce, and PKCE challenge")
 	}
-	attempt, err := store.ConsumeOAuthAttempt(state)
+	attempt, err := store.ConsumeOAuthAttempt(state, flowCookie.Value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,8 +141,9 @@ func TestCallbackRejectsReplayAndExpiryBeforeProviderExchange(t *testing.T) {
 	provider := &fakeProvider{identity: ProviderIdentity{Issuer: "https://accounts.google.com", Subject: "subject-1", Nonce: "wrong"}}
 	server, _ := newTestServer(t, provider, &now)
 	handler := server.Routes()
-	state := loginState(t, handler)
+	state, flowCookie := loginState(t, handler)
 	callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code-secret", nil)
+	callback.AddCookie(flowCookie)
 	first := httptest.NewRecorder()
 	handler.ServeHTTP(first, callback)
 	if first.Code != http.StatusBadRequest || provider.exchangeCalls != 1 {
@@ -153,13 +155,53 @@ func TestCallbackRejectsReplayAndExpiryBeforeProviderExchange(t *testing.T) {
 		t.Fatalf("replay status=%d exchange calls=%d; replay reached provider", replay.Code, provider.exchangeCalls)
 	}
 
-	expiredState := loginState(t, handler)
+	expiredState, expiredCookie := loginState(t, handler)
 	now = now.Add(11 * time.Minute)
 	expired := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(expiredState)+"&code=another-code", nil)
+	expired.AddCookie(expiredCookie)
 	expiredResponse := httptest.NewRecorder()
 	handler.ServeHTTP(expiredResponse, expired)
 	if expiredResponse.Code != http.StatusBadRequest || provider.exchangeCalls != 1 {
 		t.Fatalf("expired callback status=%d exchange calls=%d; expired state reached provider", expiredResponse.Code, provider.exchangeCalls)
+	}
+}
+
+func TestCallbackRequiresTheBrowserThatStartedLogin(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	provider := &fakeProvider{}
+	server, _ := newTestServer(t, provider, &now)
+	handler := server.Routes()
+	state, flowCookie := loginState(t, handler)
+	provider.identity = ProviderIdentity{Issuer: "https://accounts.google.com", Subject: "subject-1", Nonce: provider.authorization.nonce}
+
+	foreign := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code", nil)
+	foreign.AddCookie(&http.Cookie{Name: oauthFlowCookieName, Value: "foreign-browser-token"})
+	foreignResponse := httptest.NewRecorder()
+	handler.ServeHTTP(foreignResponse, foreign)
+	if foreignResponse.Code != http.StatusBadRequest || provider.exchangeCalls != 0 {
+		t.Fatalf("foreign callback status/exchange calls = %d/%d", foreignResponse.Code, provider.exchangeCalls)
+	}
+
+	original := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code", nil)
+	original.AddCookie(flowCookie)
+	originalResponse := httptest.NewRecorder()
+	handler.ServeHTTP(originalResponse, original)
+	if originalResponse.Code != http.StatusFound || provider.exchangeCalls != 1 {
+		t.Fatalf("original callback status/exchange calls = %d/%d", originalResponse.Code, provider.exchangeCalls)
+	}
+}
+
+func TestCallbackRejectsMissingBrowserFlowCookie(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	provider := &fakeProvider{}
+	server, _ := newTestServer(t, provider, &now)
+	handler := server.Routes()
+	state, _ := loginState(t, handler)
+	callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, callback)
+	if response.Code != http.StatusBadRequest || provider.exchangeCalls != 0 {
+		t.Fatalf("missing flow cookie status/exchange calls = %d/%d", response.Code, provider.exchangeCalls)
 	}
 }
 
@@ -170,9 +212,10 @@ func TestCallbackSetsConstrainedSessionCookieAndRedirectsFrontend(t *testing.T) 
 	}}
 	server, store := newTestServer(t, provider, &now)
 	handler := server.Routes()
-	state := loginState(t, handler)
+	state, flowCookie := loginState(t, handler)
 	provider.identity.Nonce = provider.authorization.nonce
 	callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=authorization-code-secret", nil)
+	callback.AddCookie(flowCookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, callback)
 	location, err := response.Result().Location()
@@ -183,10 +226,18 @@ func TestCallbackSetsConstrainedSessionCookieAndRedirectsFrontend(t *testing.T) 
 		t.Fatalf("callback status/location = %d/%q", response.Code, response.Result().Header.Get("Location"))
 	}
 	cookies := response.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("callback set %d cookies, want one", len(cookies))
+	if len(cookies) != 2 {
+		t.Fatalf("callback set %d cookies, want session and flow cleanup", len(cookies))
 	}
-	cookie := cookies[0]
+	var cookie *http.Cookie
+	for _, candidate := range cookies {
+		if candidate.Name == defaultSessionCookieName {
+			cookie = candidate
+		}
+	}
+	if cookie == nil {
+		t.Fatal("callback did not set session cookie")
+	}
 	if cookie.Name != defaultSessionCookieName || cookie.Value == "" || cookie.Domain != "" || cookie.Path != "/" || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("session cookie is not constrained: %+v", cookie)
 	}
@@ -205,12 +256,21 @@ func TestMeUsesCredentialedExactOriginCORSAndExposesNoSecrets(t *testing.T) {
 	}}
 	server, _ := newTestServer(t, provider, &now)
 	handler := server.Routes()
-	state := loginState(t, handler)
+	state, flowCookie := loginState(t, handler)
 	provider.identity.Nonce = provider.authorization.nonce
 	callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=authorization-code-secret", nil)
+	callback.AddCookie(flowCookie)
 	callbackResponse := httptest.NewRecorder()
 	handler.ServeHTTP(callbackResponse, callback)
-	sessionCookie := callbackResponse.Result().Cookies()[0]
+	var sessionCookie *http.Cookie
+	for _, cookie := range callbackResponse.Result().Cookies() {
+		if cookie.Name == defaultSessionCookieName {
+			sessionCookie = cookie
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("callback did not set session cookie")
+	}
 
 	me := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	me.Header.Set("Origin", "https://game.example.test")

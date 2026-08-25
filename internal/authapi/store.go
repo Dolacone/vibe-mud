@@ -67,8 +67,9 @@ CREATE TABLE IF NOT EXISTS identities (
 	updated_at INTEGER NOT NULL,
 	UNIQUE (issuer, subject)
 );
-CREATE TABLE IF NOT EXISTS oauth_attempts (
+	CREATE TABLE IF NOT EXISTS oauth_attempts (
 	state_hash BLOB PRIMARY KEY,
+	browser_token_hash BLOB,
 	nonce TEXT NOT NULL,
 	verifier TEXT NOT NULL,
 	expires_at INTEGER NOT NULL,
@@ -130,25 +131,36 @@ FROM identities WHERE id = ?`, id).Scan(
 	return identity, nil
 }
 
-func (s *Store) CreateOAuthAttempt(state, nonce, verifier string, expiresAt time.Time) error {
+func (s *Store) CreateOAuthAttempt(state, nonce, verifier string, expiresAt time.Time, browserToken ...string) error {
 	if strings.TrimSpace(state) == "" || strings.TrimSpace(nonce) == "" || strings.TrimSpace(verifier) == "" {
 		return fmt.Errorf("%w: oauth attempt values are required", ErrInvalidArgument)
 	}
+	var browserHash any
+	if len(browserToken) > 0 && strings.TrimSpace(browserToken[0]) != "" {
+		browserHash = hashSecret(browserToken[0])
+	}
 	_, err := s.db.Exec(`
-INSERT INTO oauth_attempts (state_hash, nonce, verifier, expires_at)
-VALUES (?, ?, ?, ?)`, hashSecret(state), nonce, verifier, expiresAt.UTC().UnixNano())
+INSERT INTO oauth_attempts (state_hash, browser_token_hash, nonce, verifier, expires_at)
+VALUES (?, ?, ?, ?, ?)`, hashSecret(state), browserHash, nonce, verifier, expiresAt.UTC().UnixNano())
 	if err != nil {
 		return fmt.Errorf("create oauth attempt: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) ConsumeOAuthAttempt(state string) (OAuthAttempt, error) {
+func (s *Store) ConsumeOAuthAttempt(state string, browserToken ...string) (OAuthAttempt, error) {
 	if strings.TrimSpace(state) == "" {
 		return OAuthAttempt{}, fmt.Errorf("%w: state is required", ErrInvalidArgument)
 	}
 	now := s.now().UTC()
 	nowNanos := now.UnixNano()
+	var browserHash any
+	bound := len(browserToken) > 0
+	boundFlag := 0
+	if bound {
+		browserHash = hashSecret(browserToken[0])
+		boundFlag = 1
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return OAuthAttempt{}, fmt.Errorf("begin oauth attempt consumption: %w", err)
@@ -156,15 +168,17 @@ func (s *Store) ConsumeOAuthAttempt(state string) (OAuthAttempt, error) {
 	var attempt OAuthAttempt
 	var expiresAt int64
 	err = tx.QueryRow(`
-SELECT nonce, verifier, expires_at FROM oauth_attempts
-WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?`, hashSecret(state), nowNanos).Scan(
+	SELECT nonce, verifier, expires_at FROM oauth_attempts
+	WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
+		AND (? = 0 OR browser_token_hash = ?)`, hashSecret(state), nowNanos, boundFlag, browserHash).Scan(
 		&attempt.Nonce, &attempt.Verifier, &expiresAt,
 	)
 	if err == nil {
 		result, updateErr := tx.Exec(`
 UPDATE oauth_attempts
 SET nonce = '', verifier = '', consumed_at = ?
-WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?`, nowNanos, hashSecret(state), nowNanos)
+WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
+			AND (? = 0 OR browser_token_hash = ?)`, nowNanos, hashSecret(state), nowNanos, boundFlag, browserHash)
 		if updateErr != nil {
 			_ = tx.Rollback()
 			return OAuthAttempt{}, fmt.Errorf("consume oauth attempt: %w", updateErr)

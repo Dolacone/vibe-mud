@@ -17,6 +17,7 @@ import (
 )
 
 const defaultSessionCookieName = "mud_session"
+const oauthFlowCookieName = "mud_oauth_flow"
 
 // IdentityProvider supplies the provider-specific OAuth authorization and
 // token exchange operations. The server only accepts verified identity data.
@@ -114,21 +115,33 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, "login unavailable")
 		return
 	}
-	if err := s.store.CreateOAuthAttempt(state, nonce, verifier, s.cfg.Now().UTC().Add(s.cfg.OAuthAttemptTTL)); err != nil {
+	flowToken, err := randomString(32)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "login unavailable")
 		return
 	}
+	if err := s.store.CreateOAuthAttempt(state, nonce, verifier, s.cfg.Now().UTC().Add(s.cfg.OAuthAttemptTTL), flowToken); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: oauthFlowCookieName, Value: flowToken, Path: "/", MaxAge: int(s.cfg.OAuthAttemptTTL / time.Second), HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, authorizationURL, http.StatusFound)
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
+	s.clearOAuthFlowCookie(w)
 	state := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 	if state == "" || code == "" {
 		s.writeError(w, http.StatusBadRequest, "invalid login callback")
 		return
 	}
-	attempt, err := s.store.ConsumeOAuthAttempt(state)
+	flowCookie, err := r.Cookie(oauthFlowCookieName)
+	if err != nil || flowCookie.Value == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid login state")
+		return
+	}
+	attempt, err := s.store.ConsumeOAuthAttempt(state, flowCookie.Value)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid login state")
 		return
@@ -168,6 +181,10 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, s.cfg.FrontendURL, http.StatusFound)
+}
+
+func (s *Server) clearOAuthFlowCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: oauthFlowCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteLaxMode})
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
