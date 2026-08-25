@@ -20,6 +20,7 @@ var (
 	ErrOAuthAttemptConsumed = errors.New("oauth attempt already consumed")
 	ErrSessionNotFound      = errors.New("session not found")
 	ErrSessionExpired       = errors.New("session expired")
+	ErrInsufficientAP       = errors.New("insufficient action points")
 )
 
 type Store struct {
@@ -47,6 +48,11 @@ type Session struct {
 	UserID    int64
 	ExpiresAt time.Time
 }
+
+const (
+	maxAP          = 3000
+	apRecoveryTime = time.Minute
+)
 
 func NewStore(db *sql.DB) (*Store, error) {
 	if db == nil {
@@ -80,6 +86,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 	user_id INTEGER NOT NULL REFERENCES identities(id),
 	expires_at INTEGER NOT NULL,
 	created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS player_ap (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	full_timestamp INTEGER NOT NULL
 );`); err != nil {
 		return nil, fmt.Errorf("initialize auth store: %w", err)
 	}
@@ -91,9 +101,13 @@ func (s *Store) UpsertIdentity(issuer, subject, email, displayName string) (Iden
 		return Identity{}, fmt.Errorf("%w: issuer and subject are required", ErrInvalidArgument)
 	}
 	now := s.now().UTC().UnixNano()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Identity{}, fmt.Errorf("begin upsert identity: %w", err)
+	}
 	var identity Identity
 	var createdAt, updatedAt int64
-	err := s.db.QueryRow(`
+	err = tx.QueryRow(`
 INSERT INTO identities (issuer, subject, email, display_name, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (issuer, subject) DO UPDATE SET
@@ -104,11 +118,101 @@ RETURNING id, issuer, subject, email, display_name, created_at, updated_at`,
 		issuer, subject, email, displayName, now, now,
 	).Scan(&identity.ID, &identity.Issuer, &identity.Subject, &identity.Email, &identity.DisplayName, &createdAt, &updatedAt)
 	if err != nil {
+		_ = tx.Rollback()
 		return Identity{}, fmt.Errorf("upsert identity: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT INTO player_ap (user_id, full_timestamp) VALUES (?, ?)
+ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player AP: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
 	}
 	identity.CreatedAt = unixNano(createdAt)
 	identity.UpdatedAt = unixNano(updatedAt)
 	return identity, nil
+}
+
+func (s *Store) GetAP(userID int64) (int, error) {
+	if userID <= 0 {
+		return 0, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	var fullTimestamp int64
+	err := s.db.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrIdentityNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get player AP: %w", err)
+	}
+	return calculateAP(unixNano(fullTimestamp), s.now().UTC()), nil
+}
+
+func (s *Store) Rest(userID int64) (int, error) {
+	if userID <= 0 {
+		return 0, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin rest: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return 0, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("get player AP for rest: %w", err)
+	}
+	now := s.now().UTC()
+	if calculateAP(unixNano(fullTimestamp), now) == 0 {
+		_ = tx.Rollback()
+		return 0, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	nextFullTimestamp := fullAt.Add(apRecoveryTime).UnixNano()
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("rest player: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("check rest player: %w", err)
+	}
+	if rows != 1 {
+		_ = tx.Rollback()
+		return 0, ErrInsufficientAP
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit rest player: %w", err)
+	}
+	return calculateAP(unixNano(nextFullTimestamp), now), nil
+}
+
+func calculateAP(fullTimestamp, now time.Time) int {
+	remaining := fullTimestamp.Sub(now)
+	if remaining <= 0 {
+		return maxAP
+	}
+	missing := remaining / apRecoveryTime
+	if remaining%apRecoveryTime != 0 {
+		missing++
+	}
+	if missing >= maxAP {
+		return 0
+	}
+	return maxAP - int(missing)
 }
 
 func (s *Store) GetIdentity(id int64) (Identity, error) {
