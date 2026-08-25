@@ -1,0 +1,242 @@
+package authapi
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+)
+
+const defaultSessionCookieName = "mud_session"
+
+// IdentityProvider supplies the provider-specific OAuth authorization and
+// token exchange operations. The server only accepts verified identity data.
+type IdentityProvider interface {
+	AuthorizationURL(state, nonce, codeChallenge string) (string, error)
+	Exchange(ctx context.Context, code, codeVerifier string) (ProviderIdentity, error)
+}
+
+type ProviderIdentity struct {
+	Issuer      string
+	Subject     string
+	Email       string
+	DisplayName string
+	Nonce       string
+}
+
+type Config struct {
+	FrontendURL       string
+	CookieSecure      bool
+	SessionTTL        time.Duration
+	OAuthAttemptTTL   time.Duration
+	SessionCookieName string
+	Now               func() time.Time
+}
+
+type Server struct {
+	store    *Store
+	provider IdentityProvider
+	cfg      Config
+}
+
+func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, error) {
+	if store == nil || provider == nil {
+		return nil, errors.New("auth server requires store and identity provider")
+	}
+	frontend, err := url.Parse(cfg.FrontendURL)
+	if err != nil || frontend.Scheme == "" || frontend.Host == "" || frontend.User != nil || frontend.RawQuery != "" || frontend.Fragment != "" {
+		return nil, errors.New("auth server requires a valid frontend URL")
+	}
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = 30 * 24 * time.Hour
+	}
+	if cfg.OAuthAttemptTTL <= 0 {
+		cfg.OAuthAttemptTTL = 10 * time.Minute
+	}
+	if cfg.SessionCookieName == "" {
+		cfg.SessionCookieName = defaultSessionCookieName
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	store.now = cfg.Now
+	return &Server{store: store, provider: provider, cfg: cfg}, nil
+}
+
+func (s *Server) Routes() http.Handler {
+	r := chi.NewRouter()
+	r.Use(s.cors)
+	r.NotFound(s.writeNotFound)
+	r.MethodNotAllowed(s.writeMethodNotAllowed)
+	r.Get("/auth/google/login", s.login)
+	r.Get("/auth/google/callback", s.callback)
+	r.Get("/api/me", s.me)
+	return r
+}
+
+func (s *Server) Handler() http.Handler {
+	return s.Routes()
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	state, err := randomString(32)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	nonce, err := randomString(32)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	verifier, err := randomString(32)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	challenge := pkceChallenge(verifier)
+	authorizationURL, err := s.provider.AuthorizationURL(state, nonce, challenge)
+	if err != nil || authorizationURL == "" {
+		s.writeError(w, http.StatusBadGateway, "login unavailable")
+		return
+	}
+	if err := s.store.CreateOAuthAttempt(state, nonce, verifier, s.cfg.Now().UTC().Add(s.cfg.OAuthAttemptTTL)); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	http.Redirect(w, r, authorizationURL, http.StatusFound)
+}
+
+func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
+	code := r.URL.Query().Get("code")
+	if state == "" || code == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid login callback")
+		return
+	}
+	attempt, err := s.store.ConsumeOAuthAttempt(state)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid login state")
+		return
+	}
+	identity, err := s.provider.Exchange(r.Context(), code, attempt.Verifier)
+	if err != nil || !sameSecret(identity.Nonce, attempt.Nonce) {
+		s.writeError(w, http.StatusBadRequest, "login verification failed")
+		return
+	}
+	if strings.TrimSpace(identity.Issuer) == "" || strings.TrimSpace(identity.Subject) == "" {
+		s.writeError(w, http.StatusBadRequest, "login verification failed")
+		return
+	}
+	user, err := s.store.UpsertIdentity(identity.Issuer, identity.Subject, identity.Email, identity.DisplayName)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	sessionToken, err := randomString(32)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	expiresAt := s.cfg.Now().UTC().Add(s.cfg.SessionTTL)
+	if err := s.store.CreateSession(user.ID, sessionToken, expiresAt); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "login unavailable")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.cfg.SessionCookieName,
+		Value:    sessionToken,
+		Path:     "/",
+		Expires:  expiresAt,
+		MaxAge:   int(s.cfg.SessionTTL / time.Second),
+		HttpOnly: true,
+		Secure:   s.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, s.cfg.FrontendURL, http.StatusFound)
+}
+
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(s.cfg.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	identity, err := s.store.GetIdentityForSession(cookie.Value)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, struct {
+		ID          int64  `json:"id"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+	}{identity.ID, identity.DisplayName, identity.Email})
+}
+
+func (s *Server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == s.cfg.FrontendURL {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) writeNotFound(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) writeMethodNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+}
+
+func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
+	s.writeJSON(w, status, struct {
+		Error string `json:"error"`
+	}{message})
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func randomString(size int) (string, error) {
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func pkceChallenge(verifier string) string {
+	digest := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func sameSecret(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}

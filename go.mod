@@ -2,7 +2,10 @@ module mud
 
 go 1.22
 
-require modernc.org/sqlite v1.35.0
+require (
+	github.com/go-chi/chi/v5 v5.1.0
+	modernc.org/sqlite v1.35.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

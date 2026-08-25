@@ -8,6 +8,8 @@ source_paths:
   - AGENTS.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
   - go.mod
   - go.sum
 req_ref: REQ-001
@@ -54,7 +56,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
   - Acceptance criteria:
     - REQ-001 condition 7: 同一個 Google 帳號重複登入時，系統必須辨識為同一個應用程式使用者。
   - Test intent: prove issuer-plus-subject identity stability across profile changes, distinguish different subjects, atomically consume OAuth attempts once, reject expired attempts, and reject expired sessions.
-- [ ] Task 2 - Add the HTTP login and current-user API. [parallel: no]
+- [x] Task 2 - Add the HTTP login and current-user API. [parallel: no]
   - Source scope: `internal/authapi/server.go`
   - Tests: `internal/authapi/server_test.go`
   - Supporting files: `go.mod`, `go.sum`
