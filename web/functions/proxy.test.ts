@@ -92,6 +92,36 @@ describe("Pages proxy", () => {
     expect(fetcher.mock.calls[0]?.[1]?.method).toBe("OPTIONS");
   });
 
+  it("forwards the same-origin rest POST and preserves the browser Origin", async () => {
+    const fetcher = vi.fn((..._args: Parameters<typeof fetch>) =>
+      Promise.resolve(new Response(JSON.stringify({ ap: 2999 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })));
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await onRequest(context("/api/actions/rest", {
+      method: "POST",
+      headers: {
+        Cookie: "mud_session=session-token",
+        Origin: "https://vibe-mud.pages.dev",
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ap: 2999 });
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [, options] = fetcher.mock.calls[0]!;
+    expect(options?.method).toBe("POST");
+    expect(options?.headers).toBeInstanceOf(Headers);
+    expect(options?.headers instanceof Headers ? options.headers.get("cookie") : null).toBe(
+      "mud_session=session-token",
+    );
+    expect(options?.headers instanceof Headers ? options.headers.get("origin") : null).toBe(
+      "https://vibe-mud.pages.dev",
+    );
+  });
+
   it("blocks methods outside the proxy contract", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);

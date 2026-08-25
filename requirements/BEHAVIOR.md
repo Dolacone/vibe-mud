@@ -1,2 +1,4 @@
 - 純 API 後端提供安全的 Google SSO、應用程式 session 與 JSON 身分回應 -> REQ-001
 - Cloudflare Pages 前端透過後端 session 確認並顯示 Google 登入身分 -> REQ-002
+- 玩家登入時取得依完整分鐘恢復且上限為 3000 的目前 AP -> REQ-003
+- 已登入玩家可透過前端 `rest` 行動消耗 1 AP 並保留結果 -> REQ-004

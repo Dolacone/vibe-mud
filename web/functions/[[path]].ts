@@ -84,7 +84,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   )?.[1] ?? "/";
   const path = proxyPath(rawPath);
   if (!path) return context.next();
-  if (context.request.method !== "GET" && context.request.method !== "OPTIONS") {
+  const isRestPost = path === "/api/actions/rest" && context.request.method === "POST";
+  if (context.request.method !== "GET" && context.request.method !== "OPTIONS" && !isRestPost) {
     return methodNotAllowed();
   }
 
@@ -104,6 +105,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   if (cookie) requestHeaders.set("cookie", cookie);
   const accept = context.request.headers.get("accept");
   if (accept) requestHeaders.set("accept", accept);
+  const origin = context.request.headers.get("origin");
+  if (origin) requestHeaders.set("origin", origin);
   const upstream = await fetch(upstreamURL, {
     method: context.request.method,
     headers: requestHeaders,

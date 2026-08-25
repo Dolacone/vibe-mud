@@ -9,3 +9,5 @@
 - Added single-Machine Fly.io packaging with persistent SQLite storage.
 - Added the Cloudflare Pages login interface and backend-confirmed identity display.
 - Added the allow-listed Pages Functions proxy for same-origin authentication.
+- Added timestamp-derived AP with a 3000 cap and one AP restored per complete minute.
+- Added the authenticated `rest` action across the API and Cloudflare Pages interface.
