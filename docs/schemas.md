@@ -4,7 +4,7 @@
 
 ## 更新規則
 
-[`internal/authapi/store.go`](internal/authapi/store.go) 是可執行 schema 的來源。SQLite table、column、index、constraint、initialization 或 backfill 有變更時，必須在同一 commit 更新本文件。
+[`internal/authapi/store.go`](../internal/authapi/store.go) 是可執行 schema 的來源。SQLite table、column、index、constraint、initialization 或 backfill 有變更時，必須在同一 commit 更新本文件。
 
 本文件記錄 production database 的完整結構與生命週期。測試建立的臨時 schema 不屬於 production schema。
 

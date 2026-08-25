@@ -4,7 +4,7 @@
 
 This repository contains the API backend for a multiplayer MUD. The first delivery adds Google-only SSO, SQLite-backed application sessions, and a JSON current-user response.
 
-The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). The complete SQLite structure and lifecycle are documented in [schemas.md](schemas.md). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
+The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). The complete SQLite structure and lifecycle are documented in [schemas.md](docs/schemas.md). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
 
 The API runs as one Go process in Docker. Runtime configuration uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`, `FRONTEND_URL`, `DATABASE_PATH`, and `PORT`. Session and OAuth flow cookies always use `Secure`.
 
