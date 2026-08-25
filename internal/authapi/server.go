@@ -257,6 +257,10 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		if origin != "" && origin != s.frontendOrigin && r.Method == http.MethodPost {
+			s.writeError(w, http.StatusForbidden, "origin not allowed")
+			return
+		}
 		if origin == s.frontendOrigin {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")

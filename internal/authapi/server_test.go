@@ -424,6 +424,37 @@ func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
 	}
 }
 
+func TestRestRejectsForeignOriginBeforeChangingState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-foreign-origin", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/rest", nil)
+	request.Header.Set("Origin", "https://evil.example.test")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 || body["error"] != "origin not allowed" {
+		t.Fatalf("foreign origin JSON = %#v", body)
+	}
+	if ap, err := store.GetAP(identity.ID); err != nil || ap != maxAP {
+		t.Fatalf("foreign origin changed AP: ap=%d err=%v", ap, err)
+	}
+}
+
 func TestRestCORSPreflightAllowsTrustedPostOnly(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, _ := newTestServer(t, &fakeProvider{}, &now)
