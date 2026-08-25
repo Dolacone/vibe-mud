@@ -7,6 +7,7 @@ last_reviewed: 2026-08-25
 source_paths:
   - AGENTS.md
   - README.md
+  - .gitignore
   - web/package.json
   - web/package-lock.json
   - web/tsconfig.json
@@ -104,7 +105,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
 ## Review Issues
 
 - [x] [Major] Live deployment returned a numeric JSON user ID from the backend, but the frontend identity validator accepted only string IDs. The frontend now accepts the existing numeric ID contract and rejects string IDs.
-- [ ] [Minor] `source_paths` omits `.gitignore`, although Task 2 changed it to exclude frontend dependency and build directories.
+- [x] [Minor] `source_paths` omitted `.gitignore`, although Task 2 changed it to exclude frontend dependency and build directories.
 
 ## Plan Review Issues
 
