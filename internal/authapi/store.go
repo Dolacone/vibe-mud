@@ -156,13 +156,28 @@ func (s *Store) ConsumeOAuthAttempt(state string) (OAuthAttempt, error) {
 	var attempt OAuthAttempt
 	var expiresAt int64
 	err = tx.QueryRow(`
-UPDATE oauth_attempts
-SET consumed_at = ?
-WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-RETURNING nonce, verifier, expires_at`, nowNanos, hashSecret(state), nowNanos).Scan(
+SELECT nonce, verifier, expires_at FROM oauth_attempts
+WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?`, hashSecret(state), nowNanos).Scan(
 		&attempt.Nonce, &attempt.Verifier, &expiresAt,
 	)
 	if err == nil {
+		result, updateErr := tx.Exec(`
+UPDATE oauth_attempts
+SET nonce = '', verifier = '', consumed_at = ?
+WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?`, nowNanos, hashSecret(state), nowNanos)
+		if updateErr != nil {
+			_ = tx.Rollback()
+			return OAuthAttempt{}, fmt.Errorf("consume oauth attempt: %w", updateErr)
+		}
+		rows, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			_ = tx.Rollback()
+			return OAuthAttempt{}, fmt.Errorf("check oauth attempt consumption: %w", rowsErr)
+		}
+		if rows != 1 {
+			_ = tx.Rollback()
+			return OAuthAttempt{}, ErrOAuthAttemptConsumed
+		}
 		if err = tx.Commit(); err != nil {
 			return OAuthAttempt{}, fmt.Errorf("commit oauth attempt consumption: %w", err)
 		}

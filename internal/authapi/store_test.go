@@ -52,7 +52,7 @@ func TestUpsertIdentityKeepsTheSameUserAcrossProfileChanges(t *testing.T) {
 	}
 }
 
-func TestConsumeOAuthAttemptIsOneTimeAndRecoversPKCEValues(t *testing.T) {
+func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	store, db := newTestStore(t)
 	expiresAt := time.Now().Add(time.Hour)
 	if err := store.CreateOAuthAttempt("state-secret", "nonce-secret", "verifier-secret", expiresAt); err != nil {
@@ -76,6 +76,14 @@ func TestConsumeOAuthAttemptIsOneTimeAndRecoversPKCEValues(t *testing.T) {
 	}
 	if !attempt.ExpiresAt.Equal(expiresAt.UTC().Truncate(time.Nanosecond)) {
 		t.Fatalf("unexpected expiration: got %s want %s", attempt.ExpiresAt, expiresAt.UTC())
+	}
+	var nonce, verifier string
+	var consumedAt sql.NullInt64
+	if err := db.QueryRow("SELECT nonce, verifier, consumed_at FROM oauth_attempts WHERE state_hash = ?", hashSecret("state-secret")).Scan(&nonce, &verifier, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if nonce != "" || verifier != "" || !consumedAt.Valid {
+		t.Fatalf("consumption retained recoverable OAuth secrets: nonce=%q verifier=%q consumed=%v", nonce, verifier, consumedAt.Valid)
 	}
 
 	if _, err := store.ConsumeOAuthAttempt("state-secret"); !errors.Is(err, ErrOAuthAttemptConsumed) {
