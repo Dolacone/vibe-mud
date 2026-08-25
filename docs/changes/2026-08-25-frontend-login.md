@@ -7,6 +7,16 @@ last_reviewed: 2026-08-25
 source_paths:
   - AGENTS.md
   - README.md
+  - web/package.json
+  - web/package-lock.json
+  - web/tsconfig.json
+  - web/tsconfig.app.json
+  - web/tsconfig.node.json
+  - web/vite.config.ts
+  - web/src/vite-env.d.ts
+  - web/src/test-setup.ts
+  - web/src/auth.ts
+  - web/src/auth.test.ts
 req_ref: REQ-002
 base_branch: main
 scope: "Tracks the Cloudflare Pages frontend login from design through review."
@@ -47,7 +57,7 @@ The source of truth is `REQ-002`.
 
 Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. Task 4 waits for the user to connect the GitHub repository to Cloudflare Pages after Tasks 1-3 finish.
 
-- [ ] Task 1 - Add the typed backend identity client and frontend foundation. [parallel: no]
+- [x] Task 1 - Add the typed backend identity client and frontend foundation. [parallel: no]
   - Source scope: `web/src/auth.ts`
   - Tests: `web/src/auth.test.ts`
   - Supporting files: `web/package.json`, `web/package-lock.json`, `web/tsconfig.json`, `web/tsconfig.app.json`, `web/tsconfig.node.json`, `web/vite.config.ts`, `web/src/vite-env.d.ts`, `web/src/test-setup.ts`
