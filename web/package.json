@@ -18,9 +18,11 @@
   "devDependencies": {
     "@testing-library/jest-dom": "latest",
     "@testing-library/react": "latest",
+    "@cloudflare/workers-types": "latest",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "jsdom": "latest",
-    "vitest": "latest"
+    "vitest": "latest",
+    "wrangler": "latest"
   }
 }
