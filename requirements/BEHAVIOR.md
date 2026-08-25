@@ -1,1 +1,2 @@
 - 純 API 後端提供安全的 Google SSO、應用程式 session 與 JSON 身分回應 -> REQ-001
+- Cloudflare Pages 前端透過後端 session 確認並顯示 Google 登入身分 -> REQ-002
