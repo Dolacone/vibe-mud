@@ -1,6 +1,6 @@
 ---
 title: "Google SSO Login"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
@@ -87,6 +87,13 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
   - Deployment intent: build a CGo-free image, run one 256 MB shared Machine, mount `mud_data` at `/data`, and document volume creation without deploying from this change.
 
 ## Review Issues
+
+- [ ] [Major] `ConsumeOAuthAttempt` only sets `consumed_at`; it leaves the recoverable nonce and PKCE verifier in SQLite forever. This contradicts the documented lifetime "only until atomic one-time callback consumption" and the resolved plan-review issue. Delete the row atomically with `RETURNING`, or clear both values in the same transaction, then test their removal.
+- [ ] [Major] `internal/authapi/google_test.go` tests only incomplete configuration. It does not prove that the Google authorization URL carries nonce and S256 PKCE, or that token exchange rejects missing and invalid verified ID tokens. These are the Task 3 test intent and the authentication boundary for condition 5.
+- [ ] [Major] `fly.toml` sets `min_machines_running = 1`, which is a lower bound rather than an exact Machine count. The deployment instructions do not constrain Fly.io to one Machine. A default multi-Machine deployment conflicts with the single-Machine SQLite topology and cannot share the mounted Volume.
+- [ ] [Major] `NewServer` accepts `FRONTEND_URL` values with a path or trailing slash, then compares that full string to the browser `Origin`. Browsers send only scheme, host, and port, so a valid-looking value such as `https://game.example.test/` silently blocks credentialed CORS and breaks `/api/me`. Require an origin-only URL or derive a canonical origin separately from the redirect URL.
+- [ ] [Minor] `source_paths` omits the created `.gitignore` and `README.md`, so it does not match the `main...HEAD` diff.
+- [ ] [Minor] The modified Markdown documents `AGENTS.md` and `README.md` do not record `last_reviewed: 2026-08-25`, as required by the review checklist.
 
 ## Plan Review Issues
 
