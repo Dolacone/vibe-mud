@@ -167,6 +167,132 @@ func TestRestAtomicallyConsumesAndPersistsAP(t *testing.T) {
 	}
 }
 
+func TestNewStoreBackfillsPlayerAPForExistingIdentities(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:auth-store-upgrade-test?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE identities (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	issuer TEXT NOT NULL,
+	subject TEXT NOT NULL,
+	email TEXT NOT NULL,
+	display_name TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE (issuer, subject)
+);
+CREATE TABLE oauth_attempts (
+	state_hash BLOB PRIMARY KEY,
+	browser_token_hash BLOB,
+	nonce TEXT NOT NULL,
+	verifier TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	consumed_at INTEGER
+);
+CREATE TABLE sessions (
+	token_hash BLOB PRIMARY KEY,
+	user_id INTEGER NOT NULL REFERENCES identities(id),
+	expires_at INTEGER NOT NULL,
+	created_at INTEGER NOT NULL
+);
+INSERT INTO identities (issuer, subject, email, display_name, created_at, updated_at)
+VALUES ('https://accounts.google.com', 'old-subject', 'old@example.com', 'Old Name', 1, 1);`); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var userID int64
+	if err := db.QueryRow("SELECT id FROM identities WHERE subject = ?", "old-subject").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", userID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp > time.Now().UTC().UnixNano() {
+		t.Fatalf("backfilled full timestamp is in the future: %d", fullTimestamp)
+	}
+	backfillTime := unixNano(fullTimestamp)
+	store.now = func() time.Time { return backfillTime }
+	if ap, err := store.GetAP(userID); err != nil || ap != 3000 {
+		t.Fatalf("backfilled identity AP = %d, %v; want 3000", ap, err)
+	}
+
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", time.Unix(0, 1).UnixNano(), userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", userID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != 1 {
+		t.Fatalf("existing player AP timestamp was overwritten: got %d, want 1", fullTimestamp)
+	}
+}
+
+func TestRestConcurrentlyConsumesTheLastAPOnce(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-concurrent-rest", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(2999*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	type restResult struct {
+		ap  int
+		err error
+	}
+	results := make(chan restResult, 2)
+	for range 2 {
+		go func() {
+			ready <- struct{}{}
+			<-start
+			ap, err := store.Rest(identity.ID)
+			results <- restResult{ap: ap, err: err}
+		}()
+	}
+	<-ready
+	<-ready
+	close(start)
+
+	successes := 0
+	insufficient := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			successes++
+			if result.ap != 0 {
+				t.Fatalf("successful concurrent rest returned AP %d, want 0", result.ap)
+			}
+		} else if errors.Is(result.err, ErrInsufficientAP) {
+			insufficient++
+		} else {
+			t.Fatalf("concurrent rest returned unexpected error: %v", result.err)
+		}
+	}
+	if successes != 1 || insufficient != 1 {
+		t.Fatalf("concurrent rest outcomes = %d successes, %d insufficient; want one each", successes, insufficient)
+	}
+	if ap, err := store.GetAP(identity.ID); err != nil || ap != 0 {
+		t.Fatalf("persisted AP after concurrent rest = %d, %v; want 0", ap, err)
+	}
+}
+
 func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	store, db := newTestStore(t)
 	expiresAt := time.Now().Add(time.Hour)

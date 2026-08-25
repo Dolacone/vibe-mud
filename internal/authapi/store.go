@@ -60,9 +60,14 @@ func NewStore(db *sql.DB) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if _, err := db.Exec(`
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;`); err != nil {
+		return nil, fmt.Errorf("configure auth store: %w", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin auth store initialization: %w", err)
+	}
+	if _, err := tx.Exec(`
 CREATE TABLE IF NOT EXISTS identities (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	issuer TEXT NOT NULL,
@@ -91,7 +96,17 @@ CREATE TABLE IF NOT EXISTS player_ap (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	full_timestamp INTEGER NOT NULL
 );`); err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
+SELECT id, ? FROM identities`, time.Now().UTC().UnixNano()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player AP: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	return &Store{db: db, now: time.Now}, nil
 }
