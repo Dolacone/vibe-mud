@@ -52,6 +52,19 @@ describe("App", () => {
     expect(screen.getByText("AP: 0")).toBeInTheDocument();
   });
 
+  it("updates stale AP from an insufficient rest response", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 1 } });
+    rest.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ap: 0 });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Rest" });
+    expect(screen.getByText("AP: 1")).toBeInTheDocument();
+    button.click();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByText("AP: 0")).toBeInTheDocument();
+    expect(screen.queryByText("AP: 1")).not.toBeInTheDocument();
+  });
+
   it("disables rest and prevents duplicate requests while one is pending", async () => {
     let resolveRest: ((value: auth.RestResult) => void) | undefined;
     rest.mockReturnValue(new Promise((resolve) => { resolveRest = resolve; }));

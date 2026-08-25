@@ -34,7 +34,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     setAction({ status: "pending" });
     try {
       const next = await rest();
-      if (next.status === "success") {
+      if (next.status === "success" || next.status === "insufficient") {
         setCurrentUser((previous) => ({ ...previous, ap: next.ap }));
       }
       setAction(next);
