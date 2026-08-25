@@ -1,6 +1,6 @@
 ---
 title: "Frontend Login"
-status: Reviewed
+status: Refactored
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
