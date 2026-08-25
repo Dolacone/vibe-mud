@@ -1,6 +1,6 @@
 ---
 title: "Google SSO Login"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
