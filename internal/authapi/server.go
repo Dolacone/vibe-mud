@@ -43,9 +43,10 @@ type Config struct {
 }
 
 type Server struct {
-	store    *Store
-	provider IdentityProvider
-	cfg      Config
+	store          *Store
+	provider       IdentityProvider
+	cfg            Config
+	frontendOrigin string
 }
 
 func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, error) {
@@ -55,6 +56,10 @@ func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, er
 	frontend, err := url.Parse(cfg.FrontendURL)
 	if err != nil || frontend.Scheme == "" || frontend.Host == "" || frontend.User != nil || frontend.RawQuery != "" || frontend.Fragment != "" {
 		return nil, errors.New("auth server requires a valid frontend URL")
+	}
+	frontendOrigin, err := canonicalOrigin(frontend)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = 30 * 24 * time.Hour
@@ -69,7 +74,7 @@ func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, er
 		cfg.Now = time.Now
 	}
 	store.now = cfg.Now
-	return &Server{store: store, provider: provider, cfg: cfg}, nil
+	return &Server{store: store, provider: provider, cfg: cfg, frontendOrigin: frontendOrigin}, nil
 }
 
 func (s *Server) Routes() http.Handler {
@@ -186,7 +191,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == s.cfg.FrontendURL {
+		if origin == s.frontendOrigin {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Add("Vary", "Origin")
@@ -199,6 +204,29 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func canonicalOrigin(frontend *url.URL) (string, error) {
+	scheme := strings.ToLower(frontend.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("auth server requires an HTTP frontend URL")
+	}
+	hostname := strings.ToLower(frontend.Hostname())
+	if hostname == "" {
+		return "", errors.New("auth server requires a frontend host")
+	}
+	port := frontend.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	host := hostname
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return scheme + "://" + host, nil
 }
 
 func (s *Server) writeNotFound(w http.ResponseWriter, _ *http.Request) {

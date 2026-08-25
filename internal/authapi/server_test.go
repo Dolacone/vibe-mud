@@ -42,10 +42,14 @@ func (p *fakeProvider) Exchange(_ context.Context, code, verifier string) (Provi
 }
 
 func newTestServer(t *testing.T, provider *fakeProvider, now *time.Time) (*Server, *Store) {
+	return newTestServerWithFrontend(t, provider, now, "https://game.example.test")
+}
+
+func newTestServerWithFrontend(t *testing.T, provider *fakeProvider, now *time.Time, frontendURL string) (*Server, *Store) {
 	t.Helper()
 	store, _ := newTestStore(t)
 	server, err := NewServer(store, provider, Config{
-		FrontendURL:     "https://game.example.test",
+		FrontendURL:     frontendURL,
 		CookieSecure:    true,
 		SessionTTL:      time.Hour,
 		OAuthAttemptTTL: 10 * time.Minute,
@@ -55,6 +59,45 @@ func newTestServer(t *testing.T, provider *fakeProvider, now *time.Time) (*Serve
 		t.Fatal(err)
 	}
 	return server, store
+}
+
+func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		frontendURL string
+		origin      string
+	}{
+		{"https://GAME.example.test/", "https://game.example.test"},
+		{"https://game.example.test/play/", "https://game.example.test"},
+	}
+	for _, test := range tests {
+		t.Run(test.frontendURL, func(t *testing.T) {
+			provider := &fakeProvider{}
+			server, _ := newTestServerWithFrontend(t, provider, &now, test.frontendURL)
+			handler := server.Routes()
+
+			corsRequest := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			corsRequest.Header.Set("Origin", test.origin)
+			corsResponse := httptest.NewRecorder()
+			handler.ServeHTTP(corsResponse, corsRequest)
+			if corsResponse.Header().Get("Access-Control-Allow-Origin") != test.origin {
+				t.Fatalf("CORS origin = %q, want %q", corsResponse.Header().Get("Access-Control-Allow-Origin"), test.origin)
+			}
+
+			state := loginState(t, handler)
+			provider.identity = ProviderIdentity{Issuer: "https://accounts.google.com", Subject: "subject-1", Nonce: provider.authorization.nonce}
+			callback := httptest.NewRequest(http.MethodGet, "/auth/google/callback?state="+url.QueryEscape(state)+"&code=code", nil)
+			callbackResponse := httptest.NewRecorder()
+			handler.ServeHTTP(callbackResponse, callback)
+			location, err := callbackResponse.Result().Location()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if location.String() != test.frontendURL {
+				t.Fatalf("redirect location = %q, want %q", location.String(), test.frontendURL)
+			}
+		})
+	}
 }
 
 func loginState(t *testing.T, handler http.Handler) string {
