@@ -1,6 +1,6 @@
 ---
 title: "Google SSO Login"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
@@ -96,6 +96,8 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
 - [x] [Major] `NewServer` accepts `FRONTEND_URL` values with a path or trailing slash, then compares that full string to the browser `Origin`. Browsers send only scheme, host, and port, so a valid-looking value such as `https://game.example.test/` silently blocks credentialed CORS and breaks `/api/me`. Require an origin-only URL or derive a canonical origin separately from the redirect URL.
 - [x] [Minor] `source_paths` omits the created `.gitignore` and `README.md`, so it does not match the `main...HEAD` diff.
 - [x] [Minor] The modified Markdown documents `AGENTS.md` and `README.md` do not record `last_reviewed: 2026-08-25`, as required by the review checklist.
+- [ ] [Major] The OAuth state is stored only in the shared SQLite table and is not bound to the browser that started login. The callback succeeds without any browser-bound proof, so an attacker can forward an authorization response they initiated and replace a victim's session with the attacker's Google identity. Bind each attempt to an initiating-browser cookie or equivalent proof, then test that another browser cannot complete it.
+- [ ] [Major] `COOKIE_SECURE=false` makes the application session cookie non-Secure even though the documented session boundary requires `Secure`. A production configuration error would let the browser send the session token over HTTP before Fly.io redirects the request. Keep production cookies unconditionally Secure, or gate this override to an explicit local-development mode and test the production path.
 
 ## Plan Review Issues
 
