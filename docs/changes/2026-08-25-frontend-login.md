@@ -90,7 +90,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
     - REQ-002 condition 3: 前端必須向後端查詢目前登入的應用程式使用者，不得從前端狀態或 Google 回應自行推定身分。
   - Test intent: prove only normalized `/auth/*` and `/api/*` paths reach an origin-only HTTPS backend; reject unsupported methods, configured origin credentials, paths, queries, fragments, encoded traversal, and paths that normalize outside the allow-list; forward allow-listed request queries and cookies without logging their values; and pass unrelated paths to static assets.
   - Integration intent: prove upstream fetch uses manual redirect handling, the proxied login endpoint preserves the external Google redirect, and the proxied callback preserves both the OAuth flow-cookie deletion and session `Set-Cookie` headers plus the backend redirect to the Pages origin.
-- [ ] Task 4 - Deploy and verify the stable Cloudflare Pages origin. [parallel: no]
+- [x] Task 4 - Deploy and verify the stable Cloudflare Pages origin. [parallel: no]
   - Source scope: none
   - Tests: live browser login and deployed endpoint verification
   - Supporting files: `docs/changes/2026-08-25-frontend-login.md`
@@ -99,6 +99,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
     - REQ-002 condition 2: Google 登入成功後，使用者必須回到前端。
   - Runtime settings: select one stable Pages project origin such as `https://<project>.pages.dev`; set Pages `BACKEND_ORIGIN` to the origin-only Fly URL; set Fly `FRONTEND_URL` to that exact Pages origin; set Fly `GOOGLE_REDIRECT_URL` and the Google Console authorized redirect URI to that origin plus `/auth/google/callback`.
   - Verification intent: after the user connects GitHub to Cloudflare Pages, verify the deployed values and record the stable Pages project URL plus durable evidence that the browser enters through that origin, starts Google login, returns through its callback, stores both host-only cookies for that host, and displays the backend-confirmed user from same-origin `/api/me`.
+  - Live verification evidence: `https://vibe-mud.pages.dev/` returned HTTP 200. Same-origin `/api/me` returned HTTP 401 JSON before authentication. Same-origin `/auth/google/login` returned HTTP 302 to Google through the Pages proxy. Pages `BACKEND_ORIGIN` resolved to the Fly API origin. After Fly and Google callback settings were updated, a real browser completed Google login, returned through the Pages callback, and displayed the backend-confirmed numeric application user ID, display name, and email. No credential, token, cookie value, or personal value is recorded here.
 
 ## Review Issues
 
