@@ -1,0 +1,39 @@
+:root {
+  color: #e9eef5;
+  background: #10151d;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+main {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 38rem;
+  padding: 4rem 1.5rem;
+}
+
+h1 { margin-top: 0; }
+
+.identity {
+  display: grid;
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.identity div { border-bottom: 1px solid #344052; padding-bottom: .75rem; }
+.identity dt { color: #a9b7c9; font-size: .85rem; }
+.identity dd { margin: .25rem 0 0; overflow-wrap: anywhere; }
+
+.login {
+  background: #75a7ff;
+  border-radius: .4rem;
+  color: #10151d;
+  display: inline-block;
+  font-weight: 700;
+  padding: .75rem 1rem;
+  text-decoration: none;
+}

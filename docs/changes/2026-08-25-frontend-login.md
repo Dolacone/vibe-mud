@@ -17,6 +17,11 @@ source_paths:
   - web/src/test-setup.ts
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
+  - web/src/main.tsx
+  - web/src/styles.css
+  - web/index.html
 req_ref: REQ-002
 base_branch: main
 scope: "Tracks the Cloudflare Pages frontend login from design through review."
@@ -64,10 +69,10 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
   - Acceptance criteria:
     - REQ-002 condition 3: 前端必須向後端查詢目前登入的應用程式使用者，不得從前端狀態或 Google 回應自行推定身分。
   - Test intent: prove the client sends same-origin `GET /api/me` with credentials, returns only backend identity fields for HTTP 200, treats HTTP 401 as unauthenticated, rejects other failures, and does not use browser storage or a Google client SDK.
-- [ ] Task 2 - Add the login page and static Pages build. [parallel: no]
+- [x] Task 2 - Add the login page and static Pages build. [parallel: no]
   - Source scope: `web/src/App.tsx`, `web/src/main.tsx`
   - Tests: `web/src/App.test.tsx`
-  - Supporting files: `web/index.html`, `web/src/styles.css`
+  - Supporting files: `web/index.html`, `web/src/styles.css`, `.gitignore`, `web/package.json`, `web/package-lock.json`
   - Acceptance criteria:
     - REQ-002 condition 4: 有效 session 存在時，前端必須顯示後端回傳的應用程式使用者 ID、顯示名稱與電子郵件。
     - REQ-002 condition 5: 有效 session 不存在時，前端必須顯示未登入狀態與登入操作，不得顯示先前取得的使用者身分。
