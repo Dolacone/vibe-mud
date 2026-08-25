@@ -1,3 +1,5 @@
+<!-- last_reviewed: 2026-08-25 -->
+
 # vibe-mud
 
 This repository contains the API backend for a multiplayer MUD. The first delivery adds Google-only SSO, SQLite-backed application sessions, and a JSON current-user response.

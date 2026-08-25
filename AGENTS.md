@@ -1,3 +1,5 @@
+<!-- last_reviewed: 2026-08-25 -->
+
 # Repository Instructions
 
 - Build the backend with Go, chi, `database/sql`, `modernc.org/sqlite`, and `coder/websocket`.
