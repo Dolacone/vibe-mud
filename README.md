@@ -8,7 +8,7 @@ The agreed behavior is documented in [REQ-001](requirements/REQ-001.md) and [BEH
 
 The API runs as one Go process in Docker. Runtime configuration uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`, `FRONTEND_URL`, `DATABASE_PATH`, and `PORT`. Session and OAuth flow cookies always use `Secure`.
 
-The login flow starts at `GET /auth/google/login`, returns through `GET /auth/google/callback`, and exposes the authenticated application identity at `GET /api/me`. The AP slice will add the server-calculated current AP to that response and use `POST /api/actions/rest` for the first game action.
+The login flow starts at `GET /auth/google/login`, returns through `GET /auth/google/callback`, and exposes the authenticated application identity plus server-calculated current AP at `GET /api/me`. The first game action uses `POST /api/actions/rest`.
 
 AP persistence stores only the timestamp when the player will next reach full AP. The backend derives current AP from its clock, caps it at 3000, and moves the timestamp forward when an action spends AP. No scheduler updates AP values.
 
