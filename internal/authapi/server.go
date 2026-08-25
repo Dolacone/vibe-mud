@@ -36,6 +36,22 @@ type ProviderIdentity struct {
 	Nonce       string
 }
 
+type currentUserResponse struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	AP          int    `json:"ap"`
+}
+
+type restResponse struct {
+	AP int `json:"ap"`
+}
+
+type restConflictResponse struct {
+	Error string `json:"error"`
+	AP    int    `json:"ap"`
+}
+
 type Config struct {
 	FrontendURL       string
 	CookieSecure      bool
@@ -209,12 +225,12 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", ap)
-	s.writeJSON(w, http.StatusOK, struct {
-		ID          int64  `json:"id"`
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
-		AP          int    `json:"ap"`
-	}{identity.ID, identity.DisplayName, identity.Email, ap})
+	s.writeJSON(w, http.StatusOK, currentUserResponse{
+		ID:          identity.ID,
+		DisplayName: identity.DisplayName,
+		Email:       identity.Email,
+		AP:          ap,
+	})
 }
 
 func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
@@ -237,10 +253,7 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", ap)
 		s.logAction(r, session.UserID, "rest", "insufficient_ap")
-		s.writeJSON(w, http.StatusConflict, struct {
-			Error string `json:"error"`
-			AP    int    `json:"ap"`
-		}{err.Error(), ap})
+		s.writeJSON(w, http.StatusConflict, restConflictResponse{Error: err.Error(), AP: ap})
 		return
 	}
 	if err != nil {
@@ -249,9 +262,7 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", ap)
 	s.logAction(r, session.UserID, "rest", "success")
-	s.writeJSON(w, http.StatusOK, struct {
-		AP int `json:"ap"`
-	}{ap})
+	s.writeJSON(w, http.StatusOK, restResponse{AP: ap})
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
