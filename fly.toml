@@ -9,6 +9,7 @@ primary_region = "nrt"
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
+  # Keep one running Machine. Verify the exact count with `fly machines list`.
   min_machines_running = 1
   processes = ["app"]
 
