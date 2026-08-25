@@ -1,5 +1,5 @@
 export type CurrentUser = {
-  id: string;
+  id: number;
   display_name: string;
   email: string;
 };
@@ -13,7 +13,7 @@ function isCurrentUser(value: unknown): value is CurrentUser {
   if (typeof value !== "object" || value === null) return false;
   const user = value as Record<string, unknown>;
   return (
-    typeof user.id === "string" &&
+    typeof user.id === "number" &&
     typeof user.display_name === "string" &&
     typeof user.email === "string"
   );

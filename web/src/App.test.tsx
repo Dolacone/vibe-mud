@@ -14,11 +14,11 @@ describe("App", () => {
   beforeEach(() => getCurrentUser.mockReset());
 
   it("loads and displays only the backend-confirmed identity", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: "u-1", display_name: "Ada", email: "ada@example.com" } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com" } });
     render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading");
     await waitFor(() => expect(screen.getByText("Ada")).toBeInTheDocument());
-    expect(screen.getByText("u-1")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
   });

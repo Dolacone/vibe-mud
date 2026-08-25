@@ -4,7 +4,7 @@ import { getCurrentUser } from "./auth";
 describe("getCurrentUser", () => {
   it("asks the backend for the current identity with a same-origin credentialed request", async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "u-1", display_name: "Ada", email: "ada@example.com", role: "admin" }), {
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", role: "admin" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -12,7 +12,7 @@ describe("getCurrentUser", () => {
 
     await expect(getCurrentUser(fetcher)).resolves.toEqual({
       status: "authenticated",
-      user: { id: "u-1", display_name: "Ada", email: "ada@example.com" },
+      user: { id: 1, display_name: "Ada", email: "ada@example.com" },
     });
     expect(fetcher).toHaveBeenCalledWith("/api/me", {
       method: "GET",
@@ -36,12 +36,27 @@ describe("getCurrentUser", () => {
     await expect(getCurrentUser(malformed)).resolves.toMatchObject({ status: "error" });
   });
 
+  it("accepts numeric backend IDs and rejects string IDs", async () => {
+    const numeric = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 42, display_name: "Ada", email: "ada@example.com" }), { status: 200 }),
+    );
+    await expect(getCurrentUser(numeric)).resolves.toEqual({
+      status: "authenticated",
+      user: { id: 42, display_name: "Ada", email: "ada@example.com" },
+    });
+
+    const stringID = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "42", display_name: "Ada", email: "ada@example.com" }), { status: 200 }),
+    );
+    await expect(getCurrentUser(stringID)).resolves.toMatchObject({ status: "error" });
+  });
+
   it("does not read browser storage", async () => {
     const storageRead = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("browser storage must not be read");
     });
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "u-1", display_name: "Ada", email: "ada@example.com" }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com" }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated" });

@@ -102,6 +102,8 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
 
 ## Review Issues
 
+- [x] [Major] Live deployment returned a numeric JSON user ID from the backend, but the frontend identity validator accepted only string IDs. The frontend now accepts the existing numeric ID contract and rejects string IDs.
+
 ## Plan Review Issues
 
 - [x] The planned default Cloudflare Pages URL and Fly.io URL are cross-site. The existing `SameSite=Lax` API cookie will not accompany a credentialed cross-site `fetch`, so `GET /api/me` cannot identify the user on `*.pages.dev` -> `*.fly.dev`. Require sibling custom domains such as `game.<domain>` and `api.<domain>` in the plan and deployment instructions, or return to capture before changing the agreed cookie boundary. Add production-domain verification of credentialed `/api/me`.
