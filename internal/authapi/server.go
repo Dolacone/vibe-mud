@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -80,12 +82,15 @@ func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, er
 
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
+	r.Use(s.requestID)
+	r.Use(s.accessLog)
 	r.Use(s.cors)
 	r.NotFound(s.writeNotFound)
 	r.MethodNotAllowed(s.writeMethodNotAllowed)
 	r.Get("/auth/google/login", s.login)
 	r.Get("/auth/google/callback", s.callback)
 	r.Get("/api/me", s.me)
+	r.Post("/api/actions/rest", s.rest)
 	return r
 }
 
@@ -198,11 +203,55 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	ap, err := s.store.GetAP(identity.ID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+		return
+	}
+	s.logComputation(r, identity.ID, "ap_calculation", "success", ap)
 	s.writeJSON(w, http.StatusOK, struct {
 		ID          int64  `json:"id"`
 		DisplayName string `json:"display_name"`
 		Email       string `json:"email"`
-	}{identity.ID, identity.DisplayName, identity.Email})
+		AP          int    `json:"ap"`
+	}{identity.ID, identity.DisplayName, identity.Email, ap})
+}
+
+func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(s.cfg.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	session, err := s.store.GetSession(cookie.Value)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	ap, err := s.store.Rest(session.UserID)
+	if errors.Is(err, ErrInsufficientAP) {
+		ap, apErr := s.store.GetAP(session.UserID)
+		if apErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", ap)
+		s.logAction(r, session.UserID, "rest", "insufficient_ap")
+		s.writeJSON(w, http.StatusConflict, struct {
+			Error string `json:"error"`
+			AP    int    `json:"ap"`
+		}{err.Error(), ap})
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", ap)
+	s.logAction(r, session.UserID, "rest", "success")
+	s.writeJSON(w, http.StatusOK, struct {
+		AP int `json:"ap"`
+	}{ap})
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
@@ -213,7 +262,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Add("Vary", "Origin")
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -221,6 +270,96 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if !validRequestID(requestID) {
+			requestID, _ = randomString(16)
+			if requestID == "" {
+				requestID = "unavailable"
+			}
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := context.WithValue(r.Context(), requestIDContextKey{}, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		userID := "anonymous"
+		if cookie, err := r.Cookie(s.cfg.SessionCookieName); err == nil && cookie.Value != "" {
+			if session, err := s.store.GetSession(cookie.Value); err == nil {
+				userID = fmt.Sprintf("%d", session.UserID)
+			}
+		}
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		outcome := "success"
+		if status >= http.StatusBadRequest {
+			outcome = http.StatusText(status)
+		}
+		s.logActionWithID(requestID(r), userID, r.Method+" "+r.URL.Path, outcome)
+	})
+}
+
+type requestIDContextKey struct{}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusRecorder) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func requestID(r *http.Request) string {
+	if value, ok := r.Context().Value(requestIDContextKey{}).(string); ok && value != "" {
+		return value
+	}
+	return "unavailable"
+}
+
+func validRequestID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) logAction(r *http.Request, userID int64, action, outcome string) {
+	s.logActionWithID(requestID(r), fmt.Sprintf("%d", userID), action, outcome)
+}
+
+func (s *Server) logActionWithID(requestID, userID, action, outcome string) {
+	fmt.Fprintf(os.Stdout, "user_id=%s action=%s outcome=%s request_id=%s\n", userID, action, outcome, requestID)
+}
+
+func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
 }
 
 func canonicalOrigin(frontend *url.URL) (string, error) {

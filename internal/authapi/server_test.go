@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -321,5 +323,164 @@ func TestAPIOnlyUsesJSONExceptOAuthRedirects(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "<html") {
 		t.Fatal("API error returned HTML")
+	}
+}
+
+func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-1", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"}
+	handler := server.Routes()
+
+	me := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	me.Header.Set("Origin", "https://game.example.test")
+	me.Header.Set("X-Request-ID", "me-request")
+	me.AddCookie(cookie)
+	meResponse := httptest.NewRecorder()
+	handler.ServeHTTP(meResponse, me)
+	if meResponse.Code != http.StatusOK || meResponse.Header().Get("X-Request-ID") != "me-request" {
+		t.Fatalf("GET /api/me status/request ID = %d/%q", meResponse.Code, meResponse.Header().Get("X-Request-ID"))
+	}
+	var meBody map[string]any
+	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(meBody) != 4 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+
+	rest := httptest.NewRequest(http.MethodPost, "/api/actions/rest", strings.NewReader(`{"ap":0,"time":"9999-01-01T00:00:00Z"}`))
+	rest.Header.Set("Origin", "https://game.example.test")
+	rest.Header.Set("Content-Type", "application/json")
+	rest.AddCookie(cookie)
+	restResponse := httptest.NewRecorder()
+	handler.ServeHTTP(restResponse, rest)
+	if restResponse.Code != http.StatusOK {
+		t.Fatalf("POST /api/actions/rest status = %d: %s", restResponse.Code, restResponse.Body.String())
+	}
+	var restBody map[string]any
+	if err := json.Unmarshal(restResponse.Body.Bytes(), &restBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(restBody) != 1 || restBody["ap"] != float64(maxAP-1) {
+		t.Fatalf("POST /api/actions/rest JSON = %#v", restBody)
+	}
+	if ap, err := store.GetAP(identity.ID); err != nil || ap != maxAP-1 {
+		t.Fatalf("server did not persist rest result: ap=%d err=%v", ap, err)
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/actions/rest", nil)
+	unauthenticatedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedResponse, unauthenticated)
+	if unauthenticatedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated rest status = %d", unauthenticatedResponse.Code)
+	}
+}
+
+func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-1", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	if err := store.db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/rest", nil)
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("insufficient AP status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 2 || body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
+		t.Fatalf("insufficient AP JSON = %#v", body)
+	}
+	var after int64
+	if err := store.db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("insufficient rest changed full timestamp from %d to %d", before, after)
+	}
+}
+
+func TestRestCORSPreflightAllowsTrustedPostOnly(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, _ := newTestServer(t, &fakeProvider{}, &now)
+	handler := server.Routes()
+
+	trusted := httptest.NewRequest(http.MethodOptions, "/api/actions/rest", nil)
+	trusted.Header.Set("Origin", "https://game.example.test")
+	trusted.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	trustedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(trustedResponse, trusted)
+	if trustedResponse.Code != http.StatusNoContent || trustedResponse.Header().Get("Access-Control-Allow-Origin") != "https://game.example.test" || !strings.Contains(trustedResponse.Header().Get("Access-Control-Allow-Methods"), http.MethodPost) {
+		t.Fatalf("trusted POST preflight = %d, origin=%q, methods=%q", trustedResponse.Code, trustedResponse.Header().Get("Access-Control-Allow-Origin"), trustedResponse.Header().Get("Access-Control-Allow-Methods"))
+	}
+
+	foreign := httptest.NewRequest(http.MethodOptions, "/api/actions/rest", nil)
+	foreign.Header.Set("Origin", "https://evil.example.test")
+	foreign.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	foreignResponse := httptest.NewRecorder()
+	handler.ServeHTTP(foreignResponse, foreign)
+	if foreignResponse.Header().Get("Access-Control-Allow-Origin") != "" || strings.Contains(foreignResponse.Header().Get("Access-Control-Allow-Origin"), "*") {
+		t.Fatal("foreign POST preflight received CORS authorization")
+	}
+}
+
+func TestAccessLogIncludesRequestIDAndOmitsSessionSecret(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-1", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/rest", nil)
+	request.Header.Set("X-Request-ID", "request-123")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	logOutput, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(logOutput)
+	if !strings.Contains(text, "user_id=1") || !strings.Contains(text, "request_id=request-123") || !strings.Contains(text, "action=rest") || !strings.Contains(text, "action=ap_calculation") {
+		t.Fatalf("access log lacks required fields: %q", text)
+	}
+	if strings.Contains(text, "session-secret") {
+		t.Fatalf("access log leaked session secret: %q", text)
 	}
 }
