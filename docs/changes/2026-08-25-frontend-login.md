@@ -1,6 +1,6 @@
 ---
 title: "Frontend Login"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-25
 doc_type: change
 last_reviewed: 2026-08-25
@@ -104,6 +104,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
 ## Review Issues
 
 - [x] [Major] Live deployment returned a numeric JSON user ID from the backend, but the frontend identity validator accepted only string IDs. The frontend now accepts the existing numeric ID contract and rejects string IDs.
+- [ ] [Minor] `source_paths` omits `.gitignore`, although Task 2 changed it to exclude frontend dependency and build directories.
 
 ## Plan Review Issues
 
