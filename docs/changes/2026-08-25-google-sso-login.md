@@ -12,6 +12,12 @@ source_paths:
   - internal/authapi/server_test.go
   - go.mod
   - go.sum
+  - internal/authapi/google.go
+  - cmd/server/main.go
+  - internal/authapi/google_test.go
+  - cmd/server/main_test.go
+  - Dockerfile
+  - fly.toml
 req_ref: REQ-001
 base_branch: main
 scope: "Tracks the Google-only login API from design through review."
@@ -69,7 +75,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. Tasks run sequentially.
     - REQ-001 condition 9: 沒有有效 session 的使用者必須收到 HTTP 401 JSON 回應。
     - REQ-001 condition 10: 回應內容不能包含 Google authorization code、access token、refresh token、ID token、client secret 或 session secret。
   - Test intent: prove redirects are the only non-JSON responses, state replay and expiry fail before provider exchange, successful callbacks set the constrained cookie and redirect, credentialed CORS allows only the configured frontend, and identity JSON contains no provider or session secrets.
-- [ ] Task 3 - Connect Google OIDC and package the Fly.io API process. [parallel: no]
+- [x] Task 3 - Connect Google OIDC and package the Fly.io API process. [parallel: no]
   - Source scope: `internal/authapi/google.go`, `cmd/server/main.go`
   - Tests: `internal/authapi/google_test.go`, `cmd/server/main_test.go`
   - Supporting files: `go.mod`, `go.sum`, `.gitignore`, `Dockerfile`, `fly.toml`
