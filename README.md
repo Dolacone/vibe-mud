@@ -10,7 +10,7 @@ The API runs as one Go process in Docker. Runtime configuration uses `GOOGLE_CLI
 
 The planned login flow starts at `GET /auth/google/login`, returns through `GET /auth/google/callback`, and exposes the authenticated application identity at `GET /api/me`.
 
-Production uses `game.<domain>` for Cloudflare Pages and `api.<domain>` for Fly.io. The frontend calls the API with credentials. The API allows only `FRONTEND_URL`, sets a host-only session cookie for the API origin, and redirects successful Google callbacks to `FRONTEND_URL`.
+Production browsers communicate only with the Cloudflare Pages origin. Pages Functions proxy relative `/auth/*` and `/api/*` requests to Fly.io, and host-only OAuth flow and session cookies returned through that proxy belong to the Pages origin. The Fly backend remains the only owner of authentication and application logic.
 
 Fly.io runs one `shared-cpu-1x` Machine with 256 MB memory. Create the `mud_data` Volume in the selected region before deployment. The Volume mounts at `/data`, and `DATABASE_PATH` defaults to `/data/mud.db`. Keep the SQLite deployment at one Machine with these commands:
 
@@ -22,3 +22,5 @@ fly machines list --app vibe-mud-api
 ```
 
 The last command must show exactly one running Machine. Run `fly scale count 1` after each deployment if the count changes.
+
+The frontend lives under `web/` and deploys through Cloudflare Pages Git integration. Configure the Pages root directory as `web`, the build command as `npm run build`, and the output directory as `dist`. Select one stable Pages project origin such as `https://<project>.pages.dev`; do not configure OAuth against an immutable deployment preview URL. Set the server-side Pages variable `BACKEND_ORIGIN` to the origin-only Fly URL, such as `https://vibe-mud-api.fly.dev`. Set Fly `FRONTEND_URL` to the exact stable Pages origin. Set Fly `GOOGLE_REDIRECT_URL` and the Google Console authorized redirect URI to that origin plus `/auth/google/callback`. Pages Functions proxy only `/auth/*` and `/api/*`; they contain no authentication or game logic.

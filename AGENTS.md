@@ -6,7 +6,7 @@
 - Build the frontend with React, TypeScript, and Vite.
 - Deploy the backend as one Docker container on a single Fly.io Machine with a Fly Volume.
 - Deploy the static frontend to Cloudflare Pages.
-- Do not use Cloudflare Workers for the MVP.
+- Use Cloudflare Pages Functions only as the same-origin proxy for `/auth/*` and `/api/*`. Keep authentication, game rules, persistence, and other application logic in the Fly.io backend.
 - Use REST for initial state and game actions.
 - Use WebSocket for chat and real-time event delivery.
 - Persist application users, OAuth attempts, and sessions in SQLite. Do not replace SQLite with stateless cookies or another persistence method without explicit user approval.
