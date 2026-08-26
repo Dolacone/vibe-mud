@@ -426,7 +426,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 8 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 10 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) || meBody["resource"] != float64(0) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
 	}
 	location, ok := meBody["location"].(map[string]any)
@@ -445,6 +445,10 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	}
 	if meBody["gathering_option"] != nil {
 		t.Fatalf("GET /api/me camp gathering option = %#v", meBody["gathering_option"])
+	}
+	conversion, ok := meBody["conversion_option"].(map[string]any)
+	if !ok || conversion["input_quantity"] != float64(1) || conversion["resource_yield"] != float64(1) || conversion["ap_cost"] != float64(1) {
+		t.Fatalf("GET /api/me camp conversion option = %#v", meBody["conversion_option"])
 	}
 
 	rest := httptest.NewRequest(http.MethodPost, "/api/actions/rest", strings.NewReader(`{"ap":0,"time":"9999-01-01T00:00:00Z"}`))
@@ -633,6 +637,202 @@ func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
 	}
 	if state.Location.ID != "forest_edge" || state.AP != 0 || len(state.Inventory) != 0 {
 		t.Fatalf("failed gathers changed state = %+v", state)
+	}
+}
+
+func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-convert", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request.Header.Set("Origin", "https://game.example.test")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", "convert-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("convert status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-1) || body["resource"] != float64(1) || body["error"] != nil {
+		t.Fatalf("convert response = %#v", body)
+	}
+	inventory, ok := body["inventory"].([]any)
+	if !ok || len(inventory) != 0 {
+		t.Fatalf("convert inventory = %#v", body["inventory"])
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=convert outcome=success request_id=convert-request") {
+		t.Fatalf("convert log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, `"resource_yield"`) || strings.Contains(logOutput, "session-secret") {
+		t.Fatalf("convert log leaked input or credentials: %q", logOutput)
+	}
+
+	me := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	me.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	meResponse := httptest.NewRecorder()
+	server.Routes().ServeHTTP(meResponse, me)
+	if meResponse.Code != http.StatusOK || !strings.Contains(meResponse.Body.String(), `"resource":1`) || strings.Contains(meResponse.Body.String(), `"quantity":1`) {
+		t.Fatalf("GET /api/me after convert = %d: %s", meResponse.Code, meResponse.Body.String())
+	}
+}
+
+func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-invalid-convert", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{name: "malformed", body: `{`, reason: convertReasonInvalidJSON},
+		{name: "unknown field", body: `{"resource_yield":99}`, reason: convertReasonUnknownField},
+		{name: "duplicate field", body: `{"resource_yield":1,"resource_yield":1}`, reason: convertReasonDuplicate},
+		{name: "trailing value", body: `{}{}`, reason: convertReasonExtraValue},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Request-ID", "invalid-convert-"+strings.ReplaceAll(test.name, " ", "-"))
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid convert status = %d: %s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(logOutput, "user_id=1 action=convert outcome=error reason="+test.reason) || !strings.Contains(logOutput, "request_id=invalid-convert-") {
+				t.Fatalf("invalid convert log = %q", logOutput)
+			}
+			if strings.Contains(logOutput, test.body) || strings.Contains(logOutput, "session-secret") {
+				t.Fatalf("invalid convert log leaked input or credentials: %q", logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["ap"] != float64(maxAP) || body["resource"] != float64(0) {
+				t.Fatalf("invalid convert response state = %#v", body)
+			}
+			state, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Location.ID != "camp" || state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 0 {
+				t.Fatalf("invalid convert changed state = %+v", state)
+			}
+		})
+	}
+}
+
+func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-errors", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	locationRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	locationRequest.Header.Set("X-Request-ID", "convert-location-request")
+	locationRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	locationResponse := httptest.NewRecorder()
+	locationLog := captureStdout(t, func() { server.Routes().ServeHTTP(locationResponse, locationRequest) })
+	if locationResponse.Code != http.StatusBadRequest || !strings.Contains(locationResponse.Body.String(), `"error":"conversion not found"`) {
+		t.Fatalf("location convert response = %d: %s", locationResponse.Code, locationResponse.Body.String())
+	}
+	if !strings.Contains(locationLog, "action=convert outcome=error reason="+convertReasonInvalidLocation+" request_id=convert-location-request") {
+		t.Fatalf("location convert log = %q", locationLog)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 || state.Resource != 0 {
+		t.Fatalf("location convert changed state = %+v", state)
+	}
+
+	if _, err := store.Move(identity.ID, "camp"); err != nil {
+		t.Fatal(err)
+	}
+	itemRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	itemRequest.Header.Set("X-Request-ID", "convert-item-request")
+	itemRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	itemResponse := httptest.NewRecorder()
+	itemLog := captureStdout(t, func() { server.Routes().ServeHTTP(itemResponse, itemRequest) })
+	if itemResponse.Code != http.StatusConflict || !strings.Contains(itemResponse.Body.String(), `"error":"insufficient item"`) {
+		t.Fatalf("missing Wood convert response = %d: %s", itemResponse.Code, itemResponse.Body.String())
+	}
+	if !strings.Contains(itemLog, "action=convert outcome=error reason="+convertReasonInsufficientItem+" request_id=convert-item-request") {
+		t.Fatalf("missing Wood convert log = %q", itemLog)
+	}
+	state, err = store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP-40 || state.Resource != 0 || len(state.Inventory) != 0 {
+		t.Fatalf("missing Wood convert changed state = %+v", state)
+	}
+}
+
+func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-low-ap", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request.Header.Set("X-Request-ID", "convert-low-ap-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"error":"insufficient action points"`) {
+		t.Fatalf("low AP convert response = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logOutput, "action=convert outcome=insufficient_ap request_id=convert-low-ap-request") {
+		t.Fatalf("low AP convert log = %q", logOutput)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != 0 || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("low AP convert changed state = %+v", state)
 	}
 }
 

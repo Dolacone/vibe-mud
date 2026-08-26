@@ -10,6 +10,8 @@ source_paths:
   - docs/terminology.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-007
 base_branch: main
 scope: "Tracks the first Inventory-to-Resource conversion loop."
@@ -77,10 +79,10 @@ Acceptance criteria:
 
 ### Task 2: Add conversion API and safe rejection logging
 
-- [ ] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/convert`。
-- [ ] `convert` request 只接受 `{}`，並拒絕 malformed JSON、unknown fields、duplicate fields 與 trailing JSON values。
-- [ ] 對位置錯誤、Wood 不足、AP 不足與輸入錯誤回傳後端權威狀態，並寫出安全 outcome log。
-- [ ] 在 `internal/authapi/server_test.go` 驗證成功、拒絕、狀態不變與 log 欄位。
+- [x] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/convert`。
+- [x] `convert` request 只接受 `{}`，並拒絕 malformed JSON、unknown fields、duplicate fields 與 trailing JSON values。
+- [x] 對位置錯誤、Wood 不足、AP 不足與輸入錯誤回傳後端權威狀態，並寫出安全 outcome log。
+- [x] 在 `internal/authapi/server_test.go` 驗證成功、拒絕、狀態不變與 log 欄位。
 
 Source files: `internal/authapi/server.go`
 
