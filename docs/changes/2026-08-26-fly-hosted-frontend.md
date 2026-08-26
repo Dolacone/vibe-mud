@@ -7,6 +7,8 @@ last_reviewed: 2026-08-26
 source_paths:
   - AGENTS.md
   - README.md
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: "REQ-001, REQ-002"
 base_branch: main
 scope: "Tracks moving the static frontend from Cloudflare Pages to the existing Fly.io application."
@@ -45,7 +47,7 @@ The sources of truth are `REQ-001` and `REQ-002`.
 
 Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially because each task changes the runtime boundary consumed by the next task.
 
-- [ ] Task 1 - Allow the API server middleware to wrap an injected frontend fallback. [parallel: no]
+- [x] Task 1 - Allow the API server middleware to wrap an injected frontend fallback. [parallel: no]
   - Source scope: `internal/authapi/server.go`
   - Tests: `internal/authapi/server_test.go`
   - Acceptance criteria:

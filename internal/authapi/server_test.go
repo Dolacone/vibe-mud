@@ -326,6 +326,80 @@ func TestAPIOnlyUsesJSONExceptOAuthRedirects(t *testing.T) {
 	}
 }
 
+func TestInjectedFrontendFallbackUsesSharedMiddlewareAndReservedPathsStayJSON(t *testing.T) {
+	now := time.Now().UTC()
+	server, _ := newTestServer(t, &fakeProvider{}, &now)
+	var fallbackPath, fallbackRequestID string
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackPath = r.URL.Path
+		fallbackRequestID = requestID(r)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html>"))
+	})
+	handler := server.Handler(fallback)
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+
+	frontendRequest := httptest.NewRequest(http.MethodGet, "/play/room-1", nil)
+	frontendRequest.Header.Set("Origin", "https://game.example.test")
+	frontendRequest.Header.Set("X-Request-ID", "frontend-request")
+	frontendResponse := httptest.NewRecorder()
+	handler.ServeHTTP(frontendResponse, frontendRequest)
+
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
+	apiRequest.Header.Set("Origin", "https://game.example.test")
+	apiRequest.Header.Set("X-Request-ID", "api-request")
+	apiResponse := httptest.NewRecorder()
+	handler.ServeHTTP(apiResponse, apiRequest)
+
+	authRequest := httptest.NewRequest(http.MethodGet, "/auth/unknown", nil)
+	authRequest.Header.Set("X-Request-ID", "auth-request")
+	authResponse := httptest.NewRecorder()
+	handler.ServeHTTP(authResponse, authRequest)
+
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	logOutput, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if frontendResponse.Code != http.StatusOK || frontendResponse.Body.String() != "<!doctype html>" || frontendResponse.Header().Get("X-Request-ID") != "frontend-request" {
+		t.Fatalf("frontend fallback response = %d/%q/request-id=%q", frontendResponse.Code, frontendResponse.Body.String(), frontendResponse.Header().Get("X-Request-ID"))
+	}
+	if fallbackPath != "/play/room-1" || fallbackRequestID != "frontend-request" {
+		t.Fatalf("fallback request = path %q/request-id %q", fallbackPath, fallbackRequestID)
+	}
+	if frontendResponse.Header().Get("Access-Control-Allow-Origin") != "https://game.example.test" || frontendResponse.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("frontend fallback CORS = %q/%q", frontendResponse.Header().Get("Access-Control-Allow-Origin"), frontendResponse.Header().Get("Access-Control-Allow-Credentials"))
+	}
+	for name, response := range map[string]*httptest.ResponseRecorder{"api": apiResponse, "auth": authResponse} {
+		if response.Code != http.StatusNotFound || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("unknown %s response = %d/content-type=%q", name, response.Code, response.Header().Get("Content-Type"))
+		}
+		if strings.Contains(response.Body.String(), "<!doctype html>") {
+			t.Fatalf("unknown %s path reached frontend fallback", name)
+		}
+	}
+	text := string(logOutput)
+	for _, requestID := range []string{"frontend-request", "api-request", "auth-request"} {
+		if !strings.Contains(text, "request_id="+requestID) {
+			t.Fatalf("access log lacks request ID %q: %q", requestID, text)
+		}
+	}
+	for _, credential := range []string{"authorization-code-secret", "session-secret", "client-secret", "access-token", "refresh-token", "id-token"} {
+		if strings.Contains(text, credential) {
+			t.Fatalf("access log leaked credential %q: %q", credential, text)
+		}
+	}
+}
+
 func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)

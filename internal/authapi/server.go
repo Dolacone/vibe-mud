@@ -96,12 +96,18 @@ func NewServer(store *Store, provider IdentityProvider, cfg Config) (*Server, er
 	return &Server{store: store, provider: provider, cfg: cfg, frontendOrigin: frontendOrigin}, nil
 }
 
-func (s *Server) Routes() http.Handler {
+func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(s.requestID)
 	r.Use(s.accessLog)
 	r.Use(s.cors)
-	r.NotFound(s.writeNotFound)
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		if len(frontendFallback) > 0 && frontendFallback[0] != nil && !isReservedPath(r.URL.Path) {
+			frontendFallback[0].ServeHTTP(w, r)
+			return
+		}
+		s.writeNotFound(w, r)
+	})
 	r.MethodNotAllowed(s.writeMethodNotAllowed)
 	r.Get("/auth/google/login", s.login)
 	r.Get("/auth/google/callback", s.callback)
@@ -110,8 +116,12 @@ func (s *Server) Routes() http.Handler {
 	return r
 }
 
-func (s *Server) Handler() http.Handler {
-	return s.Routes()
+func (s *Server) Handler(frontendFallback ...http.Handler) http.Handler {
+	return s.Routes(frontendFallback...)
+}
+
+func isReservedPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/") || path == "/auth" || strings.HasPrefix(path, "/auth/")
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
