@@ -8,6 +8,8 @@ source_paths:
   - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-007
 base_branch: main
 scope: "Tracks the first Inventory-to-Resource conversion loop."
@@ -52,10 +54,10 @@ Task 1: SQLite conversion and Resource state
 
 ### Task 1: Store conversion and Resource state atomically
 
-- [ ] 在 `internal/authapi/store.go` 建立 conversion rule 與 Resource balance schema，加入 `camp` conversion rule seed，並初始化新舊玩家的 balance。
-- [ ] 將 Resource balance 與目前位置可用的 conversion option 納入玩家狀態。
-- [ ] 實作原子化驗證位置、Wood、AP，扣除 AP 與 Wood，累加 Resource 的 convert operation。
-- [ ] 在 `internal/authapi/store_test.go` 驗證預設 balance、成功、重複轉換、最後一個 Wood、所有拒絕、持久化與 rollback。
+- [x] 在 `internal/authapi/store.go` 建立 conversion rule 與 Resource balance schema，加入 `camp` conversion rule seed，並初始化新舊玩家的 balance。
+- [x] 將 Resource balance 與目前位置可用的 conversion option 納入玩家狀態。
+- [x] 實作原子化驗證位置、Wood、AP，扣除 AP 與 Wood，累加 Resource 的 convert operation。
+- [x] 在 `internal/authapi/store_test.go` 驗證預設 balance、成功、重複轉換、最後一個 Wood、所有拒絕、持久化與 rollback。
 
 Source files: `internal/authapi/store.go`
 

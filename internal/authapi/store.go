@@ -23,6 +23,8 @@ var (
 	ErrInsufficientAP       = errors.New("insufficient action points")
 	ErrRouteNotFound        = errors.New("route not found")
 	ErrGatheringNotFound    = errors.New("gathering not found")
+	ErrConversionNotFound   = errors.New("conversion not found")
+	ErrInsufficientItem     = errors.New("insufficient item")
 )
 
 type Store struct {
@@ -78,12 +80,21 @@ type GatheringOption struct {
 	APCost   int
 }
 
+type ConversionOption struct {
+	Item          Item
+	InputQuantity int
+	ResourceYield int
+	APCost        int
+}
+
 type PlayerState struct {
-	Location        Location
-	Routes          []Route
-	AP              int
-	Inventory       []InventoryItem
-	GatheringOption *GatheringOption
+	Location         Location
+	Routes           []Route
+	AP               int
+	Inventory        []InventoryItem
+	GatheringOption  *GatheringOption
+	ConversionOption *ConversionOption
+	Resource         int
 }
 
 const (
@@ -162,6 +173,17 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 	item_id TEXT NOT NULL REFERENCES items(id),
 	quantity INTEGER NOT NULL CHECK (quantity > 0),
 	PRIMARY KEY (user_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS conversion_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	input_item_id TEXT NOT NULL REFERENCES items(id),
+	input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
+	resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+);
+CREATE TABLE IF NOT EXISTS player_resources (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	balance INTEGER NOT NULL CHECK (balance >= 0)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
@@ -176,7 +198,9 @@ INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 INSERT OR IGNORE INTO items (id, display_name) VALUES
 	('wood', 'Wood');
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
-	('forest_edge', 'wood', 1, 10);`); err != nil {
+	('forest_edge', 'wood', 1, 10);
+INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, resource_yield, ap_cost) VALUES
+	('camp', 'wood', 1, 1, 1);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
 	}
@@ -191,6 +215,12 @@ INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player locations: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_resources (user_id, balance)
+SELECT id, 0 FROM identities`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player resources: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
@@ -234,6 +264,12 @@ INSERT INTO player_locations (user_id, location_id) VALUES (?, 'camp')
 ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 		_ = tx.Rollback()
 		return Identity{}, fmt.Errorf("initialize player location: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT INTO player_resources (user_id, balance) VALUES (?, 0)
+ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player resources: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
@@ -355,6 +391,22 @@ WHERE gr.location_id = ?`, state.Location.ID).Scan(
 	} else {
 		state.GatheringOption = &gathering
 	}
+	var conversion ConversionOption
+	err = tx.QueryRow(`
+SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
+FROM conversion_rules cr
+JOIN items i ON i.id = cr.input_item_id
+WHERE cr.location_id = ?`, state.Location.ID).Scan(
+		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.InputQuantity,
+		&conversion.ResourceYield, &conversion.APCost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		state.ConversionOption = nil
+	} else if err != nil {
+		return PlayerState{}, fmt.Errorf("get player conversion option: %w", err)
+	} else {
+		state.ConversionOption = &conversion
+	}
 	inventoryRows, err := tx.Query(`
 SELECT i.id, i.display_name, pi.quantity
 FROM player_inventory pi
@@ -384,6 +436,11 @@ ORDER BY pi.item_id`, userID)
 		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
 	}
 	state.AP = calculateAP(unixNano(fullTimestamp), now)
+	if err := tx.QueryRow(`SELECT balance FROM player_resources WHERE user_id = ?`, userID).Scan(&state.Resource); errors.Is(err, sql.ErrNoRows) {
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		return PlayerState{}, fmt.Errorf("get player resources: %w", err)
+	}
 	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
 FROM routes
@@ -592,6 +649,112 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 	}
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit move: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) Convert(userID int64) (PlayerState, error) {
+	if userID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin convert: %w", err)
+	}
+	var locationID string
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player location for convert: %w", err)
+	}
+	var option ConversionOption
+	err = tx.QueryRow(`
+SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
+FROM conversion_rules cr
+JOIN items i ON i.id = cr.input_item_id
+WHERE cr.location_id = ?`, locationID).Scan(
+		&option.Item.ID, &option.Item.DisplayName, &option.InputQuantity,
+		&option.ResourceYield, &option.APCost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrConversionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get conversion rule: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player AP for convert: %w", err)
+	}
+	var itemQuantity int
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, option.Item.ID).Scan(&itemQuantity)
+	if errors.Is(err, sql.ErrNoRows) || itemQuantity < option.InputQuantity {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientItem
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get conversion item: %w", err)
+	}
+	now := s.now().UTC()
+	if calculateAP(unixNano(fullTimestamp), now) < option.APCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).UnixNano()
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume AP for convert: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check convert AP: %w", err)
+	}
+	if rows != 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	if itemQuantity == option.InputQuantity {
+		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, option.Item.ID)
+	} else {
+		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, option.InputQuantity, userID, option.Item.ID)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume conversion item: %w", err)
+	}
+	_, err = tx.Exec(`UPDATE player_resources SET balance = balance + ? WHERE user_id = ?`, option.ResourceYield, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("add conversion resources: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit convert: %w", err)
 	}
 	return state, nil
 }

@@ -228,6 +228,13 @@ VALUES ('https://accounts.google.com', 'old-subject', 'old@example.com', 'Old Na
 	if ap, err := store.GetAP(userID); err != nil || ap != 3000 {
 		t.Fatalf("backfilled identity AP = %d, %v; want 3000", ap, err)
 	}
+	var resource int
+	if err := db.QueryRow("SELECT balance FROM player_resources WHERE user_id = ?", userID).Scan(&resource); err != nil {
+		t.Fatal(err)
+	}
+	if resource != 0 {
+		t.Fatalf("backfilled identity Resource = %d, want 0", resource)
+	}
 
 	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", time.Unix(0, 1).UnixNano(), userID); err != nil {
 		t.Fatal(err)
@@ -324,6 +331,12 @@ func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
 	}
 	if state.GatheringOption != nil {
 		t.Fatalf("camp gathering option = %+v, want none", state.GatheringOption)
+	}
+	if state.ConversionOption == nil || state.ConversionOption.Item.ID != "wood" || state.ConversionOption.Item.DisplayName != "Wood" || state.ConversionOption.InputQuantity != 1 || state.ConversionOption.ResourceYield != 1 || state.ConversionOption.APCost != 1 {
+		t.Fatalf("camp conversion option = %+v, want backend seed", state.ConversionOption)
+	}
+	if state.Resource != 0 {
+		t.Fatalf("new player Resource = %d, want 0", state.Resource)
 	}
 }
 
@@ -732,6 +745,172 @@ func TestMoveRejectsUnavailableRouteWithoutChangingState(t *testing.T) {
 	}
 	if fullTimestamp != before {
 		t.Fatalf("rejected route changed full timestamp to %d, want %d", fullTimestamp, before)
+	}
+}
+
+func TestConvertConsumesWoodAPAndAccumulatesResource(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-success", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 2)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Convert(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-1 || state.Resource != 1 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("first convert state = %+v, want one Wood, one Resource and AP %d", state, maxAP-1)
+	}
+	state, err = store.Convert(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-2 || state.Resource != 2 || len(state.Inventory) != 0 {
+		t.Fatalf("second convert state = %+v, want empty inventory, two Resources and AP %d", state, maxAP-2)
+	}
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.now = func() time.Time { return now }
+	persisted, err := reloaded.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Resource != 2 || len(persisted.Inventory) != 0 || persisted.AP != maxAP-2 {
+		t.Fatalf("reloaded convert state = %+v, want persisted Resource and AP", persisted)
+	}
+}
+
+func TestConvertRejectsWrongLocationWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-location", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID); !errors.Is(err, ErrConversionNotFound) {
+		t.Fatalf("convert outside camp error = %v, want ErrConversionNotFound", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Location != before.Location || after.AP != before.AP || after.Resource != before.Resource || len(after.Inventory) != 1 || after.Inventory[0].Quantity != before.Inventory[0].Quantity {
+		t.Fatalf("state after wrong-location convert = %+v, want unchanged %+v", after, before)
+	}
+}
+
+func TestConvertRejectsMissingWoodWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-item", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID); !errors.Is(err, ErrInsufficientItem) {
+		t.Fatalf("convert without Wood error = %v, want ErrInsufficientItem", err)
+	}
+	var after int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("missing-Wood convert changed AP timestamp from %d to %d", before, after)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 0 {
+		t.Fatalf("state after missing-Wood convert = %+v, want unchanged", state)
+	}
+}
+
+func TestConvertRejectsInsufficientAPWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-ap", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := now.Add(maxAP * time.Minute).UnixNano()
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("convert with insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != 0 || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("state after insufficient-AP convert = %+v, want unchanged", state)
+	}
+	var after int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("insufficient-AP convert changed timestamp from %d to %d", before, after)
+	}
+}
+
+func TestConvertRollsBackAPAndWoodWhenResourceWriteFails(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-rollback", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_convert_resource_update
+BEFORE UPDATE ON player_resources
+BEGIN
+SELECT RAISE(ABORT, 'test resource failure');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID); err == nil {
+		t.Fatal("convert succeeded despite resource write failure")
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("rolled-back convert state = %+v, want original state", state)
 	}
 }
 
