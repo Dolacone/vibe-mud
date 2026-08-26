@@ -1,6 +1,6 @@
 ---
 title: "Resource conversion"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
