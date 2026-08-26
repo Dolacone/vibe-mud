@@ -1,6 +1,11 @@
-<!-- last_reviewed: 2026-08-25 -->
+<!-- last_reviewed: 2026-08-26 -->
 
 # Changelog
+
+## 2026-08-26
+
+- Moved the production frontend into the Fly.io application for same-origin API and OAuth access.
+- Replaced the Cloudflare Pages Functions proxy with browser-cached static files served by Go.
 
 ## 2026-08-25
 
