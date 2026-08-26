@@ -5,7 +5,9 @@ created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
 source_paths:
+  - internal/authapi/server.go
   - internal/authapi/store.go
+  - internal/authapi/server_test.go
   - internal/authapi/store_test.go
 req_ref: REQ-005
 base_branch: main
@@ -70,10 +72,10 @@ Acceptance criteria:
 
 ### Task 2: Add movement API and safe rejection logging
 
-- [ ] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/move`。
-- [ ] 嚴格解析只含 `target` 的 JSON object。拒絕未知欄位、額外 JSON value、未知 Action 與不合法 target。
-- [ ] 使用安全 reason code，將拒絕事件寫至 stdout。不得記錄原始輸入或敏感資料。
-- [ ] 在 `internal/authapi/server_test.go` 驗證 response、驗證失敗、狀態不變與 log 欄位。
+- [x] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/move`。
+- [x] 嚴格解析只含 `target` 的 JSON object。拒絕未知欄位、額外 JSON value、未知 Action 與不合法 target。
+- [x] 使用安全 reason code，將拒絕事件寫至 stdout。不得記錄原始輸入或敏感資料。
+- [x] 在 `internal/authapi/server_test.go` 驗證 response、驗證失敗、狀態不變與 log 欄位。
 
 Source files: `internal/authapi/server.go`
 

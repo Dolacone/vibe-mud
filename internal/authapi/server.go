@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,10 +38,12 @@ type ProviderIdentity struct {
 }
 
 type currentUserResponse struct {
-	ID          int64  `json:"id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-	AP          int    `json:"ap"`
+	ID          int64            `json:"id"`
+	DisplayName string           `json:"display_name"`
+	Email       string           `json:"email"`
+	AP          int              `json:"ap"`
+	Location    locationResponse `json:"location"`
+	Routes      []routeResponse  `json:"routes"`
 }
 
 type restResponse struct {
@@ -51,6 +54,43 @@ type restConflictResponse struct {
 	Error string `json:"error"`
 	AP    int    `json:"ap"`
 }
+
+type locationResponse struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+type routeResponse struct {
+	OriginID      string `json:"origin_id"`
+	DestinationID string `json:"destination_id"`
+	APCost        int    `json:"ap_cost"`
+}
+
+type playerStateResponse struct {
+	Location locationResponse `json:"location"`
+	Routes   []routeResponse  `json:"routes"`
+	AP       int              `json:"ap"`
+}
+
+type moveResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
+type moveRequest struct {
+	Target string
+}
+
+const (
+	moveAction              = "move"
+	moveReasonInvalidJSON   = "invalid_json"
+	moveReasonUnknownField  = "unknown_field"
+	moveReasonDuplicate     = "duplicate_field"
+	moveReasonExtraValue    = "extra_json_value"
+	moveReasonMissingTarget = "missing_target"
+	moveReasonInvalidTarget = "invalid_target"
+	moveReasonUnsupported   = "unsupported_action"
+)
 
 type Config struct {
 	FrontendURL       string
@@ -113,6 +153,7 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Get("/auth/google/callback", s.callback)
 	r.Get("/api/me", s.me)
 	r.Post("/api/actions/rest", s.rest)
+	r.Post("/api/actions/move", s.move)
 	return r
 }
 
@@ -229,18 +270,21 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	ap, err := s.store.GetAP(identity.ID)
+	state, err := s.store.GetPlayerState(identity.ID)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
 		return
 	}
-	s.logComputation(r, identity.ID, "ap_calculation", "success", ap)
-	s.writeJSON(w, http.StatusOK, currentUserResponse{
+	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	response := currentUserResponse{
 		ID:          identity.ID,
 		DisplayName: identity.DisplayName,
 		Email:       identity.Email,
-		AP:          ap,
-	})
+		AP:          state.AP,
+		Location:    locationResponseFromStore(state.Location),
+		Routes:      routeResponsesFromStore(state.Routes),
+	}
+	s.writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +317,124 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 	s.logComputation(r, session.UserID, "ap_calculation", "success", ap)
 	s.logAction(r, session.UserID, "rest", "success")
 	s.writeJSON(w, http.StatusOK, restResponse{AP: ap})
+}
+
+func (s *Server) move(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeMoveRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, moveAction, reason)
+		s.writeError(w, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, err := s.store.Move(session.UserID, request.Target)
+	if errors.Is(err, ErrInsufficientAP) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
+		s.logAction(r, session.UserID, moveAction, "insufficient_ap")
+		s.writeJSON(w, http.StatusConflict, moveResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		return
+	}
+	if errors.Is(err, ErrRouteNotFound) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logComputation(r, session.UserID, "ap_calculation", "invalid_target", state.AP)
+		s.logRejection(r, session.UserID, moveAction, moveReasonInvalidTarget)
+		s.writeJSON(w, http.StatusBadRequest, moveResponse{Error: "invalid target", playerStateResponse: playerStateResponseFromStore(state)})
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
+	s.logAction(r, session.UserID, moveAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+}
+
+func (s *Server) authenticatedSession(r *http.Request) (Session, error) {
+	cookie, err := r.Cookie(s.cfg.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return Session{}, ErrSessionNotFound
+	}
+	return s.store.GetSession(cookie.Value)
+}
+
+func decodeMoveRequest(body io.Reader) (moveRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return moveRequest{}, moveReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return moveRequest{}, moveReasonInvalidJSON
+	}
+	var request moveRequest
+	seenTarget := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return moveRequest{}, moveReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return moveRequest{}, moveReasonInvalidJSON
+		}
+		if field != "target" {
+			return moveRequest{}, moveReasonUnknownField
+		}
+		if seenTarget {
+			return moveRequest{}, moveReasonDuplicate
+		}
+		seenTarget = true
+		if err := decoder.Decode(&request.Target); err != nil {
+			return moveRequest{}, moveReasonInvalidTarget
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return moveRequest{}, moveReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return moveRequest{}, moveReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return moveRequest{}, moveReasonExtraValue
+	}
+	if !seenTarget {
+		return moveRequest{}, moveReasonMissingTarget
+	}
+	if strings.TrimSpace(request.Target) == "" {
+		return moveRequest{}, moveReasonInvalidTarget
+	}
+	return request, ""
+}
+
+func locationResponseFromStore(location Location) locationResponse {
+	return locationResponse{ID: location.ID, DisplayName: location.DisplayName}
+}
+
+func routeResponsesFromStore(routes []Route) []routeResponse {
+	responses := make([]routeResponse, 0, len(routes))
+	for _, route := range routes {
+		responses = append(responses, routeResponse{OriginID: route.OriginID, DestinationID: route.DestinationID, APCost: route.APCost})
+	}
+	return responses
+}
+
+func playerStateResponseFromStore(state PlayerState) playerStateResponse {
+	return playerStateResponse{Location: locationResponseFromStore(state.Location), Routes: routeResponsesFromStore(state.Routes), AP: state.AP}
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
@@ -383,6 +545,14 @@ func (s *Server) logActionWithID(requestID, userID, action, outcome string) {
 	fmt.Fprintf(os.Stdout, "user_id=%s action=%s outcome=%s request_id=%s\n", userID, action, outcome, requestID)
 }
 
+func (s *Server) logRejection(r *http.Request, userID int64, action, reason string) {
+	s.logRejectionWithID(requestID(r), fmt.Sprintf("%d", userID), action, reason)
+}
+
+func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
+	fmt.Fprintf(os.Stdout, "user_id=%s action=%s outcome=error reason=%s request_id=%s\n", userID, action, reason, requestID)
+}
+
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
 }
@@ -410,7 +580,14 @@ func canonicalOrigin(frontend *url.URL) (string, error) {
 	return scheme + "://" + host, nil
 }
 
-func (s *Server) writeNotFound(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) writeNotFound(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/actions/") {
+		userID := "anonymous"
+		if session, err := s.authenticatedSession(r); err == nil {
+			userID = fmt.Sprintf("%d", session.UserID)
+		}
+		s.logRejectionWithID(requestID(r), userID, "unknown", moveReasonUnsupported)
+	}
 	s.writeError(w, http.StatusNotFound, "not found")
 }
 

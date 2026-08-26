@@ -426,8 +426,19 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 4 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 6 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	location, ok := meBody["location"].(map[string]any)
+	if !ok || location["id"] != "camp" || location["display_name"] != "Camp" {
+		t.Fatalf("GET /api/me location = %#v", meBody["location"])
+	}
+	routes, ok := meBody["routes"].([]any)
+	if !ok || len(routes) != 1 {
+		t.Fatalf("GET /api/me routes = %#v", meBody["routes"])
+	}
+	if route, ok := routes[0].(map[string]any); !ok || route["origin_id"] != "camp" || route["destination_id"] != "forest_edge" || route["ap_cost"] != float64(20) {
+		t.Fatalf("GET /api/me route = %#v", routes[0])
 	}
 
 	rest := httptest.NewRequest(http.MethodPost, "/api/actions/rest", strings.NewReader(`{"ap":0,"time":"9999-01-01T00:00:00Z"}`))
@@ -456,6 +467,177 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if unauthenticatedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated rest status = %d", unauthenticatedResponse.Code)
 	}
+}
+
+func TestMoveAPIUpdatesLocationAndAP(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-move", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/move", strings.NewReader(`{"target":"forest_edge"}`))
+	request.Header.Set("Origin", "https://game.example.test")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", "move-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("move status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	location, ok := body["location"].(map[string]any)
+	if !ok || location["id"] != "forest_edge" || body["ap"] != float64(maxAP-20) {
+		t.Fatalf("move response = %#v", body)
+	}
+	if _, hasError := body["error"]; hasError {
+		t.Fatalf("successful move returned error: %#v", body)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 || len(state.Routes) != 1 || state.Routes[0].DestinationID != "camp" {
+		t.Fatalf("stored move state = %+v", state)
+	}
+}
+
+func TestMoveAPIRejectsInvalidInputAndLogsSafeReason(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-invalid-move", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{name: "unknown field", body: `{"target":"forest_edge","cost":20}`, reason: moveReasonUnknownField},
+		{name: "extra value", body: `{"target":"forest_edge"}{}`, reason: moveReasonExtraValue},
+		{name: "invalid target type", body: `{"target":20}`, reason: moveReasonInvalidTarget},
+		{name: "missing target", body: `{}`, reason: moveReasonMissingTarget},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/actions/move", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Request-ID", "invalid-"+strings.ReplaceAll(test.name, " ", "-"))
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid move status = %d: %s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(logOutput, "user_id=1 action=move outcome=error reason="+test.reason) || !strings.Contains(logOutput, "request_id=invalid-") {
+				t.Fatalf("invalid move log = %q", logOutput)
+			}
+			if strings.Contains(logOutput, test.body) {
+				t.Fatalf("invalid move log leaked request body: %q", logOutput)
+			}
+			state, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Location.ID != "camp" || state.AP != maxAP {
+				t.Fatalf("invalid move changed state = %+v", state)
+			}
+		})
+	}
+}
+
+func TestMoveAPIInsufficientAPPreservesState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-low-ap", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/move", strings.NewReader(`{"target":"forest_edge"}`))
+	request.Header.Set("X-Request-ID", "low-ap-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("insufficient move status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
+		t.Fatalf("insufficient move response = %#v", body)
+	}
+	location, ok := body["location"].(map[string]any)
+	if !ok || location["id"] != "camp" {
+		t.Fatalf("insufficient move location = %#v", body["location"])
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != 0 {
+		t.Fatalf("insufficient move changed state = %+v", state)
+	}
+}
+
+func TestUnknownActionIsRejectedAndLogged(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-unknown-action", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/attack", nil)
+	request.Header.Set("X-Request-ID", "unknown-action-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("unknown action status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=unknown outcome=error reason="+moveReasonUnsupported+" request_id=unknown-action-request") {
+		t.Fatalf("unknown action log = %q", logOutput)
+	}
+}
+
+func captureStdout(t *testing.T, run func()) string {
+	t.Helper()
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	run()
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	logOutput, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(logOutput)
 }
 
 func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
