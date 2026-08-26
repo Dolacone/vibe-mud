@@ -6,6 +6,8 @@
 
 - Moved the production frontend into the Fly.io application for same-origin API and OAuth access.
 - Replaced the Cloudflare Pages Functions proxy with browser-cached static files served by Go.
+- Added persistent player locations, backend-owned Routes, and AP-consuming movement.
+- Added strict Action and target validation with safe rejection logging.
 
 ## 2026-08-25
 
