@@ -2,9 +2,13 @@ package authapi
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) (*Store, *sql.DB) {
@@ -290,6 +294,204 @@ func TestRestConcurrentlyConsumesTheLastAPOnce(t *testing.T) {
 	}
 	if ap, err := store.GetAP(identity.ID); err != nil || ap != 0 {
 		t.Fatalf("persisted AP after concurrent rest = %d, %v; want 0", ap, err)
+	}
+}
+
+func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
+	store, _ := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.Location.DisplayName != "Camp" {
+		t.Fatalf("new player location = %+v, want camp", state.Location)
+	}
+	if len(state.Routes) != 1 || state.Routes[0] != (Route{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}) {
+		t.Fatalf("new player routes = %+v, want camp to forest_edge at 20 AP", state.Routes)
+	}
+	if state.AP != maxAP {
+		t.Fatalf("new player AP = %d, want %d", state.AP, maxAP)
+	}
+}
+
+func TestPlayerStateReadsOneSQLiteSnapshotDuringConcurrentMove(t *testing.T) {
+	const hookName = "test_player_state_snapshot_hook"
+	var writer *sql.DB
+	moveStarted := make(chan struct{})
+	moveCommitted := make(chan struct{})
+	moveErrors := make(chan error, 1)
+	var startOnce sync.Once
+	sqlite.MustRegisterScalarFunction(hookName, 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+		startOnce.Do(func() {
+			close(moveStarted)
+			go func() {
+				tx, err := writer.Begin()
+				if err == nil {
+					_, err = tx.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = 1", time.Date(2026, 8, 25, 12, 20, 0, 0, time.UTC).UnixNano())
+				}
+				if err == nil {
+					_, err = tx.Exec("UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = 1")
+				}
+				if err == nil {
+					err = tx.Commit()
+				} else if tx != nil {
+					_ = tx.Rollback()
+				}
+				moveErrors <- err
+				close(moveCommitted)
+			}()
+		})
+		select {
+		case <-moveCommitted:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return int64(1), nil
+	})
+
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-snapshot", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ID != 1 {
+		t.Fatalf("test identity ID = %d, want 1", identity.ID)
+	}
+
+	writer, err = sql.Open("sqlite", "file:auth-store-test?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writer.SetMaxOpenConns(1)
+	if _, err := writer.Exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+ALTER TABLE routes RENAME TO routes_snapshot_base;
+CREATE VIEW routes AS
+SELECT origin_id, destination_id, ap_cost
+FROM routes_snapshot_base
+WHERE test_player_state_snapshot_hook() = 1;`); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-moveErrors:
+		if err != nil {
+			t.Fatalf("concurrent move failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent move did not complete")
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP || len(state.Routes) != 1 || state.Routes[0].DestinationID != "forest_edge" {
+		t.Fatalf("player state combined different SQLite snapshots: %+v", state)
+	}
+}
+
+func TestMoveAtomicallyConsumesAPAndPersistsLocation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-success", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Move(identity.ID, "forest_edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 {
+		t.Fatalf("move state = %+v, want forest_edge and AP %d", state, maxAP-20)
+	}
+	if len(state.Routes) != 1 || state.Routes[0].DestinationID != "camp" || state.Routes[0].APCost != 20 {
+		t.Fatalf("move routes = %+v, want return route to camp at 20 AP", state.Routes)
+	}
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.now = func() time.Time { return now }
+	persisted, err := reloaded.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Location.ID != "forest_edge" || persisted.AP != maxAP-20 {
+		t.Fatalf("persisted move state = %+v, want forest_edge and AP %d", persisted, maxAP-20)
+	}
+}
+
+func TestMoveRejectsInsufficientAPWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-insufficient", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := now.Add(maxAP * time.Minute).UnixNano()
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Move(identity.ID, "forest_edge"); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("move with insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != 0 {
+		t.Fatalf("state after rejected move = %+v, want camp and AP 0", state)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != before {
+		t.Fatalf("rejected move changed full timestamp to %d, want %d", fullTimestamp, before)
+	}
+}
+
+func TestMoveRejectsUnavailableRouteWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-invalid", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := now.UnixNano()
+	if _, err := store.Move(identity.ID, "unknown"); !errors.Is(err, ErrRouteNotFound) {
+		t.Fatalf("move with unavailable route error = %v, want ErrRouteNotFound", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP {
+		t.Fatalf("state after rejected route = %+v, want camp and AP %d", state, maxAP)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != before {
+		t.Fatalf("rejected route changed full timestamp to %d, want %d", fullTimestamp, before)
 	}
 }
 

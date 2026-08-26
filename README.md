@@ -15,13 +15,22 @@ source_paths:
 
 This repository contains a multiplayer MUD application. One Fly.io process provides the prebuilt React frontend, Google-only SSO, SQLite-backed application sessions, and the JSON game API.
 
-The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). Game terms are defined in [terminology.md](docs/terminology.md). The complete SQLite structure and lifecycle are documented in [schemas.md](docs/schemas.md). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
+The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). Game terms are defined in [terminology.md](docs/terminology.md). The complete SQLite structure and lifecycle are documented in [schemas.md](docs/schemas.md). Change records are stored in [docs/changes](docs/changes). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
 
 The application runs as one Go process in Docker. The Docker build compiles the React frontend and copies its static output into the runtime image. Runtime configuration uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`, `FRONTEND_URL`, `DATABASE_PATH`, and `PORT`. Session and OAuth flow cookies always use `Secure`.
 
-The login flow starts at `GET /auth/google/login`, returns through `GET /auth/google/callback`, and exposes the authenticated application identity plus server-calculated current AP at `GET /api/me`. The first game action uses `POST /api/actions/rest`.
+The login flow starts at `GET /auth/google/login`, returns through `GET /auth/google/callback`, and exposes the authenticated application identity, server-calculated AP, current location, and allowed Routes at `GET /api/me`. Game actions use `POST /api/actions/rest` and `POST /api/actions/move`.
 
 AP persistence stores only the timestamp when the player will next reach full AP. The backend derives current AP from its clock, caps it at 3000, and moves the timestamp forward when an action spends AP. No scheduler updates AP values.
+
+Movement starts players at `camp`. The backend stores directed Routes and their AP costs. A move request submits only a target identifier. The backend resolves the Route from the persisted current location, then updates AP and location in one SQLite transaction. Invalid Action, target, or JSON input leaves state unchanged and produces a safe error outcome log.
+
+```http
+POST /api/actions/move
+Content-Type: application/json
+
+{"target":"forest_edge"}
+```
 
 Production browsers use the Fly.io application origin for the frontend, `/auth/*`, and `/api/*`. The browser calls relative paths without a proxy. The Go server provides prebuilt static files but keeps authentication, game rules, persistence, and other application logic in backend handlers.
 

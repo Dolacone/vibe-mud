@@ -21,6 +21,7 @@ var (
 	ErrSessionNotFound      = errors.New("session not found")
 	ErrSessionExpired       = errors.New("session expired")
 	ErrInsufficientAP       = errors.New("insufficient action points")
+	ErrRouteNotFound        = errors.New("route not found")
 )
 
 type Store struct {
@@ -47,6 +48,23 @@ type OAuthAttempt struct {
 type Session struct {
 	UserID    int64
 	ExpiresAt time.Time
+}
+
+type Location struct {
+	ID          string
+	DisplayName string
+}
+
+type Route struct {
+	OriginID      string
+	DestinationID string
+	APCost        int
+}
+
+type PlayerState struct {
+	Location Location
+	Routes   []Route
+	AP       int
 }
 
 const (
@@ -95,15 +113,45 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS player_ap (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	full_timestamp INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS locations (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routes (
+	origin_id TEXT NOT NULL REFERENCES locations(id),
+	destination_id TEXT NOT NULL REFERENCES locations(id),
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0),
+	PRIMARY KEY (origin_id, destination_id)
+);
+CREATE TABLE IF NOT EXISTS player_locations (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	location_id TEXT NOT NULL REFERENCES locations(id)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO locations (id, display_name) VALUES
+	('camp', 'Camp'),
+	('forest_edge', 'Forest Edge');
+INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
+	('camp', 'forest_edge', 20),
+	('forest_edge', 'camp', 20);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed movement state: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
 SELECT id, ? FROM identities`, time.Now().UTC().UnixNano()); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player AP: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_locations (user_id, location_id)
+SELECT id, 'camp' FROM identities`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player locations: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
@@ -141,6 +189,12 @@ INSERT INTO player_ap (user_id, full_timestamp) VALUES (?, ?)
 ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
 		_ = tx.Rollback()
 		return Identity{}, fmt.Errorf("initialize player AP: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT INTO player_locations (user_id, location_id) VALUES (?, 'camp')
+ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player location: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
@@ -213,6 +267,166 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		return 0, fmt.Errorf("commit rest player: %w", err)
 	}
 	return calculateAP(unixNano(nextFullTimestamp), now), nil
+}
+
+func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
+	if userID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin player state read: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit player state read: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
+	var state PlayerState
+	err := tx.QueryRow(`
+SELECT l.id, l.display_name
+FROM player_locations pl
+JOIN locations l ON l.id = pl.location_id
+WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get player location: %w", err)
+	}
+	rows, err := tx.Query(`
+SELECT origin_id, destination_id, ap_cost
+FROM routes
+WHERE origin_id = ?
+ORDER BY destination_id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get player routes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var route Route
+		if err := rows.Scan(&route.OriginID, &route.DestinationID, &route.APCost); err != nil {
+			return PlayerState{}, fmt.Errorf("scan player route: %w", err)
+		}
+		state.Routes = append(state.Routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read player routes: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
+	}
+	state.AP = calculateAP(unixNano(fullTimestamp), now)
+	return state, nil
+}
+
+func (s *Store) Move(userID int64, targetID string) (PlayerState, error) {
+	if userID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	if strings.TrimSpace(targetID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: target is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin move: %w", err)
+	}
+	var originID string
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&originID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player location for move: %w", err)
+	}
+	var route Route
+	err = tx.QueryRow(`
+SELECT origin_id, destination_id, ap_cost
+FROM routes
+WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.OriginID, &route.DestinationID, &route.APCost)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrRouteNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get route for move: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player AP for move: %w", err)
+	}
+	now := s.now().UTC()
+	if calculateAP(unixNano(fullTimestamp), now) < route.APCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	nextFullTimestamp := fullAt.Add(time.Duration(route.APCost) * apRecoveryTime).UnixNano()
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume AP for move: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check move AP: %w", err)
+	}
+	if rows != 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	result, err = tx.Exec(`
+UPDATE player_locations SET location_id = ?
+WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("update player location: %w", err)
+	}
+	rows, err = result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check player location update: %w", err)
+	}
+	if rows != 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrRouteNotFound
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit move: %w", err)
+	}
+	return state, nil
 }
 
 func calculateAP(fullTimestamp, now time.Time) int {
