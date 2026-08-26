@@ -39,3 +39,5 @@ The last command must show exactly one running Machine. Run `fly scale count 1` 
 The frontend source lives under `web/`. The production Docker build runs `npm ci` and `npm run build`, then includes `web/dist` in the Fly.io runtime image. Versioned assets use long-lived immutable browser caching. The frontend entry document requires revalidation after each page load.
 
 Use the Fly.io application origin for both `FRONTEND_URL` and the browser entry URL. Set `GOOGLE_REDIRECT_URL` and the Google Console authorized redirect URI to the same origin plus `/auth/google/callback`. For the current application, use `https://vibe-mud-api.fly.dev` and `https://vibe-mud-api.fly.dev/auth/google/callback`. Run `npm test`, `npm run typecheck`, and `npm run build` from `web/` before `fly deploy`.
+
+Run `bash scripts/test-fly-origin.sh` after changing Fly secrets or deploying. The anonymous same-origin `POST` must reach session authentication and return HTTP 401 instead of failing origin validation.

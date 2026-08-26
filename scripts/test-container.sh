@@ -9,17 +9,23 @@ command -v curl >/dev/null
 
 image_tag="vibe-mud-container-test:${$}"
 container_name="vibe-mud-container-test-${$}"
+base_container_name="vibe-mud-base-test-${$}"
+inspect_container_name="vibe-mud-inspect-test-${$}"
 test_root="$(mktemp -d)"
 mkdir "$test_root/data"
 
 cleanup() {
   docker rm --force "$container_name" >/dev/null 2>&1 || true
+  docker rm --force "$base_container_name" >/dev/null 2>&1 || true
+  docker rm --force "$inspect_container_name" >/dev/null 2>&1 || true
   docker image rm "$image_tag" >/dev/null 2>&1 || true
   rm -rf "$test_root"
 }
 trap cleanup EXIT
 
 docker build --tag "$image_tag" .
+docker create --name "$base_container_name" gcr.io/distroless/static-debian12 >/dev/null
+docker create --name "$inspect_container_name" "$image_tag" >/dev/null
 docker run --detach \
   --name "$container_name" \
   --publish 127.0.0.1::8080 \
@@ -59,15 +65,19 @@ fi
 curl --fail --silent --show-error "http://127.0.0.1:${port}${asset_path}" >"$test_root/asset"
 
 runtime_files="$test_root/runtime-files"
-docker export "$container_name" | tar --list --file=- >"$runtime_files"
+base_runtime_files="$test_root/base-runtime-files"
+unexpected_runtime_files="$test_root/unexpected-runtime-files"
+docker export "$inspect_container_name" | tar --list --file=- | sort --unique >"$runtime_files"
+docker export "$base_container_name" | tar --list --file=- | sort --unique >"$base_runtime_files"
 grep -Fxq "server" "$runtime_files"
 grep -Fxq "web/dist/index.html" "$runtime_files"
 grep -Fxq "web/dist${asset_path}" "$runtime_files"
 
-if grep --extended-regexp --quiet \
-  '(^|/)(node|npm|npx|node_modules|\.wrangler|wrangler|cloudflare|workerd)(/|$)|(^|/)web/(src|functions|package(-lock)?\.json|wrangler\.jsonc)(/|$)' \
-  "$runtime_files"; then
-  echo "runtime image contains frontend tooling, source, or Cloudflare files" >&2
+comm -13 "$base_runtime_files" "$runtime_files" | grep --extended-regexp --invert-match \
+  '^(server|web/?|web/dist/?|web/dist/.+)$' >"$unexpected_runtime_files" || true
+if [ -s "$unexpected_runtime_files" ]; then
+  echo "runtime image contains unexpected files:" >&2
+  cat "$unexpected_runtime_files" >&2
   exit 1
 fi
 

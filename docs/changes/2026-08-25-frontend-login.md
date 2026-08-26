@@ -82,7 +82,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
 - [x] Task 3 - Add the allow-listed Pages Function proxy. [parallel: no]
   - Source scope: the Cloudflare Pages proxy
   - Tests: the Cloudflare Pages proxy test
-  - Supporting files: the Wrangler configuration, `web/package.json`, `web/package-lock.json`, `README.md`
+  - Supporting files: the Pages configuration, `web/package.json`, `web/package-lock.json`, `README.md`
   - Acceptance criteria:
     - REQ-002 condition 2: Google 登入成功後，使用者必須回到前端。
     - REQ-002 condition 3: 前端必須向後端查詢目前登入的應用程式使用者，不得從前端狀態或 Google 回應自行推定身分。

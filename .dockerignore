@@ -1,7 +1,3 @@
 server
 web/node_modules
 web/dist
-web/.wrangler
-web/.wrangler-functions-build
-.wrangler
-.wrangler-functions-build

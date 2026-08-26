@@ -1,4 +1,3 @@
 /server
 /web/node_modules/
 /web/dist/
-/web/.wrangler-functions-build/

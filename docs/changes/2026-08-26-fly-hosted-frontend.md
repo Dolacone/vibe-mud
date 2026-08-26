@@ -7,6 +7,7 @@ last_reviewed: 2026-08-26
 source_paths:
   - AGENTS.md
   - CHANGELOG.md
+  - .gitignore
   - README.md
   - docs/changes/2026-08-25-ap-rest.md
   - docs/changes/2026-08-25-frontend-login.md
@@ -21,6 +22,7 @@ source_paths:
   - Dockerfile
   - .dockerignore
   - scripts/test-container.sh
+  - scripts/test-fly-origin.sh
   - web/package.json
   - web/package-lock.json
 req_ref: "REQ-001, REQ-002"
@@ -86,11 +88,11 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
 - [x] Task 3 - Build the frontend into the Fly.io image and remove the Cloudflare runtime path. [parallel: no]
   - Source scope: the retired Cloudflare Pages proxy and `scripts/test-container.sh`
   - Tests: `scripts/test-container.sh`; the proxy test is removed with the retired proxy. Run the Go suite, frontend suite, frontend typecheck, frontend production build, and Docker production build.
-  - Supporting files: `Dockerfile`, `.dockerignore`, `web/package.json`, `web/package-lock.json`, the retired Wrangler configuration, `AGENTS.md`, `README.md`
+  - Supporting files: `Dockerfile`, `.dockerignore`, `web/package.json`, `web/package-lock.json`, the retired Pages configuration, `AGENTS.md`, `README.md`
   - Acceptance criteria:
     - REQ-001 condition 1: Fly.io 上的單一 application 必須執行後端 HTTP server，並提供預先建置的遊戲前端靜態檔案。
     - REQ-002 condition 3: 前端聯絡後端時不得依賴 Cloudflare Pages 或 Cloudflare Pages Functions proxy。
-  - Build intent: use `.dockerignore` to exclude local `server`, `web/node_modules`, `web/dist`, and Wrangler output from the context. Prove a clean Docker build installs locked frontend dependencies, emits `web/dist`, compiles the Go server, and copies only the server plus built frontend into the runtime image. The container test must start the production image, request the entry document and one versioned asset, inspect the runtime filesystem, and prove Node.js, source files, local build output, and Cloudflare runtime dependencies are absent.
+  - Build intent: use `.dockerignore` to exclude local `server`, `web/node_modules`, and `web/dist` from the context. Prove a clean Docker build installs locked frontend dependencies, emits `web/dist`, compiles the Go server, and copies only the server plus built frontend into the runtime image. The container test must start the production image, request the entry document and one versioned asset, inspect the runtime filesystem, and prove Node.js, source files, local build output, and Cloudflare runtime dependencies are absent.
 
 ## Review Issues
 
@@ -102,6 +104,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
 - `go test -ldflags=-linkmode=external ./...` 通過。
 - `npm test`、`npm run typecheck` 與 `npm run build` 通過。
 - `scripts/test-container.sh` 通過。Production image 可提供入口文件與版本化資源，且 runtime 未包含 Node.js、前端原始碼或 Cloudflare runtime 依賴。
+- `bash scripts/test-fly-origin.sh` 通過。Production Fly origin 的匿名 `POST` 會進入 session 驗證並回傳 HTTP 401。
 
 ## Plan Review Issues
 
@@ -109,4 +112,4 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
 - [x] Task 2 將 REQ-002 conditions 1、2 列為驗收條件，但所列 Go 測試只能證明靜態檔案與後端路由可用。它們無法證明前端提供相對 `/auth/google/login`，或以相對 `/api/*` 聯絡後端。把 `web/src/App.test.tsx` 與 `web/src/auth.test.ts` 的既有契約納入此任務的測試範圍，或把條件與前端測試移到同一任務。
 - [x] Task 2 的快取測試只要求所有 asset bytes 取得 `immutable`，沒有區分帶版本識別與未帶版本識別的資源。REQ-002 condition 8 只允許帶版本識別的資源使用長期 immutable 快取。定義可判定的版本命名規則，並測試版本化資源取得 immutable、未版本化資源不會取得 immutable。
 - [x] Task 3 沒有對應測試。刪除 proxy test、執行既有套件與完成 Docker build，都無法測出 runtime image 漏拷 `web/dist`、路徑錯誤或缺少啟動檔。加入自動化容器整合測試，驗證 image 只含所需 runtime 內容，並能從 image 內的預建檔案提供入口與版本化資源。
-- [x] Task 3 未包含 `.dockerignore`。目前 Docker context 會送入被 Git 忽略的 `web/node_modules`、`web/dist`、Wrangler 暫存檔與本機 `server`，因此「clean Docker build installs locked frontend dependencies」不成立。加入 `.dockerignore`，並讓容器測試證明 build 不依賴這些本機產物。
+- [x] Task 3 未包含 `.dockerignore`。目前 Docker context 會送入被 Git 忽略的 `web/node_modules`、`web/dist`、工具暫存檔與本機 `server`，因此「clean Docker build installs locked frontend dependencies」不成立。加入 `.dockerignore`，並讓容器測試證明 build 不依賴這些本機產物。
