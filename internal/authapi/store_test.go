@@ -293,6 +293,124 @@ func TestRestConcurrentlyConsumesTheLastAPOnce(t *testing.T) {
 	}
 }
 
+func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
+	store, _ := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.Location.DisplayName != "Camp" {
+		t.Fatalf("new player location = %+v, want camp", state.Location)
+	}
+	if len(state.Routes) != 1 || state.Routes[0] != (Route{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}) {
+		t.Fatalf("new player routes = %+v, want camp to forest_edge at 20 AP", state.Routes)
+	}
+	if state.AP != maxAP {
+		t.Fatalf("new player AP = %d, want %d", state.AP, maxAP)
+	}
+}
+
+func TestMoveAtomicallyConsumesAPAndPersistsLocation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-success", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Move(identity.ID, "forest_edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 {
+		t.Fatalf("move state = %+v, want forest_edge and AP %d", state, maxAP-20)
+	}
+	if len(state.Routes) != 1 || state.Routes[0].DestinationID != "camp" || state.Routes[0].APCost != 20 {
+		t.Fatalf("move routes = %+v, want return route to camp at 20 AP", state.Routes)
+	}
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.now = func() time.Time { return now }
+	persisted, err := reloaded.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Location.ID != "forest_edge" || persisted.AP != maxAP-20 {
+		t.Fatalf("persisted move state = %+v, want forest_edge and AP %d", persisted, maxAP-20)
+	}
+}
+
+func TestMoveRejectsInsufficientAPWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-insufficient", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := now.Add(maxAP * time.Minute).UnixNano()
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Move(identity.ID, "forest_edge"); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("move with insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != 0 {
+		t.Fatalf("state after rejected move = %+v, want camp and AP 0", state)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != before {
+		t.Fatalf("rejected move changed full timestamp to %d, want %d", fullTimestamp, before)
+	}
+}
+
+func TestMoveRejectsUnavailableRouteWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-movement-invalid", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := now.UnixNano()
+	if _, err := store.Move(identity.ID, "unknown"); !errors.Is(err, ErrRouteNotFound) {
+		t.Fatalf("move with unavailable route error = %v, want ErrRouteNotFound", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP {
+		t.Fatalf("state after rejected route = %+v, want camp and AP %d", state, maxAP)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != before {
+		t.Fatalf("rejected route changed full timestamp to %d, want %d", fullTimestamp, before)
+	}
+}
+
 func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	store, db := newTestStore(t)
 	expiresAt := time.Now().Add(time.Hour)

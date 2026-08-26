@@ -4,7 +4,9 @@ status: Ready-to-implement
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-005
 base_branch: main
 scope: "Tracks the first persistent location-changing game action."
@@ -48,9 +50,9 @@ Task 1: SQLite movement state
 
 ### Task 1: Store movement state and atomic mutation
 
-- [ ] 在 `internal/authapi/store.go` 建立 location、Route 與玩家位置 schema，加入固定 seed 與既有玩家 backfill。
-- [ ] 實作讀取玩家狀態，以及原子化驗證 Route、扣除 AP、更新位置的 store operation。
-- [ ] 在 `internal/authapi/store_test.go` 驗證預設位置、Route、成功移動、AP 不足、不合法 Route、持久化與 rollback。
+- [x] 在 `internal/authapi/store.go` 建立 location、Route 與玩家位置 schema，加入固定 seed 與既有玩家 backfill。
+- [x] 實作讀取玩家狀態，以及原子化驗證 Route、扣除 AP、更新位置的 store operation。
+- [x] 在 `internal/authapi/store_test.go` 驗證預設位置、Route、成功移動、AP 不足、不合法 Route、持久化與 rollback。
 
 Source files: `internal/authapi/store.go`
 
