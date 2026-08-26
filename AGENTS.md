@@ -1,12 +1,11 @@
-<!-- last_reviewed: 2026-08-25 -->
+<!-- last_reviewed: 2026-08-26 -->
 
 # Repository Instructions
 
 - Build the backend with Go, chi, `database/sql`, `modernc.org/sqlite`, and `coder/websocket`.
 - Build the frontend with React, TypeScript, and Vite.
-- Deploy the backend as one Docker container on a single Fly.io Machine with a Fly Volume.
-- Deploy the static frontend to Cloudflare Pages.
-- Use Cloudflare Pages Functions only as the same-origin proxy for `/auth/*` and `/api/*`. Keep authentication, game rules, persistence, and other application logic in the Fly.io backend.
+- Deploy the backend and prebuilt static frontend as one Docker container on a single Fly.io Machine with a Fly Volume.
+- Serve `/api/*`, `/auth/*`, and the static frontend from the same Fly.io origin. Do not use Cloudflare Pages or Pages Functions in the runtime path.
 - Use REST for initial state and game actions.
 - Use WebSocket for chat and real-time event delivery.
 - Persist application users, OAuth attempts, and sessions in SQLite. Do not replace SQLite with stateless cookies or another persistence method without explicit user approval.
