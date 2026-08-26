@@ -128,4 +128,4 @@ Acceptance criteria:
 ## Review Issues
 
 - [x] [Major] `accessLog` 將未知 Action 的原始 URL path 寫入 stdout。安全 rejection log 仍會伴隨 `action=POST /api/actions/<raw identifier>`，違反未處理原始輸入不得進入 log 的準則。
-- [ ] [Major] `GetPlayerState` 使用三次獨立查詢讀取位置、Route 與 AP。並行 `move` 可以在查詢間提交，讓 `/api/me` 或 action response 回傳不同時間點拼成的非權威狀態。
+- [x] [Major] `GetPlayerState` 使用三次獨立查詢讀取位置、Route 與 AP。並行 `move` 可以在查詢間提交，讓 `/api/me` 或 action response 回傳不同時間點拼成的非權威狀態。

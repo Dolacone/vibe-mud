@@ -2,9 +2,13 @@ package authapi
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) (*Store, *sql.DB) {
@@ -314,6 +318,86 @@ func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
 	}
 	if state.AP != maxAP {
 		t.Fatalf("new player AP = %d, want %d", state.AP, maxAP)
+	}
+}
+
+func TestPlayerStateReadsOneSQLiteSnapshotDuringConcurrentMove(t *testing.T) {
+	const hookName = "test_player_state_snapshot_hook"
+	var writer *sql.DB
+	moveStarted := make(chan struct{})
+	moveCommitted := make(chan struct{})
+	moveErrors := make(chan error, 1)
+	var startOnce sync.Once
+	sqlite.MustRegisterScalarFunction(hookName, 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+		startOnce.Do(func() {
+			close(moveStarted)
+			go func() {
+				tx, err := writer.Begin()
+				if err == nil {
+					_, err = tx.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = 1", time.Date(2026, 8, 25, 12, 20, 0, 0, time.UTC).UnixNano())
+				}
+				if err == nil {
+					_, err = tx.Exec("UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = 1")
+				}
+				if err == nil {
+					err = tx.Commit()
+				} else if tx != nil {
+					_ = tx.Rollback()
+				}
+				moveErrors <- err
+				close(moveCommitted)
+			}()
+		})
+		select {
+		case <-moveCommitted:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return int64(1), nil
+	})
+
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-snapshot", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ID != 1 {
+		t.Fatalf("test identity ID = %d, want 1", identity.ID)
+	}
+
+	writer, err = sql.Open("sqlite", "file:auth-store-test?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writer.SetMaxOpenConns(1)
+	if _, err := writer.Exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+ALTER TABLE routes RENAME TO routes_snapshot_base;
+CREATE VIEW routes AS
+SELECT origin_id, destination_id, ap_cost
+FROM routes_snapshot_base
+WHERE test_player_state_snapshot_hook() = 1;`); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-moveErrors:
+		if err != nil {
+			t.Fatalf("concurrent move failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent move did not complete")
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP || len(state.Routes) != 1 || state.Routes[0].DestinationID != "forest_edge" {
+		t.Fatalf("player state combined different SQLite snapshots: %+v", state)
 	}
 }
 

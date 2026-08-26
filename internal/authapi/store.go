@@ -273,8 +273,24 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 	if userID <= 0 {
 		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin player state read: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit player state read: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
 	var state PlayerState
-	err := s.db.QueryRow(`
+	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
 JOIN locations l ON l.id = pl.location_id
@@ -285,7 +301,7 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player location: %w", err)
 	}
-	rows, err := s.db.Query(`
+	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
 FROM routes
 WHERE origin_id = ?
@@ -304,10 +320,15 @@ ORDER BY destination_id`, state.Location.ID)
 	if err := rows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read player routes: %w", err)
 	}
-	state.AP, err = s.GetAP(userID)
-	if err != nil {
-		return PlayerState{}, err
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerState{}, ErrIdentityNotFound
 	}
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
+	}
+	state.AP = calculateAP(unixNano(fullTimestamp), now)
 	return state, nil
 }
 
@@ -397,10 +418,15 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 		_ = tx.Rollback()
 		return PlayerState{}, ErrRouteNotFound
 	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit move: %w", err)
 	}
-	return s.GetPlayerState(userID)
+	return state, nil
 }
 
 func calculateAP(fullTimestamp, now time.Time) int {
