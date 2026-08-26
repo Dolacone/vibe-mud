@@ -1,6 +1,6 @@
 ---
 title: "Resource conversion"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
@@ -142,3 +142,6 @@ Acceptance criteria:
 - REQ-007.13: `convert` 成功後，前端必須顯示更新後的 AP、Inventory 與 Resource balance。
 
 ## Review Issues
+
+- [ ] [Major] `decodeConvertRequest` 接受 `{"":1}`。空字串欄位仍是 unsupported input，因此違反 REQ-007.14 的 only-`{}` contract。加入拒絕邏輯與測試。
+- [ ] [Major] AP 不足時，`convert` 寫出 `outcome=insufficient_ap`，且未包含 `reason`。REQ-007.15 要求所有拒絕事件使用 `outcome=error`，並包含安全拒絕原因。改用 rejection log 並更新測試。
