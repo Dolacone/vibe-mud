@@ -4,7 +4,9 @@ status: Ready-to-implement
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-006
 base_branch: main
 scope: "Tracks the first location-specific item collection loop."
@@ -49,10 +51,10 @@ Task 1: SQLite gathering and Inventory state
 
 ### Task 1: Store gathering and Inventory state atomically
 
-- [ ] 在 `internal/authapi/store.go` 建立 item、gathering rule 與 Inventory schema，並加入 `Wood` 與 `forest_edge` gathering rule seed。
-- [ ] 將 Inventory 與目前位置可用的 gathering option 納入玩家狀態。
-- [ ] 實作原子化驗證位置、扣除 AP、累加 Inventory quantity 的 gather operation。
-- [ ] 在 `internal/authapi/store_test.go` 驗證空 Inventory、成功累加、位置錯誤、AP 不足、持久化與 rollback。
+- [x] 在 `internal/authapi/store.go` 建立 item、gathering rule 與 Inventory schema，並加入 `Wood` 與 `forest_edge` gathering rule seed。
+- [x] 將 Inventory 與目前位置可用的 gathering option 納入玩家狀態。
+- [x] 實作原子化驗證位置、扣除 AP、累加 Inventory quantity 的 gather operation。
+- [x] 在 `internal/authapi/store_test.go` 驗證空 Inventory、成功累加、位置錯誤、AP 不足、持久化與 rollback。
 
 Source files: `internal/authapi/store.go`
 

@@ -319,6 +319,246 @@ func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
 	if state.AP != maxAP {
 		t.Fatalf("new player AP = %d, want %d", state.AP, maxAP)
 	}
+	if len(state.Inventory) != 0 {
+		t.Fatalf("new player inventory = %+v, want empty inventory", state.Inventory)
+	}
+	if state.GatheringOption != nil {
+		t.Fatalf("camp gathering option = %+v, want none", state.GatheringOption)
+	}
+}
+
+func TestGatherConsumesAPAndAccumulatesInventory(t *testing.T) {
+	store, _ := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Gather(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-30 {
+		t.Fatalf("gather AP = %d, want %d", state.AP, maxAP-30)
+	}
+	if state.Location.ID != "forest_edge" {
+		t.Fatalf("gather location = %s, want forest_edge", state.Location.ID)
+	}
+	if state.GatheringOption == nil || state.GatheringOption.Item.ID != "wood" || state.GatheringOption.Item.DisplayName != "Wood" || state.GatheringOption.Quantity != 1 || state.GatheringOption.APCost != 10 {
+		t.Fatalf("gathering option = %+v, want backend seed", state.GatheringOption)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Item.DisplayName != "Wood" || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("gather inventory = %+v, want one Wood", state.Inventory)
+	}
+
+	state, err = store.Gather(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-40 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 2 {
+		t.Fatalf("repeated gather state = %+v, want AP %d and Wood quantity 2", state, maxAP-40)
+	}
+}
+
+func TestGatherPersistsInventoryAcrossStoreReload(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-persist", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Gather(identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.now = func() time.Time { return now }
+	state, err := reloaded.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("reloaded inventory = %+v, want one persisted Wood", state.Inventory)
+	}
+}
+
+func TestGatherRejectsInvalidLocationWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-location", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Gather(identity.ID); !errors.Is(err, ErrGatheringNotFound) {
+		t.Fatalf("camp gather error = %v, want ErrGatheringNotFound", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP || len(state.Inventory) != 0 {
+		t.Fatalf("state after invalid-location gather = %+v, want unchanged camp state", state)
+	}
+	var after int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("invalid-location gather changed AP timestamp from %d to %d", before, after)
+	}
+}
+
+func TestGatherRejectsInsufficientAPWithoutChangingState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-insufficient", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	before := now.Add(maxAP * time.Minute).UnixNano()
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Gather(identity.ID); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("gather with insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != 0 || len(state.Inventory) != 0 {
+		t.Fatalf("state after insufficient gather = %+v, want unchanged forest state", state)
+	}
+	var after int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("insufficient gather changed AP timestamp from %d to %d", before, after)
+	}
+}
+
+func TestGatherRollsBackAPWhenInventoryWriteFails(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-rollback", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_gather_inventory_insert
+BEFORE INSERT ON player_inventory
+BEGIN
+SELECT RAISE(ABORT, 'test inventory failure');
+END;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Gather(identity.ID); err == nil {
+		t.Fatal("gather succeeded despite inventory write failure")
+	}
+	var after int64
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("rolled-back gather changed AP timestamp from %d to %d", before, after)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM player_inventory WHERE user_id = ?", identity.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rolled-back gather persisted %d inventory rows", count)
+	}
+}
+
+func TestGatherConcurrentlyConsumesTheLastGatherAPOnce(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-concurrent", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add((maxAP-10)*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	type gatherResult struct {
+		state PlayerState
+		err   error
+	}
+	results := make(chan gatherResult, 2)
+	for range 2 {
+		go func() {
+			ready <- struct{}{}
+			<-start
+			state, err := store.Gather(identity.ID)
+			results <- gatherResult{state: state, err: err}
+		}()
+	}
+	<-ready
+	<-ready
+	close(start)
+
+	successes := 0
+	insufficient := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			successes++
+			if result.state.AP != 0 || len(result.state.Inventory) != 1 || result.state.Inventory[0].Quantity != 1 {
+				t.Fatalf("successful concurrent gather state = %+v, want zero AP and one Wood", result.state)
+			}
+		} else if errors.Is(result.err, ErrInsufficientAP) {
+			insufficient++
+		} else {
+			t.Fatalf("concurrent gather returned unexpected error: %v", result.err)
+		}
+	}
+	if successes != 1 || insufficient != 1 {
+		t.Fatalf("concurrent gather outcomes = %d successes, %d insufficient; want one each", successes, insufficient)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+		t.Fatalf("persisted concurrent gather state = %+v, want zero AP and one Wood", state)
+	}
 }
 
 func TestPlayerStateReadsOneSQLiteSnapshotDuringConcurrentMove(t *testing.T) {
