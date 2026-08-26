@@ -71,11 +71,7 @@ func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPath string, entry bool) {
-	cacheControl := frontendEntryCacheControl
-	if !entry && requestPath != "/index.html" && versionedAssetName.MatchString(path.Base(requestPath)) {
-		cacheControl = frontendAssetCacheControl
-	}
-	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("Cache-Control", cacheControlFor(requestPath, entry))
 	filePath := filepath.Join(h.root, filepath.FromSlash(strings.TrimPrefix(requestPath, "/")))
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -89,6 +85,16 @@ func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPat
 		return
 	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
+func cacheControlFor(requestPath string, entry bool) string {
+	if entry || requestPath == "/index.html" {
+		return frontendEntryCacheControl
+	}
+	if versionedAssetName.MatchString(path.Base(requestPath)) {
+		return frontendAssetCacheControl
+	}
+	return frontendEntryCacheControl
 }
 
 func isReservedFrontendPath(requestPath string) bool {
