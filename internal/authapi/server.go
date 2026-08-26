@@ -38,12 +38,14 @@ type ProviderIdentity struct {
 }
 
 type currentUserResponse struct {
-	ID          int64            `json:"id"`
-	DisplayName string           `json:"display_name"`
-	Email       string           `json:"email"`
-	AP          int              `json:"ap"`
-	Location    locationResponse `json:"location"`
-	Routes      []routeResponse  `json:"routes"`
+	ID              int64                    `json:"id"`
+	DisplayName     string                   `json:"display_name"`
+	Email           string                   `json:"email"`
+	AP              int                      `json:"ap"`
+	Location        locationResponse         `json:"location"`
+	Routes          []routeResponse          `json:"routes"`
+	Inventory       []inventoryItemResponse  `json:"inventory"`
+	GatheringOption *gatheringOptionResponse `json:"gathering_option"`
 }
 
 type restResponse struct {
@@ -67,9 +69,11 @@ type routeResponse struct {
 }
 
 type playerStateResponse struct {
-	Location locationResponse `json:"location"`
-	Routes   []routeResponse  `json:"routes"`
-	AP       int              `json:"ap"`
+	Location        locationResponse         `json:"location"`
+	Routes          []routeResponse          `json:"routes"`
+	AP              int                      `json:"ap"`
+	Inventory       []inventoryItemResponse  `json:"inventory"`
+	GatheringOption *gatheringOptionResponse `json:"gathering_option"`
 }
 
 type moveResponse struct {
@@ -81,15 +85,42 @@ type moveRequest struct {
 	Target string
 }
 
+type itemResponse struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+type inventoryItemResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+}
+
+type gatheringOptionResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+	APCost   int          `json:"ap_cost"`
+}
+
+type gatherResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
 const (
-	moveAction              = "move"
-	moveReasonInvalidJSON   = "invalid_json"
-	moveReasonUnknownField  = "unknown_field"
-	moveReasonDuplicate     = "duplicate_field"
-	moveReasonExtraValue    = "extra_json_value"
-	moveReasonMissingTarget = "missing_target"
-	moveReasonInvalidTarget = "invalid_target"
-	moveReasonUnsupported   = "unsupported_action"
+	moveAction                  = "move"
+	moveReasonInvalidJSON       = "invalid_json"
+	moveReasonUnknownField      = "unknown_field"
+	moveReasonDuplicate         = "duplicate_field"
+	moveReasonExtraValue        = "extra_json_value"
+	moveReasonMissingTarget     = "missing_target"
+	moveReasonInvalidTarget     = "invalid_target"
+	moveReasonUnsupported       = "unsupported_action"
+	gatherAction                = "gather"
+	gatherReasonInvalidJSON     = "invalid_json"
+	gatherReasonUnknownField    = "unknown_field"
+	gatherReasonDuplicate       = "duplicate_field"
+	gatherReasonExtraValue      = "extra_json_value"
+	gatherReasonInvalidLocation = "invalid_location"
 )
 
 type Config struct {
@@ -154,6 +185,7 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Get("/api/me", s.me)
 	r.Post("/api/actions/rest", s.rest)
 	r.Post("/api/actions/move", s.move)
+	r.Post("/api/actions/gather", s.gather)
 	return r
 }
 
@@ -277,14 +309,64 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
 	response := currentUserResponse{
-		ID:          identity.ID,
-		DisplayName: identity.DisplayName,
-		Email:       identity.Email,
-		AP:          state.AP,
-		Location:    locationResponseFromStore(state.Location),
-		Routes:      routeResponsesFromStore(state.Routes),
+		ID:              identity.ID,
+		DisplayName:     identity.DisplayName,
+		Email:           identity.Email,
+		AP:              state.AP,
+		Location:        locationResponseFromStore(state.Location),
+		Routes:          routeResponsesFromStore(state.Routes),
+		Inventory:       inventoryResponsesFromStore(state.Inventory),
+		GatheringOption: gatheringOptionResponseFromStore(state.GatheringOption),
 	}
 	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if reason := decodeGatherRequest(r.Body); reason != "" {
+		s.logRejection(r, session.UserID, gatherAction, reason)
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: "invalid action input", playerStateResponse: playerStateResponseFromStore(state)})
+		return
+	}
+	state, err := s.store.Gather(session.UserID)
+	if errors.Is(err, ErrInsufficientAP) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
+		s.logAction(r, session.UserID, gatherAction, "insufficient_ap")
+		s.writeJSON(w, http.StatusConflict, gatherResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		return
+	}
+	if errors.Is(err, ErrGatheringNotFound) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logComputation(r, session.UserID, "ap_calculation", "invalid_location", state.AP)
+		s.logRejection(r, session.UserID, gatherAction, gatherReasonInvalidLocation)
+		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: ErrGatheringNotFound.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
+	s.logAction(r, session.UserID, gatherAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
 }
 
 func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
@@ -421,6 +503,51 @@ func decodeMoveRequest(body io.Reader) (moveRequest, string) {
 	return request, ""
 }
 
+func decodeGatherRequest(body io.Reader) string {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return gatherReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return gatherReasonInvalidJSON
+	}
+	seen := make(map[string]struct{})
+	reason := ""
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return gatherReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return gatherReasonInvalidJSON
+		}
+		if _, exists := seen[field]; exists {
+			return gatherReasonDuplicate
+		}
+		seen[field] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return gatherReasonInvalidJSON
+		}
+		if reason == "" {
+			reason = gatherReasonUnknownField
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return gatherReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return gatherReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return gatherReasonExtraValue
+	}
+	return reason
+}
+
 func locationResponseFromStore(location Location) locationResponse {
 	return locationResponse{ID: location.ID, DisplayName: location.DisplayName}
 }
@@ -434,7 +561,32 @@ func routeResponsesFromStore(routes []Route) []routeResponse {
 }
 
 func playerStateResponseFromStore(state PlayerState) playerStateResponse {
-	return playerStateResponse{Location: locationResponseFromStore(state.Location), Routes: routeResponsesFromStore(state.Routes), AP: state.AP}
+	return playerStateResponse{
+		Location:        locationResponseFromStore(state.Location),
+		Routes:          routeResponsesFromStore(state.Routes),
+		AP:              state.AP,
+		Inventory:       inventoryResponsesFromStore(state.Inventory),
+		GatheringOption: gatheringOptionResponseFromStore(state.GatheringOption),
+	}
+}
+
+func inventoryResponsesFromStore(items []InventoryItem) []inventoryItemResponse {
+	responses := make([]inventoryItemResponse, 0, len(items))
+	for _, item := range items {
+		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity})
+	}
+	return responses
+}
+
+func gatheringOptionResponseFromStore(option *GatheringOption) *gatheringOptionResponse {
+	if option == nil {
+		return nil
+	}
+	return &gatheringOptionResponse{
+		Item:     itemResponse{ID: option.Item.ID, DisplayName: option.Item.DisplayName},
+		Quantity: option.Quantity,
+		APCost:   option.APCost,
+	}
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
@@ -503,6 +655,8 @@ func accessLogAction(r *http.Request) string {
 			return "rest"
 		case "/api/actions/move":
 			return "move"
+		case "/api/actions/gather":
+			return "gather"
 		default:
 			return "unknown"
 		}

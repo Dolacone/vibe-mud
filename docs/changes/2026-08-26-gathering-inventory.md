@@ -7,6 +7,8 @@ last_reviewed: 2026-08-26
 source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-006
 base_branch: main
 scope: "Tracks the first location-specific item collection loop."
@@ -72,10 +74,10 @@ Acceptance criteria:
 
 ### Task 2: Add gathering API and safe rejection logging
 
-- [ ] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/gather`。
-- [ ] `gather` request 只接受 `{}`，並拒絕 malformed JSON、unknown fields、duplicate fields 與 trailing JSON values。
-- [ ] 對位置錯誤、AP 不足與輸入錯誤回傳後端權威狀態，並寫出安全 outcome log。
-- [ ] 在 `internal/authapi/server_test.go` 驗證成功、失敗、驗證、狀態不變與 log 欄位。
+- [x] 在 `internal/authapi/server.go` 擴充 `GET /api/me`，並新增 `POST /api/actions/gather`。
+- [x] `gather` request 只接受 `{}`，並拒絕 malformed JSON、unknown fields、duplicate fields 與 trailing JSON values。
+- [x] 對位置錯誤、AP 不足與輸入錯誤回傳後端權威狀態，並寫出安全 outcome log。
+- [x] 在 `internal/authapi/server_test.go` 驗證成功、失敗、驗證、狀態不變與 log 欄位。
 
 Source files: `internal/authapi/server.go`
 

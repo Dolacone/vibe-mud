@@ -426,7 +426,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 6 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 8 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
 	}
 	location, ok := meBody["location"].(map[string]any)
@@ -439,6 +439,12 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	}
 	if route, ok := routes[0].(map[string]any); !ok || route["origin_id"] != "camp" || route["destination_id"] != "forest_edge" || route["ap_cost"] != float64(20) {
 		t.Fatalf("GET /api/me route = %#v", routes[0])
+	}
+	if inventory, ok := meBody["inventory"].([]any); !ok || len(inventory) != 0 {
+		t.Fatalf("GET /api/me inventory = %#v", meBody["inventory"])
+	}
+	if meBody["gathering_option"] != nil {
+		t.Fatalf("GET /api/me camp gathering option = %#v", meBody["gathering_option"])
 	}
 
 	rest := httptest.NewRequest(http.MethodPost, "/api/actions/rest", strings.NewReader(`{"ap":0,"time":"9999-01-01T00:00:00Z"}`))
@@ -466,6 +472,167 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	handler.ServeHTTP(unauthenticatedResponse, unauthenticated)
 	if unauthenticatedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated rest status = %d", unauthenticatedResponse.Code)
+	}
+}
+
+func TestGatherAPIUpdatesStateAndMeResponse(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-gather", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/gather", strings.NewReader(`{}`))
+	request.Header.Set("Origin", "https://game.example.test")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", "gather-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("gather status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-30) || body["error"] != nil {
+		t.Fatalf("gather response = %#v", body)
+	}
+	option, ok := body["gathering_option"].(map[string]any)
+	if !ok || option["quantity"] != float64(1) || option["ap_cost"] != float64(10) {
+		t.Fatalf("gathering option = %#v", body["gathering_option"])
+	}
+	item, ok := option["item"].(map[string]any)
+	if !ok || item["id"] != "wood" || item["display_name"] != "Wood" {
+		t.Fatalf("gathering item = %#v", option["item"])
+	}
+	inventory, ok := body["inventory"].([]any)
+	if !ok || len(inventory) != 1 {
+		t.Fatalf("gather inventory = %#v", body["inventory"])
+	}
+	entry, ok := inventory[0].(map[string]any)
+	if !ok || entry["quantity"] != float64(1) {
+		t.Fatalf("gather inventory entry = %#v", inventory[0])
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=gather outcome=success request_id=gather-request") {
+		t.Fatalf("gather log = %q", logOutput)
+	}
+
+	me := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	me.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	meResponse := httptest.NewRecorder()
+	server.Routes().ServeHTTP(meResponse, me)
+	if meResponse.Code != http.StatusOK || !strings.Contains(meResponse.Body.String(), `"quantity":1`) {
+		t.Fatalf("GET /api/me after gather = %d: %s", meResponse.Code, meResponse.Body.String())
+	}
+}
+
+func TestGatherAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-invalid-gather", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{name: "malformed", body: `{`, reason: gatherReasonInvalidJSON},
+		{name: "unknown field", body: `{"item":"wood"}`, reason: gatherReasonUnknownField},
+		{name: "duplicate field", body: `{"item":"wood","item":"wood"}`, reason: gatherReasonDuplicate},
+		{name: "trailing value", body: `{}{}`, reason: gatherReasonExtraValue},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/actions/gather", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Request-ID", "invalid-gather-"+strings.ReplaceAll(test.name, " ", "-"))
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid gather status = %d: %s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(logOutput, "user_id=1 action=gather outcome=error reason="+test.reason) || !strings.Contains(logOutput, "request_id=invalid-gather-") {
+				t.Fatalf("invalid gather log = %q", logOutput)
+			}
+			if strings.Contains(logOutput, test.body) {
+				t.Fatalf("invalid gather log leaked request body: %q", logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["ap"] != float64(maxAP) {
+				t.Fatalf("invalid gather response state = %#v", body)
+			}
+			state, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Location.ID != "camp" || state.AP != maxAP || len(state.Inventory) != 0 {
+				t.Fatalf("invalid gather changed state = %+v", state)
+			}
+		})
+	}
+}
+
+func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-gather-errors", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	locationRequest := httptest.NewRequest(http.MethodPost, "/api/actions/gather", strings.NewReader(`{}`))
+	locationRequest.Header.Set("X-Request-ID", "gather-location-request")
+	locationRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	locationResponse := httptest.NewRecorder()
+	locationLog := captureStdout(t, func() { server.Routes().ServeHTTP(locationResponse, locationRequest) })
+	if locationResponse.Code != http.StatusBadRequest || !strings.Contains(locationResponse.Body.String(), `"error":"gathering not found"`) {
+		t.Fatalf("location gather response = %d: %s", locationResponse.Code, locationResponse.Body.String())
+	}
+	if !strings.Contains(locationLog, "action=gather outcome=error reason="+gatherReasonInvalidLocation+" request_id=gather-location-request") {
+		t.Fatalf("location gather log = %q", locationLog)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	lowAPRequest := httptest.NewRequest(http.MethodPost, "/api/actions/gather", strings.NewReader(`{}`))
+	lowAPRequest.Header.Set("X-Request-ID", "gather-low-ap-request")
+	lowAPRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	lowAPResponse := httptest.NewRecorder()
+	lowAPLog := captureStdout(t, func() { server.Routes().ServeHTTP(lowAPResponse, lowAPRequest) })
+	if lowAPResponse.Code != http.StatusConflict || !strings.Contains(lowAPResponse.Body.String(), `"error":"insufficient action points"`) {
+		t.Fatalf("low AP gather response = %d: %s", lowAPResponse.Code, lowAPResponse.Body.String())
+	}
+	if !strings.Contains(lowAPLog, "user_id=1 action=gather outcome=insufficient_ap request_id=gather-low-ap-request") {
+		t.Fatalf("low AP gather log = %q", lowAPLog)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "forest_edge" || state.AP != 0 || len(state.Inventory) != 0 {
+		t.Fatalf("failed gathers changed state = %+v", state)
 	}
 }
 
