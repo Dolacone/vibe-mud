@@ -9,6 +9,9 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/server_test.go
   - internal/authapi/store_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.test.tsx
 req_ref: REQ-005
 base_branch: main
 scope: "Tracks the first persistent location-changing game action."
@@ -94,9 +97,9 @@ Acceptance criteria:
 
 ### Task 3: Add typed frontend movement client
 
-- [ ] 在 `web/src/auth.ts` 解析目前位置與 Route，並提交只含 target identifier 的 move request。
-- [ ] 將成功、AP 不足、不合法輸入與未登入 response 轉為明確 client result。
-- [ ] 在 `web/src/auth.test.ts` 驗證 request body 與所有 response 分支。
+- [x] 在 `web/src/auth.ts` 解析目前位置與 Route，並提交只含 target identifier 的 move request。
+- [x] 將成功、AP 不足、不合法輸入與未登入 response 轉為明確 client result。
+- [x] 在 `web/src/auth.test.ts` 驗證 request body 與所有 response 分支。
 
 Source files: `web/src/auth.ts`
 

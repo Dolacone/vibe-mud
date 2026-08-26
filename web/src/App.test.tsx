@@ -11,6 +11,12 @@ vi.mock("./auth", async () => {
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
 const rest = vi.mocked(auth.rest);
 
+const campState = {
+  location: { id: "camp", display_name: "Camp" },
+  routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
+  ap: 3000,
+};
+
 describe("App", () => {
   beforeEach(() => {
     getCurrentUser.mockReset();
@@ -18,7 +24,7 @@ describe("App", () => {
   });
 
   it("loads and displays only the backend-confirmed identity", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 3000 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
     render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading");
     await waitFor(() => expect(screen.getByText("Ada")).toBeInTheDocument());
@@ -30,7 +36,7 @@ describe("App", () => {
   });
 
   it("updates the displayed AP after a successful rest", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 2 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 2 } });
     rest.mockResolvedValue({ status: "success", ap: 1 });
     render(<App />);
 
@@ -42,7 +48,7 @@ describe("App", () => {
   });
 
   it("keeps the known AP and shows the rejection when AP is insufficient", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 0 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 0 } });
     rest.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ap: 0 });
     render(<App />);
 
@@ -53,7 +59,7 @@ describe("App", () => {
   });
 
   it("updates stale AP from an insufficient rest response", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 1 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 1 } });
     rest.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ap: 0 });
     render(<App />);
 
@@ -68,7 +74,7 @@ describe("App", () => {
   it("disables rest and prevents duplicate requests while one is pending", async () => {
     let resolveRest: ((value: auth.RestResult) => void) | undefined;
     rest.mockReturnValue(new Promise((resolve) => { resolveRest = resolve; }));
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 2 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 2 } });
     render(<App />);
 
     const button = await screen.findByRole("button", { name: "Rest" });
@@ -84,7 +90,7 @@ describe("App", () => {
   });
 
   it("keeps the known AP when rest fails", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ap: 2 } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 2 } });
     rest.mockResolvedValue({ status: "error", error: new Error("backend unavailable") });
     render(<App />);
 
