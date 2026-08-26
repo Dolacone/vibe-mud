@@ -23,7 +23,7 @@ The backend uses Go, chi, `database/sql`, and `modernc.org/sqlite`. It owns auth
 
 The frontend uses React, TypeScript, and Vite under `web/`. The Docker build compiles it into versioned static assets before copying `web/dist` into the runtime image. The Go static handler requires revalidation for the entry document and gives versioned assets an immutable one-year browser cache.
 
-The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, and action results.
+The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, Inventory, and action results.
 
 ## Authentication
 
@@ -31,10 +31,12 @@ Google login starts at `GET /auth/google/login` and returns through `GET /auth/g
 
 ## Game State and API
 
-`GET /api/me` returns the authenticated application identity, server-calculated AP, current location, and allowed Routes. Game actions use `POST /api/actions/rest` and `POST /api/actions/move`.
+`GET /api/me` returns the authenticated application identity, server-calculated AP, current location, allowed Routes, available gathering option, and Inventory. Game actions use `POST /api/actions/rest`, `POST /api/actions/move`, and `POST /api/actions/gather`.
 
 AP persistence stores only the timestamp when the player will reach full AP. The backend derives current AP from its clock, caps it at 3000, and advances the timestamp when an action spends AP. No scheduler updates AP values.
 
 Movement starts at `camp`. The backend resolves a submitted target against directed Routes stored in SQLite. A successful move updates AP and location in one transaction. Invalid Action, target, or JSON input leaves state unchanged and produces a sanitized error outcome log.
+
+Gathering is available only when the current Location has a backend-owned gathering rule. The frontend submits `{}` and cannot submit an item, quantity, cost, or location. A successful gather updates AP and Inventory quantity in one transaction.
 
 See [SQLite Schemas](schemas.md) for data structures and [Behavior Index](../requirements/BEHAVIOR.md) for agreed behavior.

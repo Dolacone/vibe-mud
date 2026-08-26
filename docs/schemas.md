@@ -36,6 +36,9 @@ source_paths:
 | `locations` | 保存後端允許的位置。 | Store 初始化時建立固定 seed。 | 它定義位置，不保存玩家狀態。 |
 | `routes` | 保存後端允許的有向 Route 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義兩個位置間的通行規則，不保存玩家移動紀錄。 |
 | `player_locations` | 保存每位玩家的目前位置。 | 身分建立時建立，移動成功時更新。 | 它只保存目前狀態，不保存歷史軌跡。 |
+| `items` | 保存後端允許的 item 定義。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
+| `gathering_rules` | 保存 Location 可產出的 item、quantity 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義取得規則，不保存玩家執行紀錄。 |
+| `player_inventory` | 保存每位玩家持有的 item quantity。 | 首次取得 item 時建立，後續取得時累加。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
 
 ## identities
 
@@ -191,6 +194,67 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 索引與約束：`user_id` 與 `location_id` 都受 foreign key 約束。新玩家與缺少位置的既有玩家使用 `camp`。
 
+## items
+
+用途：定義後端允許的 item。MVP 固定建立 `wood`。
+
+```sql
+CREATE TABLE IF NOT EXISTS items (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | API、gathering rule 與 Inventory 使用的穩定 item identifier。 |
+| `display_name` | 前端顯示的 item 名稱。 |
+
+索引與約束：primary key 為 `id`。前端不能建立 item 或自行提交顯示名稱。
+
+## gathering_rules
+
+用途：定義 Location 可執行的 deterministic gathering。MVP 只允許 `forest_edge` 產出 1 個 `wood`，成本為 10 AP。
+
+```sql
+CREATE TABLE IF NOT EXISTS gathering_rules (
+    location_id TEXT PRIMARY KEY REFERENCES locations(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `location_id` | 允許 gathering 的 Location。Primary key 限制每個 Location 只有一筆 MVP rule。 |
+| `item_id` | 成功時加入 Inventory 的 item。 |
+| `quantity` | 每次成功時增加的 item quantity。 |
+| `ap_cost` | 每次成功時消耗的 AP。 |
+
+索引與約束：所有 gameplay values 都由後端資料決定。前端不提交 `location_id`、`item_id`、`quantity` 或 `ap_cost`。
+
+## player_inventory
+
+用途：保存玩家目前持有的 item quantity。沒有 rows 代表空 Inventory。
+
+```sql
+CREATE TABLE IF NOT EXISTS player_inventory (
+    user_id INTEGER NOT NULL REFERENCES identities(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (user_id, item_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `user_id` | 持有 item 的玩家。 |
+| `item_id` | 玩家持有的 item。 |
+| `quantity` | 玩家持有的正整數 quantity。 |
+
+索引與約束：複合 primary key 保證每位玩家的每種 item 只有一筆 quantity。`gather` 使用 upsert 累加，不能覆寫既有 quantity。
+
 ## 關聯與約束
 
 ```text
@@ -202,7 +266,15 @@ identities.id
 locations.id
 ├── routes.origin_id             Route 起點
 ├── routes.destination_id        Route 終點
-└── player_locations.location_id 玩家目前位置
+├── player_locations.location_id 玩家目前位置
+└── gathering_rules.location_id  Gathering 所在位置
+
+items.id
+├── gathering_rules.item_id  Gathering 產出的 item
+└── player_inventory.item_id 玩家持有的 item
+
+identities.id
+└── player_inventory.user_id 玩家持有的 item quantity
 
 oauth_attempts          OAuth 完成前的獨立暫存狀態
 ```
@@ -219,11 +291,18 @@ SELECT id, ? FROM identities;
 
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities;
+
+INSERT OR IGNORE INTO items (id, display_name) VALUES ('wood', 'Wood');
+
+INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost)
+VALUES ('forest_edge', 'wood', 1, 10);
 ```
 
 新 identity 也會在 identity upsert 的同一 transaction 建立 `player_ap` 與 `player_locations`。既有玩家資料不會被 backfill 覆寫。
 
 `move` transaction 會依玩家目前位置查找 target Route。Route 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
+
+`gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並以 upsert 累加 `player_inventory.quantity`。兩項更新必須在同一 transaction commit。
 
 ## 已知限制
 

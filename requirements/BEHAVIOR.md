@@ -3,3 +3,4 @@
 - 玩家登入時取得依完整分鐘恢復且上限為 3000 的目前 AP -> REQ-003
 - 已登入玩家可透過前端 `rest` 行動消耗 1 AP 並保留結果 -> REQ-004
 - 已登入玩家可沿後端允許的 Route 執行 `move`，依 Route 成本原子更新 AP 與目前位置 -> REQ-005
+- 已登入玩家可在 `forest_edge` 執行 `gather`，原子消耗 AP 並累加持久化 Inventory -> REQ-006

@@ -22,6 +22,7 @@ var (
 	ErrSessionExpired       = errors.New("session expired")
 	ErrInsufficientAP       = errors.New("insufficient action points")
 	ErrRouteNotFound        = errors.New("route not found")
+	ErrGatheringNotFound    = errors.New("gathering not found")
 )
 
 type Store struct {
@@ -61,10 +62,28 @@ type Route struct {
 	APCost        int
 }
 
+type Item struct {
+	ID          string
+	DisplayName string
+}
+
+type InventoryItem struct {
+	Item     Item
+	Quantity int
+}
+
+type GatheringOption struct {
+	Item     Item
+	Quantity int
+	APCost   int
+}
+
 type PlayerState struct {
-	Location Location
-	Routes   []Route
-	AP       int
+	Location        Location
+	Routes          []Route
+	AP              int
+	Inventory       []InventoryItem
+	GatheringOption *GatheringOption
 }
 
 const (
@@ -127,6 +146,22 @@ CREATE TABLE IF NOT EXISTS routes (
 CREATE TABLE IF NOT EXISTS player_locations (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	location_id TEXT NOT NULL REFERENCES locations(id)
+);
+CREATE TABLE IF NOT EXISTS items (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gathering_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+);
+CREATE TABLE IF NOT EXISTS player_inventory (
+	user_id INTEGER NOT NULL REFERENCES identities(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (user_id, item_id)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
@@ -137,7 +172,11 @@ INSERT OR IGNORE INTO locations (id, display_name) VALUES
 	('forest_edge', 'Forest Edge');
 INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 	('camp', 'forest_edge', 20),
-	('forest_edge', 'camp', 20);`); err != nil {
+	('forest_edge', 'camp', 20);
+INSERT OR IGNORE INTO items (id, display_name) VALUES
+	('wood', 'Wood');
+INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
+	('forest_edge', 'wood', 1, 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
 	}
@@ -289,7 +328,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	var state PlayerState
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0)}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -301,24 +340,40 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player location: %w", err)
 	}
-	rows, err := tx.Query(`
-SELECT origin_id, destination_id, ap_cost
-FROM routes
-WHERE origin_id = ?
-ORDER BY destination_id`, state.Location.ID)
+	var gathering GatheringOption
+	err = tx.QueryRow(`
+SELECT i.id, i.display_name, gr.quantity, gr.ap_cost
+FROM gathering_rules gr
+JOIN items i ON i.id = gr.item_id
+WHERE gr.location_id = ?`, state.Location.ID).Scan(
+		&gathering.Item.ID, &gathering.Item.DisplayName, &gathering.Quantity, &gathering.APCost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		state.GatheringOption = nil
+	} else if err != nil {
+		return PlayerState{}, fmt.Errorf("get player gathering option: %w", err)
+	} else {
+		state.GatheringOption = &gathering
+	}
+	inventoryRows, err := tx.Query(`
+SELECT i.id, i.display_name, pi.quantity
+FROM player_inventory pi
+JOIN items i ON i.id = pi.item_id
+WHERE pi.user_id = ?
+ORDER BY pi.item_id`, userID)
 	if err != nil {
-		return PlayerState{}, fmt.Errorf("get player routes: %w", err)
+		return PlayerState{}, fmt.Errorf("get player inventory: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var route Route
-		if err := rows.Scan(&route.OriginID, &route.DestinationID, &route.APCost); err != nil {
-			return PlayerState{}, fmt.Errorf("scan player route: %w", err)
+	defer inventoryRows.Close()
+	for inventoryRows.Next() {
+		var inventoryItem InventoryItem
+		if err := inventoryRows.Scan(&inventoryItem.Item.ID, &inventoryItem.Item.DisplayName, &inventoryItem.Quantity); err != nil {
+			return PlayerState{}, fmt.Errorf("scan player inventory: %w", err)
 		}
-		state.Routes = append(state.Routes, route)
+		state.Inventory = append(state.Inventory, inventoryItem)
 	}
-	if err := rows.Err(); err != nil {
-		return PlayerState{}, fmt.Errorf("read player routes: %w", err)
+	if err := inventoryRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read player inventory: %w", err)
 	}
 	var fullTimestamp int64
 	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
@@ -329,6 +384,118 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
 	}
 	state.AP = calculateAP(unixNano(fullTimestamp), now)
+	rows, err := tx.Query(`
+SELECT origin_id, destination_id, ap_cost
+FROM routes
+WHERE origin_id = ?
+ORDER BY destination_id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get player routes: %w", err)
+	}
+	for rows.Next() {
+		var route Route
+		if err := rows.Scan(&route.OriginID, &route.DestinationID, &route.APCost); err != nil {
+			_ = rows.Close()
+			return PlayerState{}, fmt.Errorf("scan player route: %w", err)
+		}
+		state.Routes = append(state.Routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return PlayerState{}, fmt.Errorf("read player routes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) Gather(userID int64) (PlayerState, error) {
+	if userID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin gather: %w", err)
+	}
+	var locationID string
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player location for gather: %w", err)
+	}
+	var option GatheringOption
+	err = tx.QueryRow(`
+SELECT i.id, i.display_name, gr.quantity, gr.ap_cost
+FROM gathering_rules gr
+JOIN items i ON i.id = gr.item_id
+WHERE gr.location_id = ?`, locationID).Scan(
+		&option.Item.ID, &option.Item.DisplayName, &option.Quantity, &option.APCost,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrGatheringNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get gathering rule: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player AP for gather: %w", err)
+	}
+	now := s.now().UTC()
+	if calculateAP(unixNano(fullTimestamp), now) < option.APCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).UnixNano()
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume AP for gather: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check gather AP: %w", err)
+	}
+	if rows != 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	_, err = tx.Exec(`
+INSERT INTO player_inventory (user_id, item_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, option.Item.ID, option.Quantity)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("add gathered item: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit gather: %w", err)
+	}
 	return state, nil
 }
 

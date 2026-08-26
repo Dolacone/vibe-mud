@@ -8,6 +8,8 @@
 - Replaced the Cloudflare Pages Functions proxy with browser-cached static files served by Go.
 - Added persistent player locations, backend-owned Routes, and AP-consuming movement.
 - Added strict Action and target validation with safe rejection logging.
+- Added location-specific gathering that atomically consumes AP and collects Wood.
+- Added persistent Inventory state and frontend display.
 
 ## 2026-08-25
 
