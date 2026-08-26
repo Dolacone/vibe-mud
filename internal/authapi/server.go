@@ -492,8 +492,22 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		if status >= http.StatusBadRequest {
 			outcome = http.StatusText(status)
 		}
-		s.logActionWithID(requestID(r), userID, r.Method+" "+r.URL.Path, outcome)
+		s.logActionWithID(requestID(r), userID, accessLogAction(r), outcome)
 	})
+}
+
+func accessLogAction(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/api/actions/") {
+		switch r.URL.Path {
+		case "/api/actions/rest":
+			return "rest"
+		case "/api/actions/move":
+			return "move"
+		default:
+			return "unknown"
+		}
+	}
+	return r.Method + " " + r.URL.Path
 }
 
 type requestIDContextKey struct{}

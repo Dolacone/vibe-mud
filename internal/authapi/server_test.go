@@ -608,7 +608,8 @@ func TestUnknownActionIsRejectedAndLogged(t *testing.T) {
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/actions/attack", nil)
+	const unknownActionIdentifier = "attack-secret"
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/"+unknownActionIdentifier, nil)
 	request.Header.Set("X-Request-ID", "unknown-action-request")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response := httptest.NewRecorder()
@@ -618,6 +619,9 @@ func TestUnknownActionIsRejectedAndLogged(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "user_id=1 action=unknown outcome=error reason="+moveReasonUnsupported+" request_id=unknown-action-request") {
 		t.Fatalf("unknown action log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, unknownActionIdentifier) {
+		t.Fatalf("unknown action identifier leaked into log: %q", logOutput)
 	}
 }
 
