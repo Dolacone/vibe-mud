@@ -135,6 +135,7 @@ const (
 	convertReasonUnknownField     = "unknown_field"
 	convertReasonDuplicate        = "duplicate_field"
 	convertReasonExtraValue       = "extra_json_value"
+	convertReasonInsufficientAP   = "insufficient_ap"
 	convertReasonInvalidLocation  = "invalid_location"
 	convertReasonInsufficientItem = "insufficient_item"
 )
@@ -364,7 +365,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
-		s.logAction(r, session.UserID, convertAction, "insufficient_ap")
+		s.logRejection(r, session.UserID, convertAction, convertReasonInsufficientAP)
 		s.writeJSON(w, http.StatusConflict, convertResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
 		return
 	}
@@ -653,7 +654,7 @@ func decodeConvertRequest(body io.Reader) string {
 		if err := decoder.Decode(&value); err != nil {
 			return convertReasonInvalidJSON
 		}
-		if field != "" && reason == "" {
+		if reason == "" {
 			reason = convertReasonUnknownField
 		}
 	}

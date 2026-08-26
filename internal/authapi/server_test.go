@@ -706,6 +706,7 @@ func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 		reason string
 	}{
 		{name: "malformed", body: `{`, reason: convertReasonInvalidJSON},
+		{name: "empty field", body: `{"":1}`, reason: convertReasonUnknownField},
 		{name: "unknown field", body: `{"resource_yield":99}`, reason: convertReasonUnknownField},
 		{name: "duplicate field", body: `{"resource_yield":1,"resource_yield":1}`, reason: convertReasonDuplicate},
 		{name: "trailing value", body: `{}{}`, reason: convertReasonExtraValue},
@@ -824,8 +825,11 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"error":"insufficient action points"`) {
 		t.Fatalf("low AP convert response = %d: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(logOutput, "action=convert outcome=insufficient_ap request_id=convert-low-ap-request") {
+	if !strings.Contains(logOutput, "action=convert outcome=error reason="+convertReasonInsufficientAP+" request_id=convert-low-ap-request") {
 		t.Fatalf("low AP convert log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, "action=convert outcome=insufficient_ap") {
+		t.Fatalf("low AP convert log used a non-rejection outcome: %q", logOutput)
 	}
 	state, err := store.GetPlayerState(identity.ID)
 	if err != nil {

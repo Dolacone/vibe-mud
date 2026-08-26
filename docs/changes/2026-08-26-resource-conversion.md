@@ -143,5 +143,5 @@ Acceptance criteria:
 
 ## Review Issues
 
-- [ ] [Major] `decodeConvertRequest` 接受 `{"":1}`。空字串欄位仍是 unsupported input，因此違反 REQ-007.14 的 only-`{}` contract。加入拒絕邏輯與測試。
-- [ ] [Major] AP 不足時，`convert` 寫出 `outcome=insufficient_ap`，且未包含 `reason`。REQ-007.15 要求所有拒絕事件使用 `outcome=error`，並包含安全拒絕原因。改用 rejection log 並更新測試。
+- [x] [Major] `decodeConvertRequest` 接受 `{"":1}`。空字串欄位仍是 unsupported input，因此違反 REQ-007.14 的 only-`{}` contract。加入拒絕邏輯與測試。
+- [x] [Major] AP 不足時，`convert` 寫出 `outcome=insufficient_ap`，且未包含 `reason`。REQ-007.15 要求所有拒絕事件使用 `outcome=error`，並包含安全拒絕原因。改用 rejection log 並更新測試。
