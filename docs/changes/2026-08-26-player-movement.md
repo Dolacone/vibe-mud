@@ -5,6 +5,9 @@ created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
 source_paths:
+  - README.md
+  - docs/schemas.md
+  - docs/terminology.md
   - internal/authapi/server.go
   - internal/authapi/store.go
   - internal/authapi/server_test.go

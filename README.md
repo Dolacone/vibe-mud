@@ -15,7 +15,7 @@ source_paths:
 
 This repository contains a multiplayer MUD application. One Fly.io process provides the prebuilt React frontend, Google-only SSO, SQLite-backed application sessions, and the JSON game API.
 
-The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). Game terms are defined in [terminology.md](docs/terminology.md). The complete SQLite structure and lifecycle are documented in [schemas.md](docs/schemas.md). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
+The agreed behavior is indexed in [BEHAVIOR](requirements/BEHAVIOR.md). Game terms are defined in [terminology.md](docs/terminology.md). The complete SQLite structure and lifecycle are documented in [schemas.md](docs/schemas.md). Change records are stored in [docs/changes](docs/changes). The process entrypoint is [cmd/server/main.go](cmd/server/main.go). The local compiled executable is [server](server).
 
 The application runs as one Go process in Docker. The Docker build compiles the React frontend and copies its static output into the runtime image. Runtime configuration uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`, `FRONTEND_URL`, `DATABASE_PATH`, and `PORT`. Session and OAuth flow cookies always use `Secure`.
 
