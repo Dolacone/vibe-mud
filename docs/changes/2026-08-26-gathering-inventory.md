@@ -1,6 +1,6 @@
 ---
 title: "Gathering and inventory"
-status: Reviewed
+status: Refactored
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
