@@ -16,6 +16,8 @@ const campState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
+  inventory: [],
+  gathering_option: null,
 };
 
 describe("App", () => {
@@ -47,6 +49,8 @@ describe("App", () => {
       location: { id: "forest_edge", display_name: "Forest edge" },
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
+      inventory: [],
+      gathering_option: null,
     });
     render(<App />);
 
@@ -95,6 +99,8 @@ describe("App", () => {
       location: { id: "forest_edge", display_name: "Forest edge" },
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
+      inventory: [],
+      gathering_option: null,
     });
     await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();

@@ -9,10 +9,28 @@ export type Route = {
   ap_cost: number;
 };
 
+export type Item = {
+  id: string;
+  display_name: string;
+};
+
+export type InventoryItem = {
+  item: Item;
+  quantity: number;
+};
+
+export type GatheringOption = {
+  item: Item;
+  quantity: number;
+  ap_cost: number;
+};
+
 export type PlayerState = {
   location: Location;
   routes: Route[];
   ap: number;
+  inventory: InventoryItem[];
+  gathering_option: GatheringOption | null;
 };
 
 export type CurrentUser = PlayerState & {
@@ -33,6 +51,13 @@ export type RestResult =
   | { status: "error"; error: Error };
 
 export type MoveResult =
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "insufficient"; error: string } & PlayerState)
+  | ({ status: "invalid"; error: string; state?: PlayerState })
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type GatherResult =
   | ({ status: "success" } & PlayerState)
   | ({ status: "insufficient"; error: string } & PlayerState)
   | ({ status: "invalid"; error: string; state?: PlayerState })
@@ -67,6 +92,34 @@ function isRoute(value: unknown): value is Route {
   );
 }
 
+function isItem(value: unknown): value is Item {
+  if (typeof value !== "object" || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return isString(item.id) && isString(item.display_name);
+}
+
+function isQuantity(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isInventoryItem(value: unknown): value is InventoryItem {
+  if (typeof value !== "object" || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return isItem(item.item) && isQuantity(item.quantity);
+}
+
+function isGatheringOption(value: unknown): value is GatheringOption {
+  if (typeof value !== "object" || value === null) return false;
+  const option = value as Record<string, unknown>;
+  return (
+    isItem(option.item) &&
+    isQuantity(option.quantity) &&
+    typeof option.ap_cost === "number" &&
+    Number.isInteger(option.ap_cost) &&
+    option.ap_cost > 0
+  );
+}
+
 function isPlayerState(value: unknown): value is PlayerState {
   if (typeof value !== "object" || value === null) return false;
   const state = value as Record<string, unknown>;
@@ -77,7 +130,10 @@ function isPlayerState(value: unknown): value is PlayerState {
     Array.isArray(routes) &&
     routes.every(isRoute) &&
     routes.every((route) => route.origin_id === location.id) &&
-    isAP(state.ap)
+    isAP(state.ap) &&
+    Array.isArray(state.inventory) &&
+    state.inventory.every(isInventoryItem) &&
+    (state.gathering_option === null || isGatheringOption(state.gathering_option))
   );
 }
 
@@ -145,6 +201,8 @@ export async function getCurrentUser(
         ap: body.ap,
         location: body.location,
         routes: body.routes,
+        inventory: body.inventory,
+        gathering_option: body.gathering_option,
       },
     };
   } catch (error) {
@@ -215,10 +273,7 @@ export async function move(target: string, fetcher: typeof fetch = fetch): Promi
       }
       return {
         status: "insufficient",
-        error: body.error,
-        location: body.location,
-        routes: body.routes,
-        ap: body.ap,
+        ...body,
       };
     }
 
@@ -245,16 +300,65 @@ export async function move(target: string, fetcher: typeof fetch = fetch): Promi
     if (!isMoveStateResponse(body)) {
       return { status: "error", error: new Error("move response is invalid") };
     }
-    return {
-      status: "success",
-      location: body.location,
-      routes: body.routes,
-      ap: body.ap,
-    };
+    return { status: "success", ...body };
   } catch (error) {
     return {
       status: "error",
       error: error instanceof Error ? error : new Error("move request failed"),
+    };
+  }
+}
+
+export async function gather(fetcher: typeof fetch = fetch): Promise<GatherResult> {
+  try {
+    const response = await fetcher("/api/actions/gather", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isMoveConflict(body)) {
+        return { status: "error", error: new Error("gather response is invalid") };
+      }
+      return {
+        status: "insufficient",
+        ...body,
+      };
+    }
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (!isMoveError(body)) {
+        return { status: "error", error: new Error("gather response is invalid") };
+      }
+      if (isPlayerState(body)) {
+        const { error, ...state } = body;
+        return { status: "invalid", error, state };
+      }
+      return { status: "invalid", error: body.error };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`gather request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body)) {
+      return { status: "error", error: new Error("gather response is invalid") };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error("gather request failed"),
     };
   }
 }

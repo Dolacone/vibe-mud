@@ -1,16 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-import { getCurrentUser, move, rest, type PlayerState } from "./auth";
+import { gather, getCurrentUser, move, rest, type PlayerState } from "./auth";
 
 const campState: PlayerState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
+  inventory: [],
+  gathering_option: null,
 };
 
 const forestState: PlayerState = {
   location: { id: "forest_edge", display_name: "Forest edge" },
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
+  inventory: [],
+  gathering_option: {
+    item: { id: "wood", display_name: "Wood" },
+    quantity: 1,
+    ap_cost: 10,
+  },
+};
+
+const gatheredForestState: PlayerState = {
+  ...forestState,
+  ap: 2970,
+  inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 1 }],
 };
 
 describe("getCurrentUser", () => {
@@ -217,5 +231,72 @@ describe("rest", () => {
   it("requires the success contract to use HTTP 200", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ap: 2999 }), { status: 201 }));
     await expect(rest(fetcher)).resolves.toMatchObject({ status: "error" });
+  });
+});
+
+describe("gather", () => {
+  it("sends the only supported empty payload and returns authoritative inventory state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(gatheredForestState), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(gather(fetcher)).resolves.toEqual({ status: "success", ...gatheredForestState });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/gather", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+  });
+
+  it("returns insufficient AP with the unchanged authoritative state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "insufficient action points", ...forestState, ap: 0 }), { status: 409 }),
+    );
+
+    await expect(gather(fetcher)).resolves.toEqual({
+      status: "insufficient",
+      error: "insufficient action points",
+      ...forestState,
+      ap: 0,
+    });
+  });
+
+  it.each([
+    ["invalid location", "gathering not found", campState],
+    ["invalid input", "invalid action input", forestState],
+  ])("returns %s with the backend state", async (_label, error, state) => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error, ...state }), { status: 400 }));
+
+    await expect(gather(fetcher)).resolves.toEqual({ status: "invalid", error, state });
+  });
+
+  it("distinguishes an expired session from malformed and unavailable responses", async () => {
+    const unauthenticated = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    await expect(gather(unauthenticated)).resolves.toEqual({ status: "unauthenticated" });
+
+    const malformed = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ap: gatheredForestState.ap }), { status: 200 }));
+    await expect(gather(malformed)).resolves.toMatchObject({ status: "error" });
+
+    const unavailable = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(gather(unavailable)).resolves.toMatchObject({
+      status: "error",
+      error: new Error("gather request failed with status 503"),
+    });
+  });
+
+  it("rejects malformed state contracts for inventory and gathering options", async () => {
+    const malformedInventory = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...forestState, inventory: [{ item: forestState.gathering_option?.item, quantity: 0 }] }), { status: 200 }),
+    );
+    await expect(gather(malformedInventory)).resolves.toMatchObject({ status: "error" });
+
+    const malformedOption = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...forestState, gathering_option: { ...forestState.gathering_option, ap_cost: 0 } }), { status: 200 }),
+    );
+    await expect(gather(malformedOption)).resolves.toMatchObject({ status: "error" });
   });
 });
