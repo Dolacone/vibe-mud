@@ -1,6 +1,6 @@
 ---
 title: "Fly-hosted frontend"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
@@ -91,6 +91,15 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
   - Build intent: use `.dockerignore` to exclude local `server`, `web/node_modules`, `web/dist`, and Wrangler output from the context. Prove a clean Docker build installs locked frontend dependencies, emits `web/dist`, compiles the Go server, and copies only the server plus built frontend into the runtime image. The container test must start the production image, request the entry document and one versioned asset, inspect the runtime filesystem, and prove Node.js, source files, local build output, and Cloudflare runtime dependencies are absent.
 
 ## Review Issues
+
+無。
+
+## Review Verification
+
+- `go test ./...` 因 macOS linker 的 `dyld: missing LC_UUID` 環境問題失敗。
+- `go test -ldflags=-linkmode=external ./...` 通過。
+- `npm test`、`npm run typecheck` 與 `npm run build` 通過。
+- `scripts/test-container.sh` 通過。Production image 可提供入口文件與版本化資源，且 runtime 未包含 Node.js、前端原始碼或 Cloudflare runtime 依賴。
 
 ## Plan Review Issues
 
