@@ -1,6 +1,6 @@
 ---
 title: "Gathering and inventory"
-status: Ready-to-implement
+status: Done
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
@@ -11,6 +11,7 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
   - web/src/App.test.tsx
 req_ref: REQ-006
 base_branch: main
@@ -118,9 +119,9 @@ Acceptance criteria:
 
 ### Task 4: Add gathering and Inventory UI
 
-- [ ] 在 `web/src/App.tsx` 顯示 Inventory item 與 quantity，並依後端 gathering option 顯示 gather control。
-- [ ] request 期間停用所有 action control。成功與失敗後都套用後端權威狀態。
-- [ ] 在 `web/src/App.test.tsx` 驗證空 Inventory、可用 action、成功、失敗與重複提交防護。
+- [x] 在 `web/src/App.tsx` 顯示 Inventory item 與 quantity，並依後端 gathering option 顯示 gather control。
+- [x] request 期間停用所有 action control。成功與失敗後都套用後端權威狀態。
+- [x] 在 `web/src/App.test.tsx` 驗證空 Inventory、可用 action、成功、失敗與重複提交防護。
 
 Source files: `web/src/App.tsx`
 

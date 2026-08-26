@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { getCurrentUser, move, rest, type AuthResult, type CurrentUser, type MoveResult, type PlayerState, type RestResult } from "./auth";
+import { gather, getCurrentUser, move, rest, type AuthResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | { status: "idle" } | { status: "pending" };
+type ActionState = RestResult | MoveResult | GatherResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "gather" | null;
 
 function Identity({ user }: { user: CurrentUser }) {
   return (
@@ -26,6 +27,7 @@ function Identity({ user }: { user: CurrentUser }) {
 function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const [currentUser, setCurrentUser] = useState(user);
   const [action, setAction] = useState<ActionState>({ status: "idle" });
+  const [actionKind, setActionKind] = useState<ActionKind>(null);
   const actionPending = useRef(false);
 
   const applyPlayerState = (state: PlayerState) => {
@@ -35,6 +37,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const handleRest = async () => {
     if (actionPending.current) return;
     actionPending.current = true;
+    setActionKind("rest");
     setAction({ status: "pending" });
     try {
       const next = await rest();
@@ -55,6 +58,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const handleMove = async (target: string) => {
     if (actionPending.current) return;
     actionPending.current = true;
+    setActionKind("move");
     setAction({ status: "pending" });
     try {
       const next = await move(target);
@@ -74,6 +78,29 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
+  const handleGather = async () => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setActionKind("gather");
+    setAction({ status: "pending" });
+    try {
+      const next = await gather();
+      if (next.status === "success" || next.status === "insufficient") {
+        applyPlayerState(next);
+      } else if (next.status === "invalid" && next.state) {
+        applyPlayerState(next.state);
+      }
+      setAction(next);
+    } catch (error) {
+      setAction({
+        status: "error",
+        error: error instanceof Error ? error : new Error("gather request failed"),
+      });
+    } finally {
+      actionPending.current = false;
+    }
+  };
+
   const actionPendingNow = action.status === "pending";
 
   return (
@@ -86,8 +113,8 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <button type="button" onClick={() => void handleRest()} disabled={actionPendingNow}>
           {actionPendingNow ? "Resting..." : "Rest"}
         </button>
-        {action.status === "success" && !("location" in action) && <p role="status">Rest succeeded. AP: {currentUser.ap}</p>}
-        {action.status === "insufficient" && !("location" in action) && <p role="alert">{action.error}</p>}
+        {action.status === "success" && actionKind === "rest" && <p role="status">Rest succeeded. AP: {currentUser.ap}</p>}
+        {action.status === "insufficient" && actionKind === "rest" && <p role="alert">{action.error}</p>}
         {action.status === "unauthenticated" && <p role="alert">Your session has expired.</p>}
         {action.status === "error" && <p role="alert">{action.error.message}</p>}
       </section>
@@ -113,13 +140,43 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
             ))}
           </ul>
         )}
-        {action.status === "success" && "location" in action && (
+        {action.status === "success" && actionKind === "move" && (
           <p role="status">Move succeeded. Current location: {currentUser.location.display_name}</p>
         )}
-        {action.status === "insufficient" && "location" in action && (
+        {action.status === "insufficient" && actionKind === "move" && (
           <p role="alert">Move failed: {action.error}</p>
         )}
-        {action.status === "invalid" && <p role="alert">Move failed: {action.error}</p>}
+        {action.status === "invalid" && actionKind === "move" && <p role="alert">Move failed: {action.error}</p>}
+      </section>
+      <section aria-labelledby="gather-heading">
+        <h2 id="gather-heading">Gather</h2>
+        {currentUser.gathering_option === null ? (
+          <p>No gathering action available.</p>
+        ) : (
+          <>
+            <p>
+              Yield: {currentUser.gathering_option.quantity} {currentUser.gathering_option.item.display_name}; Cost: {currentUser.gathering_option.ap_cost} AP
+            </p>
+            <button type="button" onClick={() => void handleGather()} disabled={actionPendingNow}>
+              {actionPendingNow ? "Gathering..." : "Gather"}
+            </button>
+          </>
+        )}
+        {action.status === "success" && actionKind === "gather" && <p role="status">Gather succeeded.</p>}
+        {action.status === "insufficient" && actionKind === "gather" && <p role="alert">Gather failed: {action.error}</p>}
+        {action.status === "invalid" && actionKind === "gather" && <p role="alert">Gather failed: {action.error}</p>}
+      </section>
+      <section aria-labelledby="inventory-heading">
+        <h2 id="inventory-heading">Inventory</h2>
+        {currentUser.inventory.length === 0 ? (
+          <p>Inventory is empty.</p>
+        ) : (
+          <ul>
+            {currentUser.inventory.map((entry) => (
+              <li key={entry.item.id}>{entry.item.display_name}: {entry.quantity}</li>
+            ))}
+          </ul>
+        )}
       </section>
     </>
   );
