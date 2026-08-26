@@ -9,6 +9,7 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/server_test.go
   - internal/authapi/store_test.go
+  - web/src/App.tsx
   - web/src/auth.ts
   - web/src/auth.test.ts
   - web/src/App.test.tsx
@@ -112,9 +113,9 @@ Acceptance criteria:
 
 ### Task 4: Add movement UI
 
-- [ ] 在 `web/src/App.tsx` 顯示目前位置、可用 Route 與 AP 成本，並提供每個允許 target 的 move control。
-- [ ] 移動期間停用 action control。成功後套用後端狀態，失敗後保留後端權威狀態。
-- [ ] 在 `web/src/App.test.tsx` 驗證首次載入、成功移動、失敗與重複提交防護。
+- [x] 在 `web/src/App.tsx` 顯示目前位置、可用 Route 與 AP 成本，並提供每個允許 target 的 move control。
+- [x] 移動期間停用 action control。成功後套用後端狀態，失敗後保留後端權威狀態。
+- [x] 在 `web/src/App.test.tsx` 驗證首次載入、成功移動、失敗與重複提交防護。
 
 Source files: `web/src/App.tsx`
 

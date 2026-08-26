@@ -5,11 +5,12 @@ import * as auth from "./auth";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
 const rest = vi.mocked(auth.rest);
+const move = vi.mocked(auth.move);
 
 const campState = {
   location: { id: "camp", display_name: "Camp" },
@@ -21,6 +22,7 @@ describe("App", () => {
   beforeEach(() => {
     getCurrentUser.mockReset();
     rest.mockReset();
+    move.mockReset();
   });
 
   it("loads and displays only the backend-confirmed identity", async () => {
@@ -32,7 +34,70 @@ describe("App", () => {
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(screen.getByText("AP: 3000")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
+    expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
+    expect(screen.getByText("To forest_edge (20 AP)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
+  });
+
+  it("applies the authoritative state after a successful move", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    move.mockResolvedValue({
+      status: "success",
+      location: { id: "forest_edge", display_name: "Forest edge" },
+      routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
+      ap: 2980,
+    });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Move to forest_edge" });
+    button.click();
+    await waitFor(() => expect(screen.getByText("Move succeeded. Current location: Forest edge")).toBeInTheDocument());
+    expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument();
+    expect(screen.getByText("To camp (20 AP)")).toBeInTheDocument();
+    expect(screen.getByText("AP: 2980")).toBeInTheDocument();
+    expect(move).toHaveBeenCalledWith("forest_edge");
+  });
+
+  it("keeps the authoritative state after an insufficient move", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 10 } });
+    move.mockResolvedValue({
+      status: "insufficient",
+      error: "insufficient action points",
+      ...campState,
+      ap: 10,
+    });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Move to forest_edge" });
+    button.click();
+    await waitFor(() => expect(screen.getByText("Move failed: insufficient action points")).toBeInTheDocument());
+    expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
+    expect(screen.getByText("AP: 10")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
+  });
+
+  it("prevents duplicate move requests while one is pending", async () => {
+    let resolveMove: ((value: auth.MoveResult) => void) | undefined;
+    move.mockReturnValue(new Promise((resolve) => { resolveMove = resolve; }));
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Move to forest_edge" });
+    button.click();
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(move).toHaveBeenCalledTimes(1);
+    button.click();
+    expect(move).toHaveBeenCalledTimes(1);
+
+    resolveMove?.({
+      status: "success",
+      location: { id: "forest_edge", display_name: "Forest edge" },
+      routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
+      ap: 2980,
+    });
+    await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();
   });
 
   it("updates the displayed AP after a successful rest", async () => {
