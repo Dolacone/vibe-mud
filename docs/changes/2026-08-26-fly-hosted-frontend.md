@@ -1,6 +1,6 @@
 ---
 title: "Fly-hosted frontend"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
@@ -13,6 +13,14 @@ source_paths:
   - cmd/server/main_test.go
   - cmd/server/static.go
   - cmd/server/static_test.go
+  - Dockerfile
+  - .dockerignore
+  - scripts/test-container.sh
+  - web/functions/[[path]].ts
+  - web/functions/proxy.test.ts
+  - web/package.json
+  - web/package-lock.json
+  - web/wrangler.jsonc
 req_ref: "REQ-001, REQ-002"
 base_branch: main
 scope: "Tracks moving the static frontend from Cloudflare Pages to the existing Fly.io application."
@@ -73,7 +81,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
     - REQ-002 condition 9: 前端入口文件必須允許瀏覽器重新驗證版本，避免發布後持續使用舊版資源。
   - Runtime configuration: require `FRONTEND_URL` to contain only the Fly application origin. Require `GOOGLE_REDIRECT_URL` to use that exact origin and the exact `/auth/google/callback` path without query or fragment. Reject startup when these values differ.
   - Test intent: prove the server reads only prebuilt files, serves the entry document at `/` and client routes, gives only assets matching `name-[A-Za-z0-9_-]{8,}.ext` the `public, max-age=31536000, immutable` policy, prevents immutable caching for unversioned files, serves the entry document with `no-cache`, revalidates unchanged files, and never sends frontend content for reserved API or OAuth paths. Prove the frontend exposes relative `/auth/google/login` and calls relative `/api/*`. Prove startup rejects a different frontend origin, callback origin, callback path, callback query, or callback fragment.
-- [ ] Task 3 - Build the frontend into the Fly.io image and remove the Cloudflare runtime path. [parallel: no]
+- [x] Task 3 - Build the frontend into the Fly.io image and remove the Cloudflare runtime path. [parallel: no]
   - Source scope: `web/functions/[[path]].ts`, `scripts/test-container.sh`
   - Tests: `scripts/test-container.sh`; `web/functions/proxy.test.ts` is removed with the retired proxy. Run the Go suite, frontend suite, frontend typecheck, frontend production build, and Docker production build.
   - Supporting files: `Dockerfile`, `.dockerignore`, `web/package.json`, `web/package-lock.json`, `web/wrangler.jsonc`, `AGENTS.md`, `README.md`
