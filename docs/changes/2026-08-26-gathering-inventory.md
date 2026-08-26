@@ -13,6 +13,9 @@ source_paths:
   - web/src/auth.test.ts
   - web/src/App.tsx
   - web/src/App.test.tsx
+  - docs/architecture.md
+  - docs/schemas.md
+  - docs/terminology.md
 req_ref: REQ-006
 base_branch: main
 scope: "Tracks the first location-specific item collection loop."
@@ -134,7 +137,7 @@ Acceptance criteria:
 
 ## Review Issues
 
-- [ ] [Minor] `source_paths` 未列出本次修改的 `docs/architecture.md`、`docs/schemas.md` 與 `docs/terminology.md`，因此未與 `main...HEAD` 的實際文件 diff 一致。
+- [x] [Minor] `source_paths` 未列出本次修改的 `docs/architecture.md`、`docs/schemas.md` 與 `docs/terminology.md`，因此未與 `main...HEAD` 的實際文件 diff 一致。
 
 ## Plan Review Issues
 
