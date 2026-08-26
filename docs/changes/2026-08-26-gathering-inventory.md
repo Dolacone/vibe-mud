@@ -1,6 +1,6 @@
 ---
 title: "Gathering and inventory"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
@@ -133,6 +133,8 @@ Acceptance criteria:
 - REQ-006.10: `gather` 成功後，前端必須顯示更新後的 AP 與 Inventory quantity。
 
 ## Review Issues
+
+- [ ] [Minor] `source_paths` 未列出本次修改的 `docs/architecture.md`、`docs/schemas.md` 與 `docs/terminology.md`，因此未與 `main...HEAD` 的實際文件 diff 一致。
 
 ## Plan Review Issues
 
