@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { gather, getCurrentUser, move, rest, type AuthResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
+import { convert, gather, getCurrentUser, move, rest, type AuthResult, type ConvertResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | GatherResult | { status: "idle" } | { status: "pending" };
-type ActionKind = "rest" | "move" | "gather" | null;
+type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "gather" | "convert" | null;
 
 function Identity({ user }: { user: CurrentUser }) {
   return (
@@ -101,6 +101,29 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
+  const handleConvert = async () => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setActionKind("convert");
+    setAction({ status: "pending" });
+    try {
+      const next = await convert();
+      if (next.status === "success" || next.status === "insufficient") {
+        applyPlayerState(next);
+      } else if (next.status === "invalid" && next.state) {
+        applyPlayerState(next.state);
+      }
+      setAction(next);
+    } catch (error) {
+      setAction({
+        status: "error",
+        error: error instanceof Error ? error : new Error("convert request failed"),
+      });
+    } finally {
+      actionPending.current = false;
+    }
+  };
+
   const actionPendingNow = action.status === "pending";
 
   return (
@@ -110,6 +133,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
       <section aria-labelledby="actions-heading">
         <h2 id="actions-heading">Actions</h2>
         <p>AP: {currentUser.ap}</p>
+        <p>Resource: {currentUser.resource}</p>
         <button type="button" onClick={() => void handleRest()} disabled={actionPendingNow}>
           {actionPendingNow ? "Resting..." : "Rest"}
         </button>
@@ -165,6 +189,24 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         {action.status === "success" && actionKind === "gather" && <p role="status">Gather succeeded.</p>}
         {action.status === "insufficient" && actionKind === "gather" && <p role="alert">Gather failed: {action.error}</p>}
         {action.status === "invalid" && actionKind === "gather" && <p role="alert">Gather failed: {action.error}</p>}
+      </section>
+      <section aria-labelledby="convert-heading">
+        <h2 id="convert-heading">Convert</h2>
+        {currentUser.conversion_option === null ? (
+          <p>No conversion action available.</p>
+        ) : (
+          <>
+            <p>
+              Input: {currentUser.conversion_option.input_quantity} {currentUser.conversion_option.item.display_name}; Yield: {currentUser.conversion_option.resource_yield} Resource; Cost: {currentUser.conversion_option.ap_cost} AP
+            </p>
+            <button type="button" onClick={() => void handleConvert()} disabled={actionPendingNow}>
+              {actionPendingNow ? "Converting..." : "Convert"}
+            </button>
+          </>
+        )}
+        {action.status === "success" && actionKind === "convert" && <p role="status">Convert succeeded.</p>}
+        {action.status === "insufficient" && actionKind === "convert" && <p role="alert">Convert failed: {action.error}</p>}
+        {action.status === "invalid" && actionKind === "convert" && <p role="alert">Convert failed: {action.error}</p>}
       </section>
       <section aria-labelledby="inventory-heading">
         <h2 id="inventory-heading">Inventory</h2>

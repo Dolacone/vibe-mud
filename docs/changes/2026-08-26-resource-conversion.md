@@ -14,6 +14,8 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
 req_ref: REQ-007
 base_branch: main
 scope: "Tracks the first Inventory-to-Resource conversion loop."
@@ -125,9 +127,9 @@ Acceptance criteria:
 
 ### Task 4: Add conversion and Resource UI
 
-- [ ] 在 `web/src/App.tsx` 顯示 Resource balance，並依後端 conversion option 顯示 convert control。
-- [ ] request 期間停用所有 action control。成功與失敗後都套用後端權威狀態。
-- [ ] 在 `web/src/App.test.tsx` 驗證預設 balance、可用 action、成功、失敗、最後一個 Wood 與重複提交防護。
+- [x] 在 `web/src/App.tsx` 顯示 Resource balance，並依後端 conversion option 顯示 convert control。
+- [x] request 期間停用所有 action control。成功與失敗後都套用後端權威狀態。
+- [x] 在 `web/src/App.test.tsx` 驗證預設 balance、可用 action、成功、失敗、最後一個 Wood 與重複提交防護。
 
 Source files: `web/src/App.tsx`
 

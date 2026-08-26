@@ -5,13 +5,14 @@ import * as auth from "./auth";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
 const rest = vi.mocked(auth.rest);
 const move = vi.mocked(auth.move);
 const gather = vi.mocked(auth.gather);
+const convert = vi.mocked(auth.convert);
 
 const campState = {
   location: { id: "camp", display_name: "Camp" },
@@ -19,6 +20,13 @@ const campState = {
   ap: 3000,
   inventory: [],
   gathering_option: null,
+  conversion_option: {
+    item: { id: "wood", display_name: "Wood" },
+    input_quantity: 1,
+    resource_yield: 1,
+    ap_cost: 1,
+  },
+  resource: 0,
 };
 
 const forestState = {
@@ -27,6 +35,8 @@ const forestState = {
   ap: 2980,
   inventory: [],
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
+  conversion_option: null,
+  resource: 0,
 };
 
 describe("App", () => {
@@ -35,6 +45,7 @@ describe("App", () => {
     rest.mockReset();
     move.mockReset();
     gather.mockReset();
+    convert.mockReset();
   });
 
   it("loads and displays only the backend-confirmed identity", async () => {
@@ -45,12 +56,15 @@ describe("App", () => {
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(screen.getByText("AP: 3000")).toBeInTheDocument();
+    expect(screen.getByText("Resource: 0")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
     expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
     expect(screen.getByText("To forest_edge (20 AP)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();
+    expect(screen.getByText("Input: 1 Wood; Yield: 1 Resource; Cost: 1 AP")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
   });
 
@@ -110,6 +124,61 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Gather" })).toBeEnabled();
   });
 
+  it("applies the authoritative state after converting the last Wood", async () => {
+    const stateWithWood = {
+      ...campState,
+      inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 1 }],
+    };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...stateWithWood } });
+    convert.mockResolvedValue({ status: "success", ...campState, ap: 2999, resource: 1 });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Convert" });
+    button.click();
+    await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
+    expect(screen.getByText("AP: 2999")).toBeInTheDocument();
+    expect(screen.getByText("Resource: 1")).toBeInTheDocument();
+    expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
+    expect(screen.queryByText("Wood: 1")).not.toBeInTheDocument();
+    expect(convert).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the authoritative state after an unsuccessful conversion", async () => {
+    const stateWithWood = {
+      ...campState,
+      ap: 0,
+      inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 2 }],
+      resource: 3,
+    };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...stateWithWood } });
+    convert.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...stateWithWood });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Convert" })).click();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByText("AP: 0")).toBeInTheDocument();
+    expect(screen.getByText("Resource: 3")).toBeInTheDocument();
+    expect(screen.getByText("Wood: 2")).toBeInTheDocument();
+  });
+
+  it("disables every action and prevents duplicate conversions while one is pending", async () => {
+    let resolveConvert: ((value: auth.ConvertResult) => void) | undefined;
+    convert.mockReturnValue(new Promise((resolve) => { resolveConvert = resolve; }));
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Convert" });
+    button.click();
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getAllByRole("button").every((action) => action.hasAttribute("disabled"))).toBe(true);
+    button.click();
+    expect(convert).toHaveBeenCalledTimes(1);
+
+    resolveConvert?.({ status: "success", ...campState, ap: 2999, resource: 1 });
+    await waitFor(() => expect(screen.getByText("Resource: 1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
+  });
+
   it("applies the authoritative state after a successful move", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
     move.mockResolvedValue({
@@ -119,6 +188,8 @@ describe("App", () => {
       ap: 2980,
       inventory: [],
       gathering_option: null,
+      conversion_option: null,
+      resource: 0,
     });
     render(<App />);
 
@@ -169,6 +240,8 @@ describe("App", () => {
       ap: 2980,
       inventory: [],
       gathering_option: null,
+      conversion_option: null,
+      resource: 0,
     });
     await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();
