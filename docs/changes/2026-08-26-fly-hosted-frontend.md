@@ -1,12 +1,16 @@
 ---
 title: "Fly-hosted frontend"
-status: Reviewed
+status: Refactored
 created: 2026-08-26
 doc_type: change
 last_reviewed: 2026-08-26
 source_paths:
   - AGENTS.md
   - README.md
+  - docs/changes/2026-08-25-ap-rest.md
+  - docs/changes/2026-08-25-frontend-login.md
+  - docs/schemas.md
+  - docs/terminology.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
   - cmd/server/main.go
