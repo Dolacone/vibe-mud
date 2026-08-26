@@ -10,6 +10,7 @@
 - Added strict Action and target validation with safe rejection logging.
 - Added location-specific gathering that atomically consumes AP and collects Wood.
 - Added persistent Inventory state and frontend display.
+- Added Resource conversion that atomically consumes AP and Wood.
 
 ## 2026-08-25
 
