@@ -18,9 +18,38 @@ scope: "Canonical game terms used by the application."
 
 | 英文名稱 | 縮寫 | 中文名稱 | 對應 REQ |
 |---|---|---|---|
+| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md) |
+| [Action: rest](#action-rest) | - | 休息行動 | [REQ-004](../requirements/REQ-004.md) |
+| [Action: move](#action-move) | - | 移動行動 | [REQ-005](../requirements/REQ-005.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
+| [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md) |
+| [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 
 ## 名詞定義
+
+### Action
+
+- 正式英文名稱：Action
+- 中文名稱：行動
+- 定義：玩家要求後端執行的遊戲狀態變更。後端只執行明確允許的 Action。
+- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)
+- 與相似名詞的差異：Action 是行為種類。AP 是執行 Action 可以消耗的資源。
+
+### Action: rest
+
+- 正式英文名稱：Action: rest
+- 中文名稱：休息行動
+- 定義：消耗 1 AP，但不改變玩家位置的 Action。
+- 對應行為：[REQ-004 - Action: rest](../requirements/REQ-004.md)
+- 與相似名詞的差異：`rest` 使用固定成本。`move` 的成本由後端 Route 決定。
+
+### Action: move
+
+- 正式英文名稱：Action: move
+- 中文名稱：移動行動
+- 定義：玩家沿後端允許的 Route 前往 target Location，並消耗該 Route 的 AP 成本。
+- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)
+- 與相似名詞的差異：`move` 是 Action。Route 是允許這個 Action 的有向通行規則。
 
 ### Action Points (AP)
 
@@ -30,3 +59,19 @@ scope: "Canonical game terms used by the application."
 - 定義：玩家角色執行行動時使用的資源，每分鐘恢復一點。
 - 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)
 - 與相似名詞的差異：AP 是目前可使用的行動力。`full_timestamp` 是後端計算 AP 的持久化資料，不是玩家持有的另一種資源。
+
+### Location
+
+- 正式英文名稱：Location
+- 中文名稱：位置
+- 定義：後端允許玩家停留的遊戲地點。
+- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)
+- 與相似名詞的差異：Location 是地點。Route 描述兩個 Location 間的允許移動方向。
+
+### Route
+
+- 正式英文名稱：Route
+- 中文名稱：路徑
+- 定義：由 origin Location 指向 destination Location 的後端通行規則，包含一次移動的 AP 成本。
+- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)
+- 與相似名詞的差異：Route 是有向規則。Location 是玩家目前停留或可以到達的地點。
