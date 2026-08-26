@@ -1,4 +1,10 @@
-<!-- last_reviewed: 2026-08-25 -->
+---
+title: "Game Terminology"
+doc_type: glossary
+last_reviewed: 2026-08-26
+source_paths: []
+scope: "Canonical game terms used by the application."
+---
 
 # Game Terminology
 

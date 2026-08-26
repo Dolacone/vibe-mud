@@ -1,4 +1,15 @@
-<!-- last_reviewed: 2026-08-26 -->
+---
+title: "vibe-mud"
+doc_type: index
+last_reviewed: 2026-08-26
+source_paths:
+  - AGENTS.md
+  - Dockerfile
+  - cmd/server
+  - internal/authapi
+  - scripts/test-container.sh
+  - web
+---
 
 # vibe-mud
 

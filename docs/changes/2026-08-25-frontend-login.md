@@ -23,9 +23,6 @@ source_paths:
   - web/src/main.tsx
   - web/src/styles.css
   - web/index.html
-  - web/functions/[[path]].ts
-  - web/functions/proxy.test.ts
-  - web/wrangler.jsonc
 req_ref: REQ-002
 base_branch: main
 scope: "Tracks the Cloudflare Pages frontend login from design through review."
@@ -83,9 +80,9 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4. Tasks run sequentially. 
   - Test intent: prove the page loads identity through the same-origin client, exposes `/auth/google/login`, renders only current backend identity, removes prior identity when unauthenticated, and distinguishes backend errors from signed-out state.
   - Build intent: prove the production build emits static assets to `web/dist` without embedding the Fly origin or any credential.
 - [x] Task 3 - Add the allow-listed Pages Function proxy. [parallel: no]
-  - Source scope: `web/functions/[[path]].ts`
-  - Tests: `web/functions/proxy.test.ts`
-  - Supporting files: `web/wrangler.jsonc`, `web/package.json`, `web/package-lock.json`, `README.md`
+  - Source scope: the Cloudflare Pages proxy
+  - Tests: the Cloudflare Pages proxy test
+  - Supporting files: the Wrangler configuration, `web/package.json`, `web/package-lock.json`, `README.md`
   - Acceptance criteria:
     - REQ-002 condition 2: Google 登入成功後，使用者必須回到前端。
     - REQ-002 condition 3: 前端必須向後端查詢目前登入的應用程式使用者，不得從前端狀態或 Google 回應自行推定身分。

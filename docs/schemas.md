@@ -1,4 +1,10 @@
-<!-- last_reviewed: 2026-08-25 -->
+---
+title: "SQLite Schemas"
+doc_type: schema
+last_reviewed: 2026-08-26
+source_paths:
+  - internal/authapi/store.go
+---
 
 # SQLite Schemas
 
