@@ -9,6 +9,10 @@ source_paths:
   - README.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - cmd/server/main.go
+  - cmd/server/main_test.go
+  - cmd/server/static.go
+  - cmd/server/static_test.go
 req_ref: "REQ-001, REQ-002"
 base_branch: main
 scope: "Tracks moving the static frontend from Cloudflare Pages to the existing Fly.io application."
@@ -54,7 +58,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3. These tasks run sequentially becau
     - REQ-001 condition 3: `/api/*` 必須提供 JSON API，`/auth/*` 必須提供登入流程，其他遊戲前端路徑必須提供靜態前端內容。
     - REQ-001 condition 5: Google 登入所需的導向回應不受純 JSON 回應限制。
   - Test intent: prove known API and OAuth routes preserve their JSON or redirect contracts, reserved unknown API and OAuth paths preserve JSON 404 responses, frontend paths reach the injected fallback, and the shared request ID plus access log middleware covers both route groups without logging credentials.
-- [ ] Task 2 - Serve the built frontend from the Go process with browser cache controls. [parallel: no]
+- [x] Task 2 - Serve the built frontend from the Go process with browser cache controls. [parallel: no]
   - Source scope: `cmd/server/main.go`, `cmd/server/static.go`
   - Tests: `cmd/server/main_test.go`, `cmd/server/static_test.go`, `web/src/App.test.tsx`, `web/src/auth.test.ts`
   - Acceptance criteria:
