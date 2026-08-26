@@ -391,15 +391,7 @@ WHERE gr.location_id = ?`, state.Location.ID).Scan(
 	} else {
 		state.GatheringOption = &gathering
 	}
-	var conversion ConversionOption
-	err = tx.QueryRow(`
-SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
-FROM conversion_rules cr
-JOIN items i ON i.id = cr.input_item_id
-WHERE cr.location_id = ?`, state.Location.ID).Scan(
-		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.InputQuantity,
-		&conversion.ResourceYield, &conversion.APCost,
-	)
+	conversion, err := conversionOptionForLocation(tx, state.Location.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		state.ConversionOption = nil
 	} else if err != nil {
@@ -465,6 +457,19 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func conversionOptionForLocation(tx *sql.Tx, locationID string) (ConversionOption, error) {
+	var conversion ConversionOption
+	err := tx.QueryRow(`
+SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
+FROM conversion_rules cr
+JOIN items i ON i.id = cr.input_item_id
+WHERE cr.location_id = ?`, locationID).Scan(
+		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.InputQuantity,
+		&conversion.ResourceYield, &conversion.APCost,
+	)
+	return conversion, err
 }
 
 func (s *Store) Gather(userID int64) (PlayerState, error) {
@@ -671,15 +676,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get player location for convert: %w", err)
 	}
-	var option ConversionOption
-	err = tx.QueryRow(`
-SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
-FROM conversion_rules cr
-JOIN items i ON i.id = cr.input_item_id
-WHERE cr.location_id = ?`, locationID).Scan(
-		&option.Item.ID, &option.Item.DisplayName, &option.InputQuantity,
-		&option.ResourceYield, &option.APCost,
-	)
+	option, err := conversionOptionForLocation(tx, locationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrConversionNotFound
