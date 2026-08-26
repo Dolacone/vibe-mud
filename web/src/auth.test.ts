@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { gather, getCurrentUser, move, rest, type PlayerState } from "./auth";
+import { convert, gather, getCurrentUser, move, rest, type PlayerState } from "./auth";
 
 const campState: PlayerState = {
   location: { id: "camp", display_name: "Camp" },
@@ -7,6 +7,13 @@ const campState: PlayerState = {
   ap: 3000,
   inventory: [],
   gathering_option: null,
+  conversion_option: {
+    item: { id: "wood", display_name: "Wood" },
+    input_quantity: 1,
+    resource_yield: 1,
+    ap_cost: 1,
+  },
+  resource: 0,
 };
 
 const forestState: PlayerState = {
@@ -19,6 +26,8 @@ const forestState: PlayerState = {
     quantity: 1,
     ap_cost: 10,
   },
+  conversion_option: null,
+  resource: 0,
 };
 
 const gatheredForestState: PlayerState = {
@@ -298,5 +307,91 @@ describe("gather", () => {
       new Response(JSON.stringify({ ...forestState, gathering_option: { ...forestState.gathering_option, ap_cost: 0 } }), { status: 200 }),
     );
     await expect(gather(malformedOption)).resolves.toMatchObject({ status: "error" });
+  });
+});
+
+describe("convert", () => {
+  const convertedCampState: PlayerState = {
+    ...campState,
+    ap: 2999,
+    inventory: [],
+    resource: 1,
+  };
+
+  it("sends only the supported empty payload and returns authoritative state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(convertedCampState), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(convert(fetcher)).resolves.toEqual({ status: "success", ...convertedCampState });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/convert", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+  });
+
+  it.each([
+    ["insufficient action points", { ...campState, ap: 0 }],
+    ["insufficient item", campState],
+  ])("returns an insufficient result with authoritative state for %s", async (error, state) => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error, ...state }), { status: 409 }),
+    );
+
+    await expect(convert(fetcher)).resolves.toEqual({ status: "insufficient", error, ...state });
+  });
+
+  it("returns invalid location with the unchanged backend state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "conversion not found", ...forestState }), { status: 400 }),
+    );
+
+    await expect(convert(fetcher)).resolves.toEqual({
+      status: "invalid",
+      error: "conversion not found",
+      state: forestState,
+    });
+  });
+
+  it("returns invalid input without inventing missing state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "invalid action input" }), { status: 400 }),
+    );
+
+    await expect(convert(fetcher)).resolves.toEqual({ status: "invalid", error: "invalid action input" });
+  });
+
+  it("distinguishes an expired session from malformed and unavailable responses", async () => {
+    const unauthenticated = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    await expect(convert(unauthenticated)).resolves.toEqual({ status: "unauthenticated" });
+
+    const malformed = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...convertedCampState, resource: -1 }), { status: 200 }),
+    );
+    await expect(convert(malformed)).resolves.toMatchObject({
+      status: "error",
+      error: new Error("convert response is invalid"),
+    });
+
+    const unavailable = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(convert(unavailable)).resolves.toMatchObject({
+      status: "error",
+      error: new Error("convert request failed with status 503"),
+    });
+  });
+
+  it("rejects malformed conflict and invalid-location response contracts", async () => {
+    const malformedConflict = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "insufficient item", resource: 1 }), { status: 409 }),
+    );
+    await expect(convert(malformedConflict)).resolves.toMatchObject({ status: "error" });
+
+    const malformedInvalid = vi.fn().mockResolvedValue(new Response(JSON.stringify({ resource: 1 }), { status: 400 }));
+    await expect(convert(malformedInvalid)).resolves.toMatchObject({ status: "error" });
   });
 });

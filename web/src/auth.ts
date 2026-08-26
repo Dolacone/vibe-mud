@@ -25,12 +25,21 @@ export type GatheringOption = {
   ap_cost: number;
 };
 
+export type ConversionOption = {
+  item: Item;
+  input_quantity: number;
+  resource_yield: number;
+  ap_cost: number;
+};
+
 export type PlayerState = {
   location: Location;
   routes: Route[];
   ap: number;
   inventory: InventoryItem[];
   gathering_option: GatheringOption | null;
+  conversion_option: ConversionOption | null;
+  resource: number;
 };
 
 export type CurrentUser = PlayerState & {
@@ -58,6 +67,13 @@ export type MoveResult =
   | { status: "error"; error: Error };
 
 export type GatherResult =
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "insufficient"; error: string } & PlayerState)
+  | ({ status: "invalid"; error: string; state?: PlayerState })
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type ConvertResult =
   | ({ status: "success" } & PlayerState)
   | ({ status: "insufficient"; error: string } & PlayerState)
   | ({ status: "invalid"; error: string; state?: PlayerState })
@@ -102,6 +118,10 @@ function isQuantity(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isResource(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function isInventoryItem(value: unknown): value is InventoryItem {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
@@ -114,6 +134,19 @@ function isGatheringOption(value: unknown): value is GatheringOption {
   return (
     isItem(option.item) &&
     isQuantity(option.quantity) &&
+    typeof option.ap_cost === "number" &&
+    Number.isInteger(option.ap_cost) &&
+    option.ap_cost > 0
+  );
+}
+
+function isConversionOption(value: unknown): value is ConversionOption {
+  if (typeof value !== "object" || value === null) return false;
+  const option = value as Record<string, unknown>;
+  return (
+    isItem(option.item) &&
+    isQuantity(option.input_quantity) &&
+    isQuantity(option.resource_yield) &&
     typeof option.ap_cost === "number" &&
     Number.isInteger(option.ap_cost) &&
     option.ap_cost > 0
@@ -133,7 +166,9 @@ function isPlayerState(value: unknown): value is PlayerState {
     isAP(state.ap) &&
     Array.isArray(state.inventory) &&
     state.inventory.every(isInventoryItem) &&
-    (state.gathering_option === null || isGatheringOption(state.gathering_option))
+    (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
+    (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
+    isResource(state.resource)
   );
 }
 
@@ -170,6 +205,14 @@ function isMoveConflict(value: unknown): value is { error: string } & PlayerStat
   return isMoveError(value) && isMoveStateResponse(value);
 }
 
+function isConvertError(value: unknown): value is { error: string } {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).error === "string";
+}
+
+function isConvertConflict(value: unknown): value is { error: string } & PlayerState {
+  return isConvertError(value) && isPlayerState(value);
+}
+
 export async function getCurrentUser(
   fetcher: typeof fetch = fetch,
 ): Promise<AuthResult> {
@@ -203,6 +246,8 @@ export async function getCurrentUser(
         routes: body.routes,
         inventory: body.inventory,
         gathering_option: body.gathering_option,
+        conversion_option: body.conversion_option,
+        resource: body.resource,
       },
     };
   } catch (error) {
@@ -359,6 +404,60 @@ export async function gather(fetcher: typeof fetch = fetch): Promise<GatherResul
     return {
       status: "error",
       error: error instanceof Error ? error : new Error("gather request failed"),
+    };
+  }
+}
+
+export async function convert(fetcher: typeof fetch = fetch): Promise<ConvertResult> {
+  try {
+    const response = await fetcher("/api/actions/convert", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isConvertConflict(body)) {
+        return { status: "error", error: new Error("convert response is invalid") };
+      }
+      return {
+        status: "insufficient",
+        ...body,
+      };
+    }
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (!isConvertError(body)) {
+        return { status: "error", error: new Error("convert response is invalid") };
+      }
+      if (isPlayerState(body)) {
+        const { error, ...state } = body;
+        return { status: "invalid", error, state };
+      }
+      return { status: "invalid", error: body.error };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`convert request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body)) {
+      return { status: "error", error: new Error("convert response is invalid") };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error("convert request failed"),
     };
   }
 }

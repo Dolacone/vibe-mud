@@ -12,6 +12,8 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
 req_ref: REQ-007
 base_branch: main
 scope: "Tracks the first Inventory-to-Resource conversion loop."
@@ -106,9 +108,9 @@ Acceptance criteria:
 
 ### Task 3: Add typed frontend conversion client
 
-- [ ] 在 `web/src/auth.ts` 解析 Resource 與 backend-owned conversion option，並以 `{}` 送出不含 gameplay values 的 convert request。
-- [ ] 將成功、位置錯誤、Wood 不足、AP 不足、輸入錯誤與未登入 response 轉為明確 client result。
-- [ ] 在 `web/src/auth.test.ts` 驗證 player state、request 與所有 response 分支。
+- [x] 在 `web/src/auth.ts` 解析 Resource 與 backend-owned conversion option，並以 `{}` 送出不含 gameplay values 的 convert request。
+- [x] 將成功、位置錯誤、Wood 不足、AP 不足、輸入錯誤與未登入 response 轉為明確 client result。
+- [x] 在 `web/src/auth.test.ts` 驗證 player state、request 與所有 response 分支。
 
 Source files: `web/src/auth.ts`
 
