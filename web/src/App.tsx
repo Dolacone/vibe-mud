@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { convert, gather, getCurrentUser, move, rest, type AuthResult, type ConvertResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
+import { convert, craft, gather, getCurrentUser, move, rest, type AuthResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | { status: "idle" } | { status: "pending" };
-type ActionKind = "rest" | "move" | "gather" | "convert" | null;
+type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | null;
 
 function Identity({ user }: { user: CurrentUser }) {
   return (
@@ -124,6 +124,29 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
+  const handleCraft = async (recipeID: string) => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setActionKind("craft");
+    setAction({ status: "pending" });
+    try {
+      const next = await craft(recipeID);
+      if (next.status === "success" || next.status === "insufficient") {
+        applyPlayerState(next);
+      } else if (next.status === "invalid" && next.state) {
+        applyPlayerState(next.state);
+      }
+      setAction(next);
+    } catch (error) {
+      setAction({
+        status: "error",
+        error: error instanceof Error ? error : new Error("craft request failed"),
+      });
+    } finally {
+      actionPending.current = false;
+    }
+  };
+
   const actionPendingNow = action.status === "pending";
 
   return (
@@ -212,6 +235,38 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         {action.status === "success" && actionKind === "convert" && <p role="status">Convert succeeded.</p>}
         {action.status === "insufficient" && actionKind === "convert" && <p role="alert">Convert failed: {action.error}</p>}
         {action.status === "invalid" && actionKind === "convert" && <p role="alert">Convert failed: {action.error}</p>}
+      </section>
+      <section aria-labelledby="craft-heading">
+        <h2 id="craft-heading">Craft</h2>
+        {(currentUser.crafting_recipes ?? []).map((recipe) => (
+          <article key={recipe.id} aria-labelledby={`recipe-${recipe.id}`}>
+            <h3 id={`recipe-${recipe.id}`}>{recipe.display_name}</h3>
+            <p>AP cost: {recipe.base_ap_cost}</p>
+            <p>Resource inputs:</p>
+            <ul>
+              {recipe.resource_inputs.map((input) => (
+                <li key={input.resource.id}>{input.resource.display_name}: {input.quantity}</li>
+              ))}
+            </ul>
+            <p>Item inputs:</p>
+            {recipe.item_inputs.length === 0 ? (
+              <p>None</p>
+            ) : (
+              <ul>
+                {recipe.item_inputs.map((input) => (
+                  <li key={input.item.id}>{input.item.display_name}: {input.quantity}</li>
+                ))}
+              </ul>
+            )}
+            <p>Output: {recipe.output.display_name}: {recipe.output_quantity}</p>
+            <button type="button" onClick={() => void handleCraft(recipe.id)} disabled={actionPendingNow}>
+              {actionPendingNow ? "Crafting..." : `Craft ${recipe.display_name}`}
+            </button>
+          </article>
+        ))}
+        {action.status === "success" && actionKind === "craft" && <p role="status">Craft succeeded.</p>}
+        {action.status === "insufficient" && actionKind === "craft" && <p role="alert">Craft failed: {action.error}</p>}
+        {action.status === "invalid" && actionKind === "craft" && <p role="alert">Craft failed: {action.error}</p>}
       </section>
       <section aria-labelledby="inventory-heading">
         <h2 id="inventory-heading">Inventory</h2>

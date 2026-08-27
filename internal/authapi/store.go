@@ -25,6 +25,8 @@ var (
 	ErrGatheringNotFound    = errors.New("gathering not found")
 	ErrConversionNotFound   = errors.New("conversion not found")
 	ErrInsufficientItem     = errors.New("insufficient item")
+	ErrCraftingNotFound     = errors.New("crafting recipe not found")
+	ErrInsufficientResource = errors.New("insufficient resource")
 )
 
 type Store struct {
@@ -98,6 +100,26 @@ type PlayerResource struct {
 	Quantity int
 }
 
+type CraftingResourceInput struct {
+	Resource ResourceType
+	Quantity int
+}
+
+type CraftingItemInput struct {
+	Item     Item
+	Quantity int
+}
+
+type CraftingRecipe struct {
+	ID             string
+	DisplayName    string
+	BaseAPCost     int
+	ResourceInputs []CraftingResourceInput
+	ItemInputs     []CraftingItemInput
+	Output         Item
+	OutputQuantity int
+}
+
 type PlayerState struct {
 	Location         Location
 	Routes           []Route
@@ -106,6 +128,7 @@ type PlayerState struct {
 	GatheringOption  *GatheringOption
 	ConversionOption *ConversionOption
 	Resources        []PlayerResource
+	CraftingRecipes  []CraftingRecipe
 }
 
 const (
@@ -202,6 +225,25 @@ CREATE TABLE IF NOT EXISTS player_resources (
 	resource_id TEXT NOT NULL REFERENCES resource_types(id),
 	quantity INTEGER NOT NULL CHECK (quantity >= 0),
 	PRIMARY KEY (user_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS crafting_recipes (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL,
+	base_ap_cost INTEGER NOT NULL CHECK (base_ap_cost > 0),
+	output_item_id TEXT NOT NULL REFERENCES items(id),
+	output_quantity INTEGER NOT NULL CHECK (output_quantity > 0)
+);
+CREATE TABLE IF NOT EXISTS crafting_recipe_resource_inputs (
+	recipe_id TEXT NOT NULL REFERENCES crafting_recipes(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
+	recipe_id TEXT NOT NULL REFERENCES crafting_recipes(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, item_id)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
@@ -231,11 +273,16 @@ INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 	('camp', 'forest_edge', 20),
 	('forest_edge', 'camp', 20);
 INSERT OR IGNORE INTO items (id, display_name) VALUES
-	('wood', 'Wood');
+	('wood', 'Wood'),
+	('wood_component', 'Wood Component');
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
-	('camp', 'wood', 1, 'wood', 1, 1);`); err != nil {
+	('camp', 'wood', 1, 'wood', 1, 1);
+INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity) VALUES
+	('wood_component', 'Wood Component', 10, 'wood_component', 1);
+INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES
+	('wood_component', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
 	}
@@ -461,7 +508,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0)}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -545,6 +592,29 @@ ORDER BY rt.id`, userID)
 	if err := resourceRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read player resources: %w", err)
 	}
+	recipeRows, err := tx.Query(`
+SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, cr.output_quantity
+FROM crafting_recipes cr
+JOIN items i ON i.id = cr.output_item_id
+WHERE EXISTS (SELECT 1 FROM crafting_recipe_resource_inputs ri WHERE ri.recipe_id = cr.id)
+ORDER BY cr.id`)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get crafting recipes: %w", err)
+	}
+	defer recipeRows.Close()
+	for recipeRows.Next() {
+		var recipe CraftingRecipe
+		if err := recipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.OutputQuantity); err != nil {
+			return PlayerState{}, fmt.Errorf("scan crafting recipe: %w", err)
+		}
+		if err := loadCraftingInputsTx(tx, &recipe); err != nil {
+			return PlayerState{}, err
+		}
+		state.CraftingRecipes = append(state.CraftingRecipes, recipe)
+	}
+	if err := recipeRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read crafting recipes: %w", err)
+	}
 	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
 FROM routes
@@ -569,6 +639,73 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func loadCraftingInputsTx(tx *sql.Tx, recipe *CraftingRecipe) error {
+	resourceRows, err := tx.Query(`
+SELECT rt.id, rt.display_name, ri.quantity
+FROM crafting_recipe_resource_inputs ri
+JOIN resource_types rt ON rt.id = ri.resource_id
+WHERE ri.recipe_id = ? ORDER BY ri.resource_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get crafting resource inputs: %w", err)
+	}
+	for resourceRows.Next() {
+		var input CraftingResourceInput
+		if err := resourceRows.Scan(&input.Resource.ID, &input.Resource.DisplayName, &input.Quantity); err != nil {
+			_ = resourceRows.Close()
+			return fmt.Errorf("scan crafting resource input: %w", err)
+		}
+		recipe.ResourceInputs = append(recipe.ResourceInputs, input)
+	}
+	if err := resourceRows.Err(); err != nil {
+		_ = resourceRows.Close()
+		return fmt.Errorf("read crafting resource inputs: %w", err)
+	}
+	if err := resourceRows.Close(); err != nil {
+		return fmt.Errorf("close crafting resource inputs: %w", err)
+	}
+	itemRows, err := tx.Query(`
+SELECT i.id, i.display_name, ii.quantity
+FROM crafting_recipe_item_inputs ii
+JOIN items i ON i.id = ii.item_id
+WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get crafting item inputs: %w", err)
+	}
+	for itemRows.Next() {
+		var input CraftingItemInput
+		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Quantity); err != nil {
+			_ = itemRows.Close()
+			return fmt.Errorf("scan crafting item input: %w", err)
+		}
+		recipe.ItemInputs = append(recipe.ItemInputs, input)
+	}
+	if err := itemRows.Err(); err != nil {
+		_ = itemRows.Close()
+		return fmt.Errorf("read crafting item inputs: %w", err)
+	}
+	if err := itemRows.Close(); err != nil {
+		return fmt.Errorf("close crafting item inputs: %w", err)
+	}
+	return nil
+}
+
+func craftingRecipeForID(tx *sql.Tx, recipeID string) (CraftingRecipe, error) {
+	var recipe CraftingRecipe
+	err := tx.QueryRow(`
+SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, cr.output_quantity
+FROM crafting_recipes cr
+JOIN items i ON i.id = cr.output_item_id
+WHERE cr.id = ? AND EXISTS (SELECT 1 FROM crafting_recipe_resource_inputs ri WHERE ri.recipe_id = cr.id)`, recipeID).Scan(
+		&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.OutputQuantity)
+	if err != nil {
+		return CraftingRecipe{}, err
+	}
+	if err := loadCraftingInputsTx(tx, &recipe); err != nil {
+		return CraftingRecipe{}, err
+	}
+	return recipe, nil
 }
 
 func conversionOptionForLocation(tx *sql.Tx, locationID string) (ConversionOption, error) {
@@ -868,6 +1005,137 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 	}
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit convert: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
+	if userID <= 0 || strings.TrimSpace(recipeID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: user ID and recipe ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin craft: %w", err)
+	}
+	recipe, err := craftingRecipeForID(tx, recipeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrCraftingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get crafting recipe: %w", err)
+	}
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get player AP for craft: %w", err)
+	}
+	now := s.now().UTC()
+	if calculateAP(unixNano(fullTimestamp), now) < recipe.BaseAPCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	for _, input := range recipe.ResourceInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_resources WHERE user_id = ? AND resource_id = ?`, userID, input.Resource.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientResource
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get crafting resource: %w", err)
+		}
+	}
+	itemQuantities := make(map[string]int, len(recipe.ItemInputs))
+	for _, input := range recipe.ItemInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientItem
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get crafting item: %w", err)
+		}
+		itemQuantities[input.Item.ID] = quantity
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(recipe.BaseAPCost)*apRecoveryTime).UnixNano(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume AP for craft: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return PlayerState{}, fmt.Errorf("check craft AP: %w", err)
+		}
+		return PlayerState{}, ErrInsufficientAP
+	}
+	for _, input := range recipe.ResourceInputs {
+		result, err := tx.Exec(`UPDATE player_resources SET quantity = quantity - ? WHERE user_id = ? AND resource_id = ?`, input.Quantity, userID, input.Resource.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume crafting resource: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check crafting resource: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientResource
+		}
+	}
+	for _, input := range recipe.ItemInputs {
+		var result sql.Result
+		if itemQuantities[input.Item.ID] == input.Quantity {
+			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID)
+		} else {
+			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, input.Quantity, userID, input.Item.ID)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume crafting item: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check crafting item: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientItem
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM player_resources WHERE user_id = ? AND quantity = 0`, userID); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("delete empty crafting resources: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND quantity = 0`, userID); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("delete empty crafting items: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, ?, ?) ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, recipe.Output.ID, recipe.OutputQuantity); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("add crafted item: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit craft: %w", err)
 	}
 	return state, nil
 }
