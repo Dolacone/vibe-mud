@@ -23,7 +23,7 @@ The backend uses Go, chi, `database/sql`, and `modernc.org/sqlite`. It owns auth
 
 The frontend uses React, TypeScript, and Vite under `web/`. The Docker build compiles it into versioned static assets before copying `web/dist` into the runtime image. The Go static handler requires revalidation for the entry document and gives versioned assets an immutable one-year browser cache.
 
-The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Inventory, typed Resources, and action results.
+The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Building recipes, current-Location Buildings, Inventory, typed Resources, and action results.
 
 ## Authentication
 
@@ -31,7 +31,7 @@ Google login starts at `GET /auth/google/login` and returns through `GET /auth/g
 
 ## Game State and API
 
-`GET /api/me` returns identity, AP, location, allowed Routes, available action options, crafting recipes, Inventory, and all eight typed Resource quantities. Game actions use `POST /api/actions/rest`, `POST /api/actions/move`, `POST /api/actions/gather`, `POST /api/actions/convert`, and `POST /api/actions/craft`.
+`GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, and all eight typed Resource quantities. Game actions use dedicated endpoints under `/api/actions/*`.
 
 AP persistence stores only the timestamp when the player will reach full AP. The backend derives current AP from its clock, caps it at 3000, and advances the timestamp when an action spends AP. No scheduler updates AP values.
 
@@ -42,5 +42,7 @@ Gathering is available only when the current Location has a backend-owned gather
 Conversion is available only when the current Location has a backend-owned conversion rule. The frontend submits `{}` and cannot submit gameplay values. A successful convert consumes AP and Inventory quantity, then increases the rule's typed Resource quantity in one transaction. The current rule produces Wood Resource.
 
 Crafting recipes are available at every Location. Each backend-owned recipe defines a base AP cost, one or more Resource inputs, zero or more Item inputs, and one explicit Item output. The frontend submits only `recipe_id`. A successful craft consumes every input and adds the output Item in one transaction. The first recipe creates one Wood Component from 10 Wood Resource and 10 AP.
+
+Building recipes are Location-independent. `POST /api/actions/build` starts a Building at the player's current Location from a submitted `recipe_id`. `POST /api/actions/contribute-construction` lets a player at that Location submit a Building ID and positive AP. Starting construction consumes one Wood Component and creates an in-progress Building with a 60 AP requirement snapshot. A contribution consumes no more than the remaining requirement. Completion exposes one empty extension slot but no extension behavior.
 
 See [SQLite Schemas](schemas.md) for data structures and [Behavior Index](../requirements/BEHAVIOR.md) for agreed behavior.
