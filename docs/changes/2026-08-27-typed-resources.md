@@ -12,6 +12,8 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
 req_ref: REQ-007
 related_req_refs:
   - REQ-008
@@ -111,9 +113,9 @@ Acceptance criteria:
 
 ### Task 3: Parse typed Resource state in the frontend client
 
-- [ ] 在 `web/src/auth.ts` 將單一 Resource number 改為 typed Resource list，並解析 conversion option 的 Wood output。
-- [ ] 保留 `convert` request 與所有 result branches。
-- [ ] 在 `web/src/auth.test.ts` 驗證 8 種 Resource、零值、invalid response 與 conversion response。
+- [x] 在 `web/src/auth.ts` 將單一 Resource number 改為 typed Resource list，並解析 conversion option 的 Wood output。
+- [x] 保留 `convert` request 與所有 result branches。
+- [x] 在 `web/src/auth.test.ts` 驗證 8 種 Resource、零值、invalid response 與 conversion response。
 
 Source files: `web/src/auth.ts`
 

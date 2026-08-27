@@ -27,9 +27,15 @@ export type GatheringOption = {
 
 export type ConversionOption = {
   item: Item;
+  resource: Item;
   input_quantity: number;
   resource_yield: number;
   ap_cost: number;
+};
+
+export type Resource = {
+  resource: Item;
+  quantity: number;
 };
 
 export type PlayerState = {
@@ -39,7 +45,7 @@ export type PlayerState = {
   inventory: InventoryItem[];
   gathering_option: GatheringOption | null;
   conversion_option: ConversionOption | null;
-  resource: number;
+  resources: Resource[];
 };
 
 export type CurrentUser = PlayerState & {
@@ -118,8 +124,18 @@ function isQuantity(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-function isResource(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+function isResource(value: unknown): value is Resource {
+  if (typeof value !== "object" || value === null) return false;
+  const resource = value as Record<string, unknown>;
+  return isItem(resource.resource) && typeof resource.quantity === "number" && Number.isInteger(resource.quantity) && resource.quantity >= 0;
+}
+
+const resourceIDs = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"];
+
+function isResources(value: unknown): value is Resource[] {
+  if (!Array.isArray(value) || value.length !== resourceIDs.length || !value.every(isResource)) return false;
+  const ids = value.map((resource) => resource.resource.id);
+  return new Set(ids).size === resourceIDs.length && resourceIDs.every((id) => ids.includes(id));
 }
 
 function isInventoryItem(value: unknown): value is InventoryItem {
@@ -145,6 +161,7 @@ function isConversionOption(value: unknown): value is ConversionOption {
   const option = value as Record<string, unknown>;
   return (
     isItem(option.item) &&
+    isItem(option.resource) &&
     isQuantity(option.input_quantity) &&
     isQuantity(option.resource_yield) &&
     typeof option.ap_cost === "number" &&
@@ -168,7 +185,7 @@ function isPlayerState(value: unknown): value is PlayerState {
     state.inventory.every(isInventoryItem) &&
     (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
     (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
-    isResource(state.resource)
+    isResources(state.resources)
   );
 }
 
@@ -247,7 +264,7 @@ export async function getCurrentUser(
         inventory: body.inventory,
         gathering_option: body.gathering_option,
         conversion_option: body.conversion_option,
-        resource: body.resource,
+        resources: body.resources,
       },
     };
   } catch (error) {
