@@ -561,7 +561,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, identity.ID); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, identity.ID, identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Routes()
@@ -785,7 +785,9 @@ func preparedBuildingID(t *testing.T, fixture buildingAPIFixture) int64 {
 
 func TestBuildingAPIReturnsExactRecipeAndBuildingContracts(t *testing.T) {
 	fixture := newBuildingAPIFixture(t, "building-api-contract")
-	if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, fixture.identity.ID); err != nil {
+	if _, err := fixture.store.db.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10);
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, fixture.identity.ID, fixture.identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
@@ -807,8 +809,13 @@ func TestBuildingAPIReturnsExactRecipeAndBuildingContracts(t *testing.T) {
 		t.Fatalf("recipe contract = %#v", recipe)
 	}
 	resourceInputs, ok := recipe["resource_inputs"].([]any)
-	if !ok || len(resourceInputs) != 0 {
+	if !ok || len(resourceInputs) != 1 {
 		t.Fatalf("recipe resource inputs = %#v", recipe["resource_inputs"])
+	}
+	resourceInput := resourceInputs[0].(map[string]any)
+	resource := resourceInput["resource"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(resourceInput), []string{"quantity", "resource"}) || !reflect.DeepEqual(sortedMapKeys(resource), []string{"display_name", "id"}) || resource["id"] != "wood" || resource["display_name"] != "Wood" || resourceInput["quantity"] != float64(10) {
+		t.Fatalf("recipe resource input = %#v", resourceInput)
 	}
 	itemInputs, ok := recipe["item_inputs"].([]any)
 	if !ok || len(itemInputs) != 1 {
@@ -867,18 +874,28 @@ func TestBuildAPIRejectsEveryInvalidRequestWithoutStateChangesOrLogLeak(t *testi
 
 	for _, test := range []struct {
 		name, reason string
+		prepare      func(buildingAPIFixture)
 	}{
-		{"insufficient input", buildReasonInsufficientItem},
-		{"occupied owner slot", buildReasonOccupied},
+		{"insufficient resource", buildReasonInsufficientResource, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"insufficient item", buildReasonInsufficientItem, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"occupied owner slot", buildReasonOccupied, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, f.identity.ID, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			prepareBuilding(t, f, "under_construction", 0)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newBuildingAPIFixture(t, "building-api-reject-"+strings.ReplaceAll(test.name, " ", "-"))
-			if test.name == "occupied owner slot" {
-				if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, fixture.identity.ID); err != nil {
-					t.Fatal(err)
-				}
-				prepareBuilding(t, fixture, "under_construction", 0)
-			}
+			test.prepare(fixture)
 			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -889,6 +906,15 @@ func TestBuildAPIRejectsEveryInvalidRequestWithoutStateChangesOrLogLeak(t *testi
 			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
 			if response.Code != http.StatusConflict || !strings.Contains(logOutput, "user_id=1 action=build outcome=error reason="+test.reason+" request_id="+requestID) {
 				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			if test.name == "insufficient resource" {
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["error"] != ErrInsufficientResource.Error() {
+					t.Fatalf("insufficient resource error = %#v, want %q", body["error"], ErrInsufficientResource.Error())
+				}
 			}
 			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
 			if err != nil {
@@ -1049,6 +1075,15 @@ func TestContributeConstructionAPIRejectsDomainFailuresWithoutStateChangesOrLogL
 			logOutput := captureStdout(t, func() { caseFixture.server.Routes().ServeHTTP(response, request) })
 			if response.Code != test.status || !strings.Contains(logOutput, "user_id="+strconv.FormatInt(caseFixture.identity.ID, 10)+" action=contribute-construction outcome=error reason="+test.reason+" request_id="+requestID) {
 				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			if test.name == "unknown target" {
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["error"] != ErrBuildingNotFound.Error() {
+					t.Fatalf("unknown building error = %#v, want %q", body["error"], ErrBuildingNotFound.Error())
+				}
 			}
 			after, err := caseFixture.store.GetPlayerState(caseFixture.identity.ID)
 			if err != nil {

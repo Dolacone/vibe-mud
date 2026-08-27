@@ -27,7 +27,7 @@ var (
 	ErrInsufficientItem     = errors.New("insufficient item")
 	ErrCraftingNotFound     = errors.New("crafting recipe not found")
 	ErrInsufficientResource = errors.New("insufficient resource")
-	ErrBuildingNotFound     = errors.New("building recipe not found")
+	ErrBuildingNotFound     = errors.New("building not found")
 	ErrBuildingOccupied     = errors.New("building location already occupied")
 	ErrBuildingRemote       = errors.New("building is at another location")
 	ErrBuildingCompleted    = errors.New("building is already completed")
@@ -358,7 +358,9 @@ INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, q
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES
 	('building_lv1', 'Building Lv1', 1, 60, 1);
 INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity) VALUES
-	('building_lv1', 'wood_component', 1);`); err != nil {
+	('building_lv1', 'wood_component', 1);
+INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES
+	('building_lv1', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed building state: %w", err)
 	}

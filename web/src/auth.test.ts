@@ -22,7 +22,7 @@ const buildingRecipe: BuildingRecipe = {
   building_level: 1,
   required_ap: 60,
   extension_slot_count: 1,
-  resource_inputs: [],
+  resource_inputs: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 10 }],
   item_inputs: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 1 }],
 };
 

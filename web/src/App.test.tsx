@@ -42,7 +42,7 @@ const buildingRecipe = {
   building_level: 1,
   required_ap: 60,
   extension_slot_count: 1,
-  resource_inputs: [],
+  resource_inputs: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 10 }],
   item_inputs: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 1 }],
 };
 
@@ -206,7 +206,7 @@ describe("App", () => {
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
     expect(screen.getByText("AP cost: 10")).toBeInTheDocument();
-    expect(screen.getByText("Wood: 10")).toBeInTheDocument();
+    expect(screen.getAllByText("Wood: 10")).toHaveLength(2);
     expect(screen.getByText("Output: Wood Component: 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();

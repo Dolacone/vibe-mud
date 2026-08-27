@@ -1,6 +1,6 @@
 ---
 title: "Building construction"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -41,7 +41,7 @@ Authenticated state adds `building_recipes` and `buildings`. Each Building respo
     "building_level": 1,
     "required_ap": 60,
     "extension_slot_count": 1,
-    "resource_inputs": [],
+    "resource_inputs": [{"resource": {"id": "wood", "display_name": "Wood"}, "quantity": 10}],
     "item_inputs": [{"item": {"id": "wood_component", "display_name": "Wood Component"}, "quantity": 1}]
   }],
   "buildings": [{
@@ -62,7 +62,7 @@ Every collection field is a JSON array. `building_recipes.resource_inputs` and `
 ## Key Assumptions
 
 - Building recipe values are backend-owned balance data.
-- The MVP Building Lv1 recipe consumes 1 Wood Component and requires 60 AP.
+- The MVP Building Lv1 recipe consumes 1 Wood Component, 10 Wood Resource, and requires 60 AP.
 - Resource and Item input tables each allow zero rows, but a recipe must have at least one combined input.
 - The construction AP requirement is copied into each Building when construction starts.
 - An in-progress Building counts toward the owner and Location uniqueness rule.
@@ -96,7 +96,7 @@ Task 1: Building definitions and persistence
 ### Task 1: Persist Building recipes and current-Location Buildings
 
 - [x] Add normalized Building recipe, Resource input, Item input, and Building tables in `internal/authapi/store.go`.
-- [x] Seed Building Lv1 with 1 Wood Component input, 60 required AP, level 1, and one extension slot.
+- [x] Seed Building Lv1 with 1 Wood Component input, 10 Wood Resource input, 60 required AP, level 1, and one extension slot.
 - [x] Load only recipes with at least one combined input.
 - [x] Return every Building at the player's current Location with owner, status, progress, and snapshots.
 - [x] Preserve existing player state while upgrading an existing SQLite database.
@@ -305,8 +305,8 @@ Acceptance criteria:
 - [x] [Major] Complete Task 4 API tests. Cover the exact response contract and successful contribution. Cover every rejection class and state preservation. Assert required log fields, success logs, and credential sanitization.
 - [x] [Major] Reopen Task 4 API coverage. The fix does not verify the exact Building recipe or owner contract. It omits most build rejection classes, several contribution decoding classes, build success logs, rejection log fields, and meaningful credential sanitization inputs.
 - [x] [Minor] Make the documented `buildings` SQL match the implementation. The document adds a nonexistent `DEFAULT 0` to `contributed_ap` and omits the implemented `DEFAULT ''` from `display_name`.
-- [ ] [Major] The same Task 4 API coverage issue remains. The second fix verifies only an empty `resource_inputs` array and never exercises its nested contract. It also omits the `insufficient_resource` API rejection class required by the prior review finding.
-- [ ] [Minor] Return a Building-target error from contribution failures. `ErrBuildingNotFound` currently says "building recipe not found", so an unknown `building_id` produces a false error message.
+- [x] [Major] The same Task 4 API coverage issue remains. The second fix verifies only an empty `resource_inputs` array and never exercises its nested contract. It also omits the `insufficient_resource` API rejection class required by the prior review finding.
+- [x] [Minor] Return a Building-target error from contribution failures. `ErrBuildingNotFound` currently says "building recipe not found", so an unknown `building_id` produces a false error message.
 
 ## Plan Review Issues
 

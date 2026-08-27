@@ -398,7 +398,7 @@ CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
 
 ## building_recipes
 
-用途：定義後端允許的 Building recipe。MVP recipe 產生 Building Lv1，施工需要 60 AP，完成後具有一個 extension slot。
+用途：定義後端允許的 Building recipe。MVP recipe 產生 Building Lv1，消耗 1 Wood Component 與 10 Wood Resource，施工需要 60 AP，完成後具有一個 extension slot。
 
 ```sql
 CREATE TABLE IF NOT EXISTS building_recipes (
@@ -587,6 +587,9 @@ VALUES ('building_lv1', 'Building Lv1', 1, 60, 1);
 
 INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity)
 VALUES ('building_lv1', 'wood_component', 1);
+
+INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, quantity)
+VALUES ('building_lv1', 'wood', 10);
 ```
 
 Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
@@ -605,7 +608,7 @@ Existing databases gain the four Building tables and seeds during Store initiali
 
 `craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
 
-開始施工 transaction 會依 submitted recipe identifier 與玩家目前 Location 查找 recipe、inputs 與既有 Building。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP 與 extension slot count 快照。
+開始施工 transaction 會依 submitted recipe identifier 查找 Location-independent recipe 與 inputs，再查找玩家目前 Location 的既有 Building。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP 與 extension slot count 快照。
 
 施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`。
 

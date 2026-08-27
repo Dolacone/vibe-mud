@@ -330,7 +330,7 @@ VALUES (?, 'camp', 'building_lv1', 1, 60, 12, 'under_construction', 1),
 		t.Fatalf("building recipes = %+v, want one seeded recipe", state.BuildingRecipes)
 	}
 	recipe := state.BuildingRecipes[0]
-	if recipe.ID != "building_lv1" || recipe.DisplayName != "Building Lv1" || recipe.BuildingLevel != 1 || recipe.RequiredAP != 60 || recipe.ExtensionSlotCount != 1 || len(recipe.ResourceInputs) != 0 || len(recipe.ItemInputs) != 1 || recipe.ItemInputs[0].Item.ID != "wood_component" || recipe.ItemInputs[0].Quantity != 1 {
+	if recipe.ID != "building_lv1" || recipe.DisplayName != "Building Lv1" || recipe.BuildingLevel != 1 || recipe.RequiredAP != 60 || recipe.ExtensionSlotCount != 1 || len(recipe.ResourceInputs) != 1 || recipe.ResourceInputs[0].Resource.ID != "wood" || recipe.ResourceInputs[0].Quantity != 10 || len(recipe.ItemInputs) != 1 || recipe.ItemInputs[0].Item.ID != "wood_component" || recipe.ItemInputs[0].Quantity != 1 {
 		t.Fatalf("seeded building recipe = %+v", recipe)
 	}
 	if len(state.Buildings) != 1 || state.Buildings[0].Owner.ID != owner.ID || state.Buildings[0].Recipe.ID != "building_lv1" || state.Buildings[0].BuildingLevel != 1 || state.Buildings[0].RequiredAP != 60 || state.Buildings[0].ContributedAP != 12 || state.Buildings[0].Status != "under_construction" || state.Buildings[0].ExtensionSlotCount != 1 {
@@ -347,6 +347,62 @@ VALUES (?, 'camp', 'building_lv1', 1, 60, 12, 'under_construction', 1),
 		if candidate.ID == "empty" {
 			t.Fatal("building recipe without inputs was exposed")
 		}
+	}
+}
+
+func TestBuildSeededRecipeConsumesMixedInputsAtomically(t *testing.T) {
+	store, db := newTestStore(t)
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-seeded-building", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10);
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, owner.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Build(owner.ID, "building_lv1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resourceQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood_component") != 0 || len(state.Buildings) != 1 {
+		t.Fatalf("seeded building state = %+v, want both inputs consumed", state)
+	}
+}
+
+func TestBuildSeededRecipeRollsBackWhenEitherMixedInputIsInsufficient(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup string
+		err   error
+	}{
+		{"resource", `INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, ErrInsufficientResource},
+		{"item", `INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, ErrInsufficientItem},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, db := newTestStore(t)
+			owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-seeded-building-rollback-"+test.name, "owner@example.com", "Owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(test.setup, owner.ID); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.GetPlayerState(owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Build(owner.ID, "building_lv1"); !errors.Is(err, test.err) {
+				t.Fatalf("build error = %v, want %v", err, test.err)
+			}
+			after, err := store.GetPlayerState(owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed build changed state: before=%+v after=%+v", before, after)
+			}
+		})
 	}
 }
 
