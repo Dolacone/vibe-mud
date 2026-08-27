@@ -8,6 +8,8 @@ source_paths:
   - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-007
 related_req_refs:
   - REQ-008
@@ -53,10 +55,10 @@ Task 1: SQLite typed Resource state
 
 ### Task 1: Store typed Resource state atomically
 
-- [ ] 在 `internal/authapi/store.go` 建立 Resource type、per-player quantity 與 typed conversion schema，並加入 8 種 Resource seed。
-- [ ] 捨棄 legacy generic balance，讓缺少 player row 的 Resource 回傳 quantity 0。
-- [ ] 讓 `convert` 將 AP、Wood item 與 Wood Resource quantity 放在同一 transaction 更新。
-- [ ] 在 `internal/authapi/store_test.go` 驗證 schema 升級、8 種狀態、零值、持久化、成功、拒絕與 rollback。
+  - [x] 在 `internal/authapi/store.go` 建立 Resource type、per-player quantity 與 typed conversion schema，並加入 8 種 Resource seed。
+  - [x] 捨棄 legacy generic balance，讓缺少 player row 的 Resource 回傳 quantity 0。
+  - [x] 讓 `convert` 將 AP、Wood item 與 Wood Resource quantity 放在同一 transaction 更新。
+  - [x] 在 `internal/authapi/store_test.go` 驗證 schema 升級、8 種狀態、零值、持久化、成功、拒絕與 rollback。
 
 Source files: `internal/authapi/store.go`
 

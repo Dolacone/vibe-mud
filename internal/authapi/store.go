@@ -82,9 +82,20 @@ type GatheringOption struct {
 
 type ConversionOption struct {
 	Item          Item
+	Resource      ResourceType
 	InputQuantity int
 	ResourceYield int
 	APCost        int
+}
+
+type ResourceType struct {
+	ID          string
+	DisplayName string
+}
+
+type PlayerResource struct {
+	Resource ResourceType
+	Quantity int
 }
 
 type PlayerState struct {
@@ -94,7 +105,9 @@ type PlayerState struct {
 	Inventory        []InventoryItem
 	GatheringOption  *GatheringOption
 	ConversionOption *ConversionOption
-	Resource         int
+	Resources        []PlayerResource
+	// Resource remains as a compatibility mirror until the API task removes it.
+	Resource int
 }
 
 const (
@@ -178,15 +191,39 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
 	location_id TEXT PRIMARY KEY REFERENCES locations(id),
 	input_item_id TEXT NOT NULL REFERENCES items(id),
 	input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
+	output_resource_id TEXT NOT NULL REFERENCES resource_types(id),
 	resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
 	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
 );
 CREATE TABLE IF NOT EXISTS player_resources (
-	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
-	balance INTEGER NOT NULL CHECK (balance >= 0)
+	user_id INTEGER NOT NULL REFERENCES identities(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity >= 0),
+	PRIMARY KEY (user_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS resource_types (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
+	('food', 'Food'),
+	('wood', 'Wood'),
+	('stone', 'Stone'),
+	('metal', 'Metal'),
+	('fiber', 'Fiber'),
+	('hide', 'Hide'),
+	('medicinal', 'Medicinal'),
+	('arcane', 'Arcane')`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed resource types: %w", err)
+	}
+	if err := ensureTypedResourceSchema(tx); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("upgrade typed resource schema: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO locations (id, display_name) VALUES
@@ -197,10 +234,19 @@ INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 	('forest_edge', 'camp', 20);
 INSERT OR IGNORE INTO items (id, display_name) VALUES
 	('wood', 'Wood');
+INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
+	('food', 'Food'),
+	('wood', 'Wood'),
+	('stone', 'Stone'),
+	('metal', 'Metal'),
+	('fiber', 'Fiber'),
+	('hide', 'Hide'),
+	('medicinal', 'Medicinal'),
+	('arcane', 'Arcane');
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
-INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, resource_yield, ap_cost) VALUES
-	('camp', 'wood', 1, 1, 1);`); err != nil {
+INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
+	('camp', 'wood', 1, 'wood', 1, 1);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
 	}
@@ -216,16 +262,84 @@ SELECT id, 'camp' FROM identities`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player locations: %w", err)
 	}
-	if _, err := tx.Exec(`
-INSERT OR IGNORE INTO player_resources (user_id, balance)
-SELECT id, 0 FROM identities`); err != nil {
-		_ = tx.Rollback()
-		return nil, fmt.Errorf("backfill player resources: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	return &Store{db: db, now: time.Now}, nil
+}
+
+func ensureTypedResourceSchema(tx *sql.Tx) error {
+	playerResourceColumns, err := tableColumns(tx, "player_resources")
+	if err != nil {
+		return err
+	}
+	if playerResourceColumns["balance"] {
+		if _, err := tx.Exec(`DROP TABLE player_resources`); err != nil {
+			return fmt.Errorf("discard legacy player resources: %w", err)
+		}
+		if _, err := tx.Exec(`
+CREATE TABLE player_resources (
+	user_id INTEGER NOT NULL REFERENCES identities(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity >= 0),
+	PRIMARY KEY (user_id, resource_id)
+)`); err != nil {
+			return fmt.Errorf("create typed player resources: %w", err)
+		}
+	}
+
+	conversionColumns, err := tableColumns(tx, "conversion_rules")
+	if err != nil {
+		return err
+	}
+	if !conversionColumns["output_resource_id"] {
+		if _, err := tx.Exec(`ALTER TABLE conversion_rules RENAME TO conversion_rules_legacy`); err != nil {
+			return fmt.Errorf("rename legacy conversion rules: %w", err)
+		}
+		if _, err := tx.Exec(`
+CREATE TABLE conversion_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	input_item_id TEXT NOT NULL REFERENCES items(id),
+	input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
+	output_resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+)`); err != nil {
+			return fmt.Errorf("create typed conversion rules: %w", err)
+		}
+		if _, err := tx.Exec(`
+INSERT INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
+SELECT location_id, input_item_id, input_quantity, 'wood', resource_yield, ap_cost
+FROM conversion_rules_legacy`); err != nil {
+			return fmt.Errorf("migrate conversion rules: %w", err)
+		}
+		if _, err := tx.Exec(`DROP TABLE conversion_rules_legacy`); err != nil {
+			return fmt.Errorf("drop legacy conversion rules: %w", err)
+		}
+	}
+	return nil
+}
+
+func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, fmt.Errorf("scan %s columns: %w", table, err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	return columns, nil
 }
 
 func (s *Store) UpsertIdentity(issuer, subject, email, displayName string) (Identity, error) {
@@ -264,12 +378,6 @@ INSERT INTO player_locations (user_id, location_id) VALUES (?, 'camp')
 ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 		_ = tx.Rollback()
 		return Identity{}, fmt.Errorf("initialize player location: %w", err)
-	}
-	if _, err := tx.Exec(`
-INSERT INTO player_resources (user_id, balance) VALUES (?, 0)
-ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
-		_ = tx.Rollback()
-		return Identity{}, fmt.Errorf("initialize player resources: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
@@ -364,7 +472,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0)}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -428,10 +536,28 @@ ORDER BY pi.item_id`, userID)
 		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
 	}
 	state.AP = calculateAP(unixNano(fullTimestamp), now)
-	if err := tx.QueryRow(`SELECT balance FROM player_resources WHERE user_id = ?`, userID).Scan(&state.Resource); errors.Is(err, sql.ErrNoRows) {
-		return PlayerState{}, ErrIdentityNotFound
-	} else if err != nil {
+	resourceRows, err := tx.Query(`
+SELECT rt.id, rt.display_name, COALESCE(pr.quantity, 0)
+FROM resource_types rt
+LEFT JOIN player_resources pr
+	ON pr.resource_id = rt.id AND pr.user_id = ?
+ORDER BY rt.id`, userID)
+	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player resources: %w", err)
+	}
+	defer resourceRows.Close()
+	for resourceRows.Next() {
+		var resource PlayerResource
+		if err := resourceRows.Scan(&resource.Resource.ID, &resource.Resource.DisplayName, &resource.Quantity); err != nil {
+			return PlayerState{}, fmt.Errorf("scan player resources: %w", err)
+		}
+		state.Resources = append(state.Resources, resource)
+		if resource.Resource.ID == "wood" {
+			state.Resource = resource.Quantity
+		}
+	}
+	if err := resourceRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read player resources: %w", err)
 	}
 	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
@@ -462,11 +588,12 @@ ORDER BY destination_id`, state.Location.ID)
 func conversionOptionForLocation(tx *sql.Tx, locationID string) (ConversionOption, error) {
 	var conversion ConversionOption
 	err := tx.QueryRow(`
-SELECT i.id, i.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
+SELECT i.id, i.display_name, rt.id, rt.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
 FROM conversion_rules cr
 JOIN items i ON i.id = cr.input_item_id
+JOIN resource_types rt ON rt.id = cr.output_resource_id
 WHERE cr.location_id = ?`, locationID).Scan(
-		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.InputQuantity,
+		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.Resource.ID, &conversion.Resource.DisplayName, &conversion.InputQuantity,
 		&conversion.ResourceYield, &conversion.APCost,
 	)
 	return conversion, err
@@ -740,7 +867,10 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("consume conversion item: %w", err)
 	}
-	_, err = tx.Exec(`UPDATE player_resources SET balance = balance + ? WHERE user_id = ?`, option.ResourceYield, userID)
+	_, err = tx.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, option.Resource.ID, option.ResourceYield)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("add conversion resources: %w", err)
