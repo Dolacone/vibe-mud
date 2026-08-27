@@ -472,10 +472,10 @@ CREATE TABLE IF NOT EXISTS buildings (
     owner_id INTEGER NOT NULL REFERENCES identities(id),
     location_id TEXT NOT NULL REFERENCES locations(id),
     recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
-    display_name TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
     building_level INTEGER NOT NULL CHECK (building_level > 0),
     required_ap INTEGER NOT NULL CHECK (required_ap > 0),
-    contributed_ap INTEGER NOT NULL DEFAULT 0 CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+    contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
     extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
     status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
     UNIQUE (owner_id, location_id)
