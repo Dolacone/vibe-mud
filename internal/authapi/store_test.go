@@ -36,6 +36,56 @@ func resourceQuantity(state PlayerState, resourceID string) int {
 	return 0
 }
 
+func TestBuildingStateLoadsSeededDefinitionsAndOnlyCurrentLocation(t *testing.T) {
+	store, db := newTestStore(t)
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-building-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	visitor, err := store.UpsertIdentity("https://accounts.google.com", "subject-building-visitor", "visitor@example.com", "Visitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO locations (id, display_name) VALUES ('other-location', 'Other Location')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'other-location' WHERE user_id = ?`, visitor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count)
+VALUES (?, 'camp', 'building_lv1', 1, 60, 12, 'under_construction', 1),
+       (?, 'other-location', 'building_lv1', 1, 60, 60, 'completed', 1);`, owner.ID, visitor.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.BuildingRecipes) != 1 {
+		t.Fatalf("building recipes = %+v, want one seeded recipe", state.BuildingRecipes)
+	}
+	recipe := state.BuildingRecipes[0]
+	if recipe.ID != "building_lv1" || recipe.DisplayName != "Building Lv1" || recipe.BuildingLevel != 1 || recipe.RequiredAP != 60 || recipe.ExtensionSlotCount != 1 || len(recipe.ResourceInputs) != 0 || len(recipe.ItemInputs) != 1 || recipe.ItemInputs[0].Item.ID != "wood_component" || recipe.ItemInputs[0].Quantity != 1 {
+		t.Fatalf("seeded building recipe = %+v", recipe)
+	}
+	if len(state.Buildings) != 1 || state.Buildings[0].Owner.ID != owner.ID || state.Buildings[0].Recipe.ID != "building_lv1" || state.Buildings[0].BuildingLevel != 1 || state.Buildings[0].RequiredAP != 60 || state.Buildings[0].ContributedAP != 12 || state.Buildings[0].Status != "under_construction" || state.Buildings[0].ExtensionSlotCount != 1 {
+		t.Fatalf("current-location buildings = %+v", state.Buildings)
+	}
+	if _, err := db.Exec(`INSERT INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES ('empty', 'Empty', 1, 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range state.BuildingRecipes {
+		if candidate.ID == "empty" {
+			t.Fatal("building recipe without inputs was exposed")
+		}
+	}
+}
+
 func TestCraftLoadsSeededRecipeAndAtomicallyConsumesResources(t *testing.T) {
 	store, db := newTestStore(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
@@ -234,6 +284,13 @@ INSERT INTO player_locations VALUES (41, 'legacy-location');`, createdAt, create
 	}
 	if state.Location.ID != "legacy-location" || state.AP != maxAP || len(state.CraftingRecipes) != 1 || state.CraftingRecipes[0].ID != "wood_component" {
 		t.Fatalf("schema upgrade changed existing player state or omitted recipe: %+v", state)
+	}
+	var buildingTableCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('building_recipes', 'building_recipe_resource_inputs', 'building_recipe_item_inputs', 'buildings')").Scan(&buildingTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if buildingTableCount != 4 {
+		t.Fatalf("schema upgrade building tables = %d, want 4", buildingTableCount)
 	}
 }
 

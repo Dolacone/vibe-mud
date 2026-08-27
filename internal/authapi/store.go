@@ -120,6 +120,32 @@ type CraftingRecipe struct {
 	OutputQuantity int
 }
 
+type BuildingRecipe struct {
+	ID                 string
+	DisplayName        string
+	BuildingLevel      int
+	RequiredAP         int
+	ExtensionSlotCount int
+	ResourceInputs     []CraftingResourceInput
+	ItemInputs         []CraftingItemInput
+}
+
+type BuildingOwner struct {
+	ID          int64
+	DisplayName string
+}
+
+type Building struct {
+	ID                 int64
+	Owner              BuildingOwner
+	Recipe             BuildingRecipe
+	BuildingLevel      int
+	RequiredAP         int
+	ContributedAP      int
+	Status             string
+	ExtensionSlotCount int
+}
+
 type PlayerState struct {
 	Location         Location
 	Routes           []Route
@@ -129,6 +155,8 @@ type PlayerState struct {
 	ConversionOption *ConversionOption
 	Resources        []PlayerResource
 	CraftingRecipes  []CraftingRecipe
+	BuildingRecipes  []BuildingRecipe
+	Buildings        []Building
 }
 
 const (
@@ -244,6 +272,37 @@ CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
 	item_id TEXT NOT NULL REFERENCES items(id),
 	quantity INTEGER NOT NULL CHECK (quantity > 0),
 	PRIMARY KEY (recipe_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS building_recipes (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL,
+	building_level INTEGER NOT NULL CHECK (building_level > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0)
+);
+CREATE TABLE IF NOT EXISTS building_recipe_resource_inputs (
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS buildings (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner_id INTEGER NOT NULL REFERENCES identities(id),
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	building_level INTEGER NOT NULL CHECK (building_level > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+	status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+	UNIQUE (owner_id, location_id)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
@@ -285,6 +344,14 @@ INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, q
 	('wood_component', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES
+	('building_lv1', 'Building Lv1', 1, 60, 1);
+INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity) VALUES
+	('building_lv1', 'wood_component', 1);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed building state: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
@@ -508,7 +575,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -615,6 +682,51 @@ ORDER BY cr.id`)
 	if err := recipeRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read crafting recipes: %w", err)
 	}
+	buildingRecipeRows, err := tx.Query(`
+SELECT br.id, br.display_name, br.building_level, br.required_ap, br.extension_slot_count
+FROM building_recipes br
+WHERE EXISTS (SELECT 1 FROM building_recipe_resource_inputs ri WHERE ri.recipe_id = br.id)
+   OR EXISTS (SELECT 1 FROM building_recipe_item_inputs ii WHERE ii.recipe_id = br.id)
+ORDER BY br.id`)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get building recipes: %w", err)
+	}
+	defer buildingRecipeRows.Close()
+	for buildingRecipeRows.Next() {
+		var recipe BuildingRecipe
+		if err := buildingRecipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount); err != nil {
+			return PlayerState{}, fmt.Errorf("scan building recipe: %w", err)
+		}
+		if err := loadBuildingInputsTx(tx, &recipe); err != nil {
+			return PlayerState{}, err
+		}
+		state.BuildingRecipes = append(state.BuildingRecipes, recipe)
+	}
+	if err := buildingRecipeRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read building recipes: %w", err)
+	}
+	buildingRows, err := tx.Query(`
+SELECT b.id, i.id, i.display_name, br.id, br.display_name,
+       b.building_level, b.required_ap, b.contributed_ap, b.status, b.extension_slot_count
+FROM buildings b
+JOIN identities i ON i.id = b.owner_id
+JOIN building_recipes br ON br.id = b.recipe_id
+WHERE b.location_id = ?
+ORDER BY b.id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get buildings: %w", err)
+	}
+	defer buildingRows.Close()
+	for buildingRows.Next() {
+		var building Building
+		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount); err != nil {
+			return PlayerState{}, fmt.Errorf("scan building: %w", err)
+		}
+		state.Buildings = append(state.Buildings, building)
+	}
+	if err := buildingRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read buildings: %w", err)
+	}
 	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
 FROM routes
@@ -639,6 +751,56 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func loadBuildingInputsTx(tx *sql.Tx, recipe *BuildingRecipe) error {
+	resourceRows, err := tx.Query(`
+SELECT rt.id, rt.display_name, ri.quantity
+FROM building_recipe_resource_inputs ri
+JOIN resource_types rt ON rt.id = ri.resource_id
+WHERE ri.recipe_id = ? ORDER BY ri.resource_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get building resource inputs: %w", err)
+	}
+	for resourceRows.Next() {
+		var input CraftingResourceInput
+		if err := resourceRows.Scan(&input.Resource.ID, &input.Resource.DisplayName, &input.Quantity); err != nil {
+			_ = resourceRows.Close()
+			return fmt.Errorf("scan building resource input: %w", err)
+		}
+		recipe.ResourceInputs = append(recipe.ResourceInputs, input)
+	}
+	if err := resourceRows.Err(); err != nil {
+		_ = resourceRows.Close()
+		return fmt.Errorf("read building resource inputs: %w", err)
+	}
+	if err := resourceRows.Close(); err != nil {
+		return fmt.Errorf("close building resource inputs: %w", err)
+	}
+	itemRows, err := tx.Query(`
+SELECT i.id, i.display_name, ii.quantity
+FROM building_recipe_item_inputs ii
+JOIN items i ON i.id = ii.item_id
+WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get building item inputs: %w", err)
+	}
+	for itemRows.Next() {
+		var input CraftingItemInput
+		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Quantity); err != nil {
+			_ = itemRows.Close()
+			return fmt.Errorf("scan building item input: %w", err)
+		}
+		recipe.ItemInputs = append(recipe.ItemInputs, input)
+	}
+	if err := itemRows.Err(); err != nil {
+		_ = itemRows.Close()
+		return fmt.Errorf("read building item inputs: %w", err)
+	}
+	if err := itemRows.Close(); err != nil {
+		return fmt.Errorf("close building item inputs: %w", err)
+	}
+	return nil
 }
 
 func loadCraftingInputsTx(tx *sql.Tx, recipe *CraftingRecipe) error {

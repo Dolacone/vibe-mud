@@ -10,6 +10,8 @@ source_paths:
   - docs/terminology.md
   - requirements/BEHAVIOR.md
   - requirements/REQ-010.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-010
 base_branch: main
 scope: "Tracks Building Lv1 placement, shared AP contributions, completion, and persistence."
@@ -87,12 +89,12 @@ Task 1: Building definitions and persistence
 
 ### Task 1: Persist Building recipes and current-Location Buildings
 
-- [ ] Add normalized Building recipe, Resource input, Item input, and Building tables in `internal/authapi/store.go`.
-- [ ] Seed Building Lv1 with 1 Wood Component input, 60 required AP, level 1, and one extension slot.
-- [ ] Load only recipes with at least one combined input.
-- [ ] Return every Building at the player's current Location with owner, status, progress, and snapshots.
-- [ ] Preserve existing player state while upgrading an existing SQLite database.
-- [ ] Cover definitions, empty input rejection, Location visibility, uniqueness, snapshots, and schema upgrade in `internal/authapi/store_test.go`.
+- [x] Add normalized Building recipe, Resource input, Item input, and Building tables in `internal/authapi/store.go`.
+- [x] Seed Building Lv1 with 1 Wood Component input, 60 required AP, level 1, and one extension slot.
+- [x] Load only recipes with at least one combined input.
+- [x] Return every Building at the player's current Location with owner, status, progress, and snapshots.
+- [x] Preserve existing player state while upgrading an existing SQLite database.
+- [x] Cover definitions, empty input rejection, Location visibility, uniqueness, snapshots, and schema upgrade in `internal/authapi/store_test.go`.
 
 Source files: `internal/authapi/store.go`
 
