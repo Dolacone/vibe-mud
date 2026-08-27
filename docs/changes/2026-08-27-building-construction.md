@@ -1,6 +1,6 @@
 ---
 title: "Building construction"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -305,6 +305,8 @@ Acceptance criteria:
 - [x] [Major] Complete Task 4 API tests. Cover the exact response contract and successful contribution. Cover every rejection class and state preservation. Assert required log fields, success logs, and credential sanitization.
 - [x] [Major] Reopen Task 4 API coverage. The fix does not verify the exact Building recipe or owner contract. It omits most build rejection classes, several contribution decoding classes, build success logs, rejection log fields, and meaningful credential sanitization inputs.
 - [x] [Minor] Make the documented `buildings` SQL match the implementation. The document adds a nonexistent `DEFAULT 0` to `contributed_ap` and omits the implemented `DEFAULT ''` from `display_name`.
+- [ ] [Major] The same Task 4 API coverage issue remains. The second fix verifies only an empty `resource_inputs` array and never exercises its nested contract. It also omits the `insufficient_resource` API rejection class required by the prior review finding.
+- [ ] [Minor] Return a Building-target error from contribution failures. `ErrBuildingNotFound` currently says "building recipe not found", so an unknown `building_id` produces a false error message.
 
 ## Plan Review Issues
 
