@@ -593,6 +593,66 @@ func TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState(t *testing.T) {
 	}
 }
 
+func TestCraftAPILogsSuccessWithoutSensitiveValues(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-craft-log-success", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/craft", strings.NewReader(`{"recipe_id":"wood_component"}`))
+	request.Header.Set("X-Request-ID", "craft-log-success")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("craft status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=craft outcome=success request_id=craft-log-success") {
+		t.Fatalf("craft success log = %q", logOutput)
+	}
+	for _, secret := range []string{"session-secret", "authorization-code-secret", "oauth-code-secret", "access-token", "refresh-token", "id-token", `{"recipe_id":"wood_component"}`} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("craft success log leaked %q: %q", secret, logOutput)
+		}
+	}
+}
+
+func TestCraftAPILogsRejectionReasonAndSanitizesInput(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-craft-log-rejection", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	rawInput := `{"recipe_id":"wood_component","raw_input":"oauth-code-secret"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/craft", strings.NewReader(rawInput))
+	request.Header.Set("X-Request-ID", "craft-log-rejection")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("craft rejection status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=craft outcome=error reason=unknown_field request_id=craft-log-rejection") {
+		t.Fatalf("craft rejection log = %q", logOutput)
+	}
+	for _, secret := range []string{"session-secret", "authorization-code-secret", "oauth-code-secret", "access-token", "refresh-token", "id-token", rawInput} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("craft rejection log leaked %q: %q", secret, logOutput)
+		}
+	}
+}
+
 func TestGatherAPIUpdatesStateAndMeResponse(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)

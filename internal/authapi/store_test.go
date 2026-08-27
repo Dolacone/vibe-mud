@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -134,6 +135,73 @@ INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1);
 	}
 	if resourceQuantity(state, "wood") != 0 || resourceQuantity(state, "stone") != 0 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood_component" || state.Inventory[0].Quantity != 3 {
 		t.Fatalf("multi-input craft state = %+v", state)
+	}
+}
+
+func TestCraftRejectsInsufficientAPWithoutChangingAnyState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-craft-ap", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity) VALUES ('ap_limited', 'AP Limited', 10, 'wood_component', 1);
+INSERT INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES ('ap_limited', 'wood', 2), ('ap_limited', 'stone', 3);
+INSERT INTO crafting_recipe_item_inputs (recipe_id, item_id, quantity) VALUES ('ap_limited', 'wood', 1);
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2), (?, 'stone', 3);
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1);`, identity.ID, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Craft(identity.ID, "ap_limited"); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("craft with insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("insufficient-AP craft changed AP, resources, items, or output: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestCraftRejectsInsufficientItemWithoutChangingAnyState(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-craft-item", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity) VALUES ('item_limited', 'Item Limited', 10, 'wood_component', 1);
+INSERT INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES ('item_limited', 'wood', 2), ('item_limited', 'stone', 3);
+INSERT INTO crafting_recipe_item_inputs (recipe_id, item_id, quantity) VALUES ('item_limited', 'wood', 1), ('item_limited', 'wood_component', 1);
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2), (?, 'stone', 3);
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1);`, identity.ID, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Craft(identity.ID, "item_limited"); !errors.Is(err, ErrInsufficientItem) {
+		t.Fatalf("craft with insufficient Item input error = %v, want ErrInsufficientItem", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("insufficient-Item craft changed AP, resources, items, or output: before=%+v after=%+v", before, after)
 	}
 }
 
