@@ -656,12 +656,12 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.UnixNano(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":60}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":100}`))
 	request.Header.Set("X-Request-ID", "contribute-success")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response = httptest.NewRecorder()
 	logOutput = captureStdout(t, func() { handler.ServeHTTP(response, request) })
-	if response.Code != http.StatusOK || !strings.Contains(logOutput, "user_id=1 action=contribute-construction outcome=success request_id=contribute-success") {
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, "user_id=1 action=contribute-construction outcome=success building_id=1 effective_ap=60 resulting_progress=60/60 completion=completed request_id=contribute-success") {
 		t.Fatalf("successful contribution status/log = %d/%q", response.Code, logOutput)
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
@@ -673,6 +673,11 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	for _, secret := range []string{"session-secret", "oauth-code-secret", "access-token", "refresh-token", "id-token"} {
 		if strings.Contains(logOutput, secret) {
 			t.Fatalf("contribution log leaked %q: %q", secret, logOutput)
+		}
+	}
+	for _, rawInput := range []string{`{"building_id":1`, `"ap":100`} {
+		if strings.Contains(logOutput, rawInput) {
+			t.Fatalf("contribution log included raw input %q: %q", rawInput, logOutput)
 		}
 	}
 	for _, input := range []string{`{"building_id":999,"ap":1}`, `{"building_id":1,"ap":1}`} {

@@ -150,17 +150,26 @@ type Building struct {
 	ExtensionSlotCount int
 }
 
+type ConstructionComputation struct {
+	BuildingID        int64
+	EffectiveAP       int
+	ResultingProgress int
+	RequiredAP        int
+	CompletionOutcome string
+}
+
 type PlayerState struct {
-	Location         Location
-	Routes           []Route
-	AP               int
-	Inventory        []InventoryItem
-	GatheringOption  *GatheringOption
-	ConversionOption *ConversionOption
-	Resources        []PlayerResource
-	CraftingRecipes  []CraftingRecipe
-	BuildingRecipes  []BuildingRecipe
-	Buildings        []Building
+	Location                Location
+	Routes                  []Route
+	AP                      int
+	Inventory               []InventoryItem
+	GatheringOption         *GatheringOption
+	ConversionOption        *ConversionOption
+	Resources               []PlayerResource
+	CraftingRecipes         []CraftingRecipe
+	BuildingRecipes         []BuildingRecipe
+	Buildings               []Building
+	ConstructionComputation *ConstructionComputation
 }
 
 const (
@@ -1557,6 +1566,13 @@ WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgr
 	}
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit construction contribution: %w", err)
+	}
+	state.ConstructionComputation = &ConstructionComputation{
+		BuildingID:        buildingID,
+		EffectiveAP:       actualAP,
+		ResultingProgress: newProgress,
+		RequiredAP:        requiredAP,
+		CompletionOutcome: newStatus,
 	}
 	return state, nil
 }

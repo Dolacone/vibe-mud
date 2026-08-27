@@ -628,7 +628,9 @@ func (s *Server) contributeConstruction(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
+	if computation := state.ConstructionComputation; computation != nil {
+		s.logConstructionComputation(r, session.UserID, computation)
+	}
 	s.logAction(r, session.UserID, contributeConstructionAction, "success")
 	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
 }
@@ -1403,6 +1405,10 @@ func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
 
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
+}
+
+func (s *Server) logConstructionComputation(r *http.Request, userID int64, computation *ConstructionComputation) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=success building_id=%d effective_ap=%d resulting_progress=%d/%d completion=%s request_id=%s\n", userID, contributeConstructionAction, computation.BuildingID, computation.EffectiveAP, computation.ResultingProgress, computation.RequiredAP, computation.CompletionOutcome, requestID(r))
 }
 
 func canonicalOrigin(frontend *url.URL) (string, error) {

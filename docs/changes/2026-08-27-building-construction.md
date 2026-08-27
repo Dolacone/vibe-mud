@@ -1,6 +1,6 @@
 ---
 title: "Building construction"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -307,7 +307,7 @@ Acceptance criteria:
 - [x] [Minor] Make the documented `buildings` SQL match the implementation. The document adds a nonexistent `DEFAULT 0` to `contributed_ap` and omits the implemented `DEFAULT ''` from `display_name`.
 - [x] [Major] The same Task 4 API coverage issue remains. The second fix verifies only an empty `resource_inputs` array and never exercises its nested contract. It also omits the `insufficient_resource` API rejection class required by the prior review finding.
 - [x] [Minor] Return a Building-target error from contribution failures. `ErrBuildingNotFound` currently says "building recipe not found", so an unknown `building_id` produces a false error message.
-- [ ] [Major] Log the construction computation result. An oversized request can consume less AP than requested, but the success path logs only the remaining player AP and generic Action success. Record the Building target, effective AP contribution, resulting progress, and completion outcome without logging raw input.
+- [x] [Major] Log the construction computation result. An oversized request can consume less AP than requested, but the success path logs only the remaining player AP and generic Action success. Record the Building target, effective AP contribution, resulting progress, and completion outcome without logging raw input.
 
 ## Plan Review Issues
 
