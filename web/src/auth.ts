@@ -38,6 +38,26 @@ export type Resource = {
   quantity: number;
 };
 
+export type CraftingResourceInput = {
+  resource: Item;
+  quantity: number;
+};
+
+export type CraftingItemInput = {
+  item: Item;
+  quantity: number;
+};
+
+export type CraftingRecipe = {
+  id: string;
+  display_name: string;
+  base_ap_cost: number;
+  resource_inputs: CraftingResourceInput[];
+  item_inputs: CraftingItemInput[];
+  output: Item;
+  output_quantity: number;
+};
+
 export type PlayerState = {
   location: Location;
   routes: Route[];
@@ -46,6 +66,7 @@ export type PlayerState = {
   gathering_option: GatheringOption | null;
   conversion_option: ConversionOption | null;
   resources: Resource[];
+  crafting_recipes?: CraftingRecipe[];
 };
 
 export type CurrentUser = PlayerState & {
@@ -80,6 +101,13 @@ export type GatherResult =
   | { status: "error"; error: Error };
 
 export type ConvertResult =
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "insufficient"; error: string } & PlayerState)
+  | ({ status: "invalid"; error: string; state?: PlayerState })
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type CraftResult =
   | ({ status: "success" } & PlayerState)
   | ({ status: "insufficient"; error: string } & PlayerState)
   | ({ status: "invalid"; error: string; state?: PlayerState })
@@ -128,6 +156,43 @@ function isResource(value: unknown): value is Resource {
   if (typeof value !== "object" || value === null) return false;
   const resource = value as Record<string, unknown>;
   return isItem(resource.resource) && typeof resource.quantity === "number" && Number.isInteger(resource.quantity) && resource.quantity >= 0;
+}
+
+function isCraftingResourceInput(value: unknown): value is CraftingResourceInput {
+  if (typeof value !== "object" || value === null) return false;
+  const input = value as Record<string, unknown>;
+  return isItem(input.resource) && isQuantity(input.quantity);
+}
+
+function isCraftingItemInput(value: unknown): value is CraftingItemInput {
+  if (typeof value !== "object" || value === null) return false;
+  const input = value as Record<string, unknown>;
+  return isItem(input.item) && isQuantity(input.quantity);
+}
+
+function isCraftingRecipe(value: unknown): value is CraftingRecipe {
+  if (typeof value !== "object" || value === null) return false;
+  const recipe = value as Record<string, unknown>;
+  return (
+    isString(recipe.id) &&
+    isString(recipe.display_name) &&
+    typeof recipe.base_ap_cost === "number" &&
+    Number.isInteger(recipe.base_ap_cost) &&
+    recipe.base_ap_cost > 0 &&
+    Array.isArray(recipe.resource_inputs) &&
+    recipe.resource_inputs.length > 0 &&
+    recipe.resource_inputs.every(isCraftingResourceInput) &&
+    Array.isArray(recipe.item_inputs) &&
+    recipe.item_inputs.every(isCraftingItemInput) &&
+    isItem(recipe.output) &&
+    isQuantity(recipe.output_quantity)
+  );
+}
+
+function isCraftingRecipes(value: unknown): value is CraftingRecipe[] {
+  if (!Array.isArray(value) || !value.every(isCraftingRecipe)) return false;
+  const ids = value.map((recipe) => recipe.id);
+  return new Set(ids).size === ids.length;
 }
 
 const resourceIDs = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"];
@@ -185,7 +250,8 @@ function isPlayerState(value: unknown): value is PlayerState {
     state.inventory.every(isInventoryItem) &&
     (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
     (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
-    isResources(state.resources)
+    isResources(state.resources) &&
+    isCraftingRecipes(state.crafting_recipes)
   );
 }
 
@@ -230,6 +296,14 @@ function isConvertConflict(value: unknown): value is { error: string } & PlayerS
   return isConvertError(value) && isPlayerState(value);
 }
 
+function isCraftError(value: unknown): value is { error: string } {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).error === "string";
+}
+
+function isCraftConflict(value: unknown): value is { error: string } & PlayerState {
+  return isCraftError(value) && isPlayerState(value);
+}
+
 export async function getCurrentUser(
   fetcher: typeof fetch = fetch,
 ): Promise<AuthResult> {
@@ -265,6 +339,7 @@ export async function getCurrentUser(
         gathering_option: body.gathering_option,
         conversion_option: body.conversion_option,
         resources: body.resources,
+        crafting_recipes: body.crafting_recipes,
       },
     };
   } catch (error) {
@@ -475,6 +550,61 @@ export async function convert(fetcher: typeof fetch = fetch): Promise<ConvertRes
     return {
       status: "error",
       error: error instanceof Error ? error : new Error("convert request failed"),
+    };
+  }
+}
+
+export async function craft(recipeID: string, fetcher: typeof fetch = fetch): Promise<CraftResult> {
+  if (!isString(recipeID)) {
+    return { status: "invalid", error: "invalid recipe identifier" };
+  }
+
+  try {
+    const response = await fetcher("/api/actions/craft", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe_id: recipeID }),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isCraftConflict(body)) {
+        return { status: "error", error: new Error("craft response is invalid") };
+      }
+      return { status: "insufficient", ...body };
+    }
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (!isCraftError(body)) {
+        return { status: "error", error: new Error("craft response is invalid") };
+      }
+      if (isPlayerState(body)) {
+        const { error, ...state } = body;
+        return { status: "invalid", error, state };
+      }
+      return { status: "invalid", error: body.error };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`craft request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body)) {
+      return { status: "error", error: new Error("craft response is invalid") };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error("craft request failed"),
     };
   }
 }

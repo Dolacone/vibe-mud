@@ -1,10 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { convert, gather, getCurrentUser, move, rest, type PlayerState } from "./auth";
+import { convert, craft, gather, getCurrentUser, move, rest, type CraftingRecipe, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
   quantity: 0,
 }));
+
+const woodComponentRecipe: CraftingRecipe = {
+  id: "wood_component",
+  display_name: "Wood Component",
+  base_ap_cost: 10,
+  resource_inputs: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 10 }],
+  item_inputs: [],
+  output: { id: "wood_component", display_name: "Wood Component" },
+  output_quantity: 1,
+};
 
 const campState: PlayerState = {
   location: { id: "camp", display_name: "Camp" },
@@ -20,6 +30,7 @@ const campState: PlayerState = {
     ap_cost: 1,
   },
   resources,
+  crafting_recipes: [woodComponentRecipe],
 };
 
 const forestState: PlayerState = {
@@ -34,6 +45,7 @@ const forestState: PlayerState = {
   },
   conversion_option: null,
   resources,
+  crafting_recipes: [woodComponentRecipe],
 };
 
 const gatheredForestState: PlayerState = {
@@ -406,5 +418,56 @@ describe("convert", () => {
 
     const malformedInvalid = vi.fn().mockResolvedValue(new Response(JSON.stringify({ resources: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 1 }] }), { status: 400 }));
     await expect(convert(malformedInvalid)).resolves.toMatchObject({ status: "error" });
+  });
+});
+
+describe("craft", () => {
+  it("submits only the backend recipe identifier and returns authoritative state", async () => {
+    const craftedState: PlayerState = {
+      ...campState,
+      ap: 2990,
+      resources: resources.map((entry) => entry.resource.id === "wood" ? { ...entry, quantity: 0 } : entry),
+      inventory: [{ item: woodComponentRecipe.output, quantity: 1 }],
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(craftedState), { status: 200 }));
+
+    await expect(craft(woodComponentRecipe.id, fetcher)).resolves.toEqual({ status: "success", ...craftedState });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/craft", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe_id: woodComponentRecipe.id }),
+    });
+  });
+
+  it("returns the backend state for insufficient inputs", async () => {
+    const failedState = { ...campState, ap: 5 };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "insufficient action points", ...failedState }), { status: 409 }));
+    await expect(craft(woodComponentRecipe.id, fetcher)).resolves.toEqual({ status: "insufficient", error: "insufficient action points", ...failedState });
+  });
+
+  it("returns the backend state for invalid requests", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "unknown recipe", ...campState }), { status: 400 }));
+    await expect(craft("missing", fetcher)).resolves.toEqual({ status: "invalid", error: "unknown recipe", state: campState });
+  });
+
+  it("rejects malformed recipe state and craft responses", async () => {
+    const malformedRecipe = { ...campState, crafting_recipes: [{ ...woodComponentRecipe, output: undefined }] };
+    const recipeFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...malformedRecipe }), { status: 200 }));
+    await expect(getCurrentUser(recipeFetcher)).resolves.toMatchObject({ status: "error" });
+
+    const responseFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, crafting_recipes: [{ ...woodComponentRecipe, resource_inputs: [] }] }), { status: 200 }));
+    await expect(craft(woodComponentRecipe.id, responseFetcher)).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("rejects malformed conflict responses instead of inventing state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "insufficient resource", ap: 0 }), { status: 409 }));
+    await expect(craft(woodComponentRecipe.id, fetcher)).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("rejects a blank recipe identifier before sending a request", async () => {
+    const fetcher = vi.fn();
+    await expect(craft("  ", fetcher)).resolves.toEqual({ status: "invalid", error: "invalid recipe identifier" });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
