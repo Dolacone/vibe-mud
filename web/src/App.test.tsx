@@ -5,7 +5,7 @@ import * as auth from "./auth";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
@@ -13,6 +13,7 @@ const rest = vi.mocked(auth.rest);
 const move = vi.mocked(auth.move);
 const gather = vi.mocked(auth.gather);
 const convert = vi.mocked(auth.convert);
+const craft = vi.mocked(auth.craft);
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -22,6 +23,16 @@ const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal
 const resourcesWithWood = (quantity: number) => resources.map((entry) => (
   entry.resource.id === "wood" ? { ...entry, quantity } : entry
 ));
+
+const woodComponentRecipe = {
+  id: "wood_component",
+  display_name: "Wood Component",
+  base_ap_cost: 10,
+  resource_inputs: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 10 }],
+  item_inputs: [],
+  output: { id: "wood_component", display_name: "Wood Component" },
+  output_quantity: 1,
+};
 
 const campState = {
   location: { id: "camp", display_name: "Camp" },
@@ -37,6 +48,7 @@ const campState = {
     ap_cost: 1,
   },
   resources,
+  crafting_recipes: [woodComponentRecipe],
 };
 
 const forestState = {
@@ -47,6 +59,7 @@ const forestState = {
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
   conversion_option: null,
   resources,
+  crafting_recipes: [woodComponentRecipe],
 };
 
 describe("App", () => {
@@ -56,6 +69,7 @@ describe("App", () => {
     move.mockReset();
     gather.mockReset();
     convert.mockReset();
+    craft.mockReset();
   });
 
   it("loads and displays only the backend-confirmed identity", async () => {
@@ -74,6 +88,11 @@ describe("App", () => {
     expect(screen.getByText("To forest_edge (20 AP)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
+    expect(screen.getByText("AP cost: 10")).toBeInTheDocument();
+    expect(screen.getByText("Wood: 10")).toBeInTheDocument();
+    expect(screen.getByText("Output: Wood Component: 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();
     expect(screen.getByText("Input: 1 Wood; Yield: 1 Wood Resource; Cost: 1 AP")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
@@ -153,6 +172,63 @@ describe("App", () => {
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
     expect(screen.queryByText("Wood: 1", { selector: "li" })).toBeInTheDocument();
     expect(convert).toHaveBeenCalledTimes(1);
+  });
+
+  it("crafts by recipe identifier and displays authoritative state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, resources: resourcesWithWood(10) } });
+    craft.mockResolvedValue({
+      status: "success",
+      ...campState,
+      ap: 2990,
+      resources: resourcesWithWood(0),
+      inventory: [{ item: woodComponentRecipe.output, quantity: 1 }],
+    });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Craft Wood Component" })).click();
+    await waitFor(() => expect(screen.getByText("Craft succeeded.")).toBeInTheDocument());
+    expect(screen.getByText("AP: 2990")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 0");
+    expect(screen.getByText("Wood Component: 1")).toBeInTheDocument();
+    expect(craft).toHaveBeenCalledWith("wood_component");
+  });
+
+  it("displays the recipe at a non-camp location", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...forestState } });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
+    expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument();
+  });
+
+  it("keeps authoritative state after a failed craft", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 5, resources: resourcesWithWood(2) } });
+    craft.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...campState, ap: 5, resources: resourcesWithWood(2) });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Craft Wood Component" })).click();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByText("AP: 5")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 2");
+    expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
+  });
+
+  it("prevents duplicate crafts while one is pending", async () => {
+    let resolveCraft: ((value: auth.CraftResult) => void) | undefined;
+    craft.mockReturnValue(new Promise((resolve) => { resolveCraft = resolve; }));
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Craft Wood Component" });
+    button.click();
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(craft).toHaveBeenCalledTimes(1);
+    button.click();
+    expect(craft).toHaveBeenCalledTimes(1);
+
+    resolveCraft?.({ status: "success", ...campState, ap: 2990, inventory: [{ item: woodComponentRecipe.output, quantity: 1 }] });
+    await waitFor(() => expect(screen.getByText("Wood Component: 1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
   });
 
   it("applies the authoritative state after an unsuccessful conversion", async () => {
