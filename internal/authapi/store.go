@@ -106,8 +106,6 @@ type PlayerState struct {
 	GatheringOption  *GatheringOption
 	ConversionOption *ConversionOption
 	Resources        []PlayerResource
-	// Resource remains as a compatibility mirror until the API task removes it.
-	Resource int
 }
 
 const (
@@ -552,9 +550,6 @@ ORDER BY rt.id`, userID)
 			return PlayerState{}, fmt.Errorf("scan player resources: %w", err)
 		}
 		state.Resources = append(state.Resources, resource)
-		if resource.Resource.ID == "wood" {
-			state.Resource = resource.Quantity
-		}
 	}
 	if err := resourceRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read player resources: %w", err)

@@ -286,7 +286,7 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
     input_item_id TEXT NOT NULL REFERENCES items(id),
     input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
     output_resource_id TEXT NOT NULL REFERENCES resource_types(id),
-    output_quantity INTEGER NOT NULL CHECK (output_quantity > 0),
+    resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
     ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
 );
 ```
@@ -297,7 +297,7 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
 | `input_item_id` | 成功時從 Inventory 扣除的 item。 |
 | `input_quantity` | 每次成功時扣除的 item quantity。 |
 | `output_resource_id` | 每次成功時增加的 Resource type。 |
-| `output_quantity` | 每次成功時增加的 Resource quantity。 |
+| `resource_yield` | 每次成功時增加的 Resource quantity。 |
 | `ap_cost` | 每次成功時消耗的 AP。 |
 
 索引與約束：所有 conversion values 都由後端資料決定。前端只提交 `{}`。
@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
 CREATE TABLE IF NOT EXISTS player_resources (
     user_id INTEGER NOT NULL REFERENCES identities(id),
     resource_id TEXT NOT NULL REFERENCES resource_types(id),
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
     PRIMARY KEY (user_id, resource_id)
 );
 ```
@@ -319,7 +319,7 @@ CREATE TABLE IF NOT EXISTS player_resources (
 |---|---|
 | `user_id` | 持有 Resource 的玩家。 |
 | `resource_id` | 玩家持有的 Resource type。 |
-| `quantity` | 玩家持有的正整數 Resource quantity。 |
+| `quantity` | 玩家持有的非負整數 Resource quantity。 |
 
 索引與約束：複合 primary key 保證每位玩家每種 Resource 只有一筆 quantity。Resource 與 Inventory 分開保存。
 
@@ -380,7 +380,7 @@ INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
 ('medicinal', 'Medicinal'),
 ('arcane', 'Arcane');
 
-INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, output_quantity, ap_cost)
+INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
 VALUES ('camp', 'wood', 1, 'wood', 1, 1);
 ```
 

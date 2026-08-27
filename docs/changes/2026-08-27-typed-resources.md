@@ -1,6 +1,6 @@
 ---
 title: "Typed resources"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -16,6 +16,9 @@ source_paths:
   - web/src/auth.test.ts
   - web/src/App.tsx
   - web/src/App.test.tsx
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-007.md
+  - requirements/REQ-008.md
 req_ref: REQ-007
 related_req_refs:
   - REQ-008
@@ -154,7 +157,7 @@ Acceptance criteria:
 
 ## Review Issues
 
-- [ ] [Major] `docs/schemas.md` 記錄 `conversion_rules.output_quantity` 與 `CHECK (quantity > 0)`，但實作建立 `resource_yield` 與 `CHECK (quantity >= 0)`。文件必須與實際 SQLite schema 一致。
-- [ ] [Minor] `PlayerState.Resource` 仍保留 generic Resource mirror。其註解要求 API task 移除，但已完成的 Task 2 沒有移除。
-- [ ] [Minor] `source_paths` 未列出相對 `main` 已修改的 `requirements/BEHAVIOR.md`、`requirements/REQ-007.md` 與 `requirements/REQ-008.md`。
-- [ ] [Minor] `TestConvertAPIUpdatesStateAndUsesBackendOwnedValues` 重新讀取後只檢查 Wood Resource ID。測試在已保存 quantity 錯誤時仍會通過。
+- [x] [Major] `docs/schemas.md` 記錄 `conversion_rules.output_quantity` 與 `CHECK (quantity > 0)`，但實作建立 `resource_yield` 與 `CHECK (quantity >= 0)`。文件必須與實際 SQLite schema 一致。
+- [x] [Minor] `PlayerState.Resource` 仍保留 generic Resource mirror。其註解要求 API task 移除，但已完成的 Task 2 沒有移除。
+- [x] [Minor] `source_paths` 未列出相對 `main` 已修改的 `requirements/BEHAVIOR.md`、`requirements/REQ-007.md` 與 `requirements/REQ-008.md`。
+- [x] [Minor] `TestConvertAPIUpdatesStateAndUsesBackendOwnedValues` 重新讀取後只檢查 Wood Resource ID。測試在已保存 quantity 錯誤時仍會通過。

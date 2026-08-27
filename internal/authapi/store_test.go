@@ -387,9 +387,6 @@ func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
 	if state.ConversionOption == nil || state.ConversionOption.Item.ID != "wood" || state.ConversionOption.Item.DisplayName != "Wood" || state.ConversionOption.Resource.ID != "wood" || state.ConversionOption.Resource.DisplayName != "Wood" || state.ConversionOption.InputQuantity != 1 || state.ConversionOption.ResourceYield != 1 || state.ConversionOption.APCost != 1 {
 		t.Fatalf("camp conversion option = %+v, want backend seed", state.ConversionOption)
 	}
-	if state.Resource != 0 {
-		t.Fatalf("new player Resource = %d, want 0", state.Resource)
-	}
 	wantResources := []string{"arcane", "fiber", "food", "hide", "medicinal", "metal", "stone", "wood"}
 	if len(state.Resources) != len(wantResources) {
 		t.Fatalf("new player Resources = %+v, want eight resources", state.Resources)
@@ -890,14 +887,14 @@ func TestConvertConsumesWoodAPAndAccumulatesResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP-1 || state.Resource != 1 || len(state.Resources) != 8 || resourceQuantity(state, "wood") != 1 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
+	if state.AP != maxAP-1 || len(state.Resources) != 8 || resourceQuantity(state, "wood") != 1 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
 		t.Fatalf("first convert state = %+v, want one Wood, one Resource and AP %d", state, maxAP-1)
 	}
 	state, err = store.Convert(identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP-2 || state.Resource != 2 || resourceQuantity(state, "wood") != 2 || len(state.Inventory) != 0 {
+	if state.AP != maxAP-2 || resourceQuantity(state, "wood") != 2 || len(state.Inventory) != 0 {
 		t.Fatalf("second convert state = %+v, want empty inventory, two Resources and AP %d", state, maxAP-2)
 	}
 
@@ -910,7 +907,7 @@ func TestConvertConsumesWoodAPAndAccumulatesResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Resource != 2 || resourceQuantity(persisted, "wood") != 2 || len(persisted.Inventory) != 0 || persisted.AP != maxAP-2 {
+	if resourceQuantity(persisted, "wood") != 2 || len(persisted.Inventory) != 0 || persisted.AP != maxAP-2 {
 		t.Fatalf("reloaded convert state = %+v, want persisted Resource and AP", persisted)
 	}
 }
@@ -940,7 +937,7 @@ func TestConvertRejectsWrongLocationWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Location != before.Location || after.AP != before.AP || after.Resource != before.Resource || len(after.Inventory) != 1 || after.Inventory[0].Quantity != before.Inventory[0].Quantity {
+	if after.Location != before.Location || after.AP != before.AP || len(after.Inventory) != 1 || after.Inventory[0].Quantity != before.Inventory[0].Quantity || resourceQuantity(after, "wood") != resourceQuantity(before, "wood") {
 		t.Fatalf("state after wrong-location convert = %+v, want unchanged %+v", after, before)
 	}
 }
@@ -971,7 +968,7 @@ func TestConvertRejectsMissingWoodWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 0 {
+	if state.AP != maxAP || len(state.Inventory) != 0 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("state after missing-Wood convert = %+v, want unchanged", state)
 	}
 }
@@ -998,7 +995,7 @@ func TestConvertRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != 0 || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+	if state.AP != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("state after insufficient-AP convert = %+v, want unchanged", state)
 	}
 	var after int64
@@ -1035,7 +1032,7 @@ END;`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+	if state.AP != maxAP || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("rolled-back convert state = %+v, want original state", state)
 	}
 }

@@ -740,6 +740,14 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	if meResponse.Code != http.StatusOK || !strings.Contains(meResponse.Body.String(), `"resources"`) || !strings.Contains(meResponse.Body.String(), `"id":"wood","display_name":"Wood"`) {
 		t.Fatalf("GET /api/me after convert = %d: %s", meResponse.Code, meResponse.Body.String())
 	}
+	var persistedBody map[string]any
+	if err := json.Unmarshal([]byte(meResponse.Body.String()), &persistedBody); err != nil {
+		t.Fatal(err)
+	}
+	persistedResources := responseResourceQuantities(t, persistedBody)
+	if persistedResources["wood"] != float64(1) {
+		t.Fatalf("GET /api/me persisted Wood quantity = %v, want 1", persistedResources["wood"])
+	}
 }
 
 func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
