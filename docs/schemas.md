@@ -42,6 +42,9 @@ source_paths:
 | `resource_types` | 保存後端允許的 Resource type。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
 | `conversion_rules` | 保存 Location 可轉換的 item、typed Resource 產量與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義轉換規則，不保存玩家執行紀錄。 |
 | `player_resources` | 保存每位玩家每種 Resource 的 quantity。 | 首次取得該 Resource 時建立，後續取得時累加。 | 它保存 typed quantity，不是 Inventory item quantity。 |
+| `crafting_recipes` | 保存後端允許的 recipe、基本 AP 成本與明確 output。 | Store 初始化時建立固定 seed。 | 它定義 recipe header，不保存 inputs 或玩家執行紀錄。 |
+| `crafting_recipe_resource_inputs` | 保存每個 recipe 消耗的 Resource inputs。 | Recipe seed 建立時加入。 | 它保存 Resource 成本，不保存玩家 Resource quantity。 |
+| `crafting_recipe_item_inputs` | 保存每個 recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存 Item 成本，不保存玩家 Inventory quantity。 |
 
 ## identities
 
@@ -323,6 +326,72 @@ CREATE TABLE IF NOT EXISTS player_resources (
 
 索引與約束：複合 primary key 保證每位玩家每種 Resource 只有一筆 quantity。Resource 與 Inventory 分開保存。
 
+## crafting_recipes
+
+用途：定義後端允許的 deterministic crafting recipe。Recipe 不受 Location 限制。Output Item 與 quantity 必須明確保存，不能從 recipe 名稱推導。
+
+```sql
+CREATE TABLE IF NOT EXISTS crafting_recipes (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    base_ap_cost INTEGER NOT NULL CHECK (base_ap_cost > 0),
+    output_item_id TEXT NOT NULL REFERENCES items(id),
+    output_quantity INTEGER NOT NULL CHECK (output_quantity > 0)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | API 與 input tables 使用的穩定 recipe identifier。 |
+| `display_name` | 前端顯示的 recipe 名稱。 |
+| `base_ap_cost` | 徒手執行一次 recipe 的 AP 成本。 |
+| `output_item_id` | 成功時加入 Inventory 的明確 Item。 |
+| `output_quantity` | 成功時增加的 Item quantity。 |
+
+索引與約束：Primary key 為 `id`。Recipe 不保存 Location 或成功機率。
+
+## crafting_recipe_resource_inputs
+
+用途：定義 recipe 必須消耗的一種以上 Resource inputs。
+
+```sql
+CREATE TABLE IF NOT EXISTS crafting_recipe_resource_inputs (
+    recipe_id TEXT NOT NULL REFERENCES crafting_recipes(id),
+    resource_id TEXT NOT NULL REFERENCES resource_types(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (recipe_id, resource_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `recipe_id` | 消耗 Resource 的 recipe。 |
+| `resource_id` | 被消耗的 Resource type。 |
+| `quantity` | 執行一次 recipe 的 Resource 成本。 |
+
+索引與約束：複合 primary key 防止同一 recipe 重複定義同一 Resource。後端只回傳至少有一筆 Resource input 的 recipe。
+
+## crafting_recipe_item_inputs
+
+用途：定義 recipe 可以消耗的零種以上 Inventory Item inputs。沒有 rows 代表 recipe 不消耗 Item。
+
+```sql
+CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
+    recipe_id TEXT NOT NULL REFERENCES crafting_recipes(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (recipe_id, item_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `recipe_id` | 消耗 Item 的 recipe。 |
+| `item_id` | 被消耗的 Inventory Item。 |
+| `quantity` | 執行一次 recipe 的 Item 成本。 |
+
+索引與約束：複合 primary key 防止同一 recipe 重複定義同一 Item。
+
 ## 關聯與約束
 
 ```text
@@ -343,11 +412,18 @@ locations.id
 items.id
 ├── gathering_rules.item_id       Gathering 產出的 item
 ├── conversion_rules.input_item_id Conversion 消耗的 item
-└── player_inventory.item_id      玩家持有的 item
+├── player_inventory.item_id      玩家持有的 item
+├── crafting_recipes.output_item_id Crafting 產出的 item
+└── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
 
 resource_types.id
 ├── conversion_rules.output_resource_id Conversion 產出的 Resource type
-└── player_resources.resource_id         玩家持有的 Resource type
+├── player_resources.resource_id         玩家持有的 Resource type
+└── crafting_recipe_resource_inputs.resource_id Crafting 消耗的 Resource type
+
+crafting_recipes.id
+├── crafting_recipe_resource_inputs.recipe_id Resource inputs
+└── crafting_recipe_item_inputs.recipe_id     Item inputs
 
 oauth_attempts          OAuth 完成前的獨立暫存狀態
 ```
@@ -382,7 +458,18 @@ INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
 
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
 VALUES ('camp', 'wood', 1, 'wood', 1, 1);
+
+INSERT OR IGNORE INTO items (id, display_name)
+VALUES ('wood_component', 'Wood Component');
+
+INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
+VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
+
+INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
+VALUES ('wood_component', 'wood', 10);
 ```
+
+Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
@@ -393,6 +480,8 @@ VALUES ('camp', 'wood', 1, 'wood', 1, 1);
 `gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並以 upsert 累加 `player_inventory.quantity`。兩項更新必須在同一 transaction commit。
 
 `convert` transaction 會依玩家目前位置查找 conversion rule。Rule 不存在、Wood 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除 Wood item，並以 upsert 累加 Wood Resource quantity。Wood item quantity 歸零時，系統刪除該 Inventory row。三項更新必須在同一 transaction commit。
+
+`craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
 
 ## 已知限制
 

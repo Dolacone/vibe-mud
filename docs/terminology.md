@@ -18,19 +18,22 @@ scope: "Canonical game terms used by the application."
 
 | 英文名稱 | 縮寫 | 中文名稱 | 對應 REQ |
 |---|---|---|---|
-| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
+| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md) |
 | [Action: rest](#action-rest) | - | 休息行動 | [REQ-004](../requirements/REQ-004.md) |
 | [Action: move](#action-move) | - | 移動行動 | [REQ-005](../requirements/REQ-005.md) |
 | [Action: gather](#action-gather) | - | 採集行動 | [REQ-006](../requirements/REQ-006.md) |
 | [Action: convert](#action-convert) | - | 轉換行動 | [REQ-008](../requirements/REQ-008.md) |
+| [Action: craft](#action-craft) | - | 製作行動 | [REQ-009](../requirements/REQ-009.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
-| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
+| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md) |
 | [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md) |
+| [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
 | [Wood item](#wood-item) | - | 木材物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
 | [Wood Resource](#wood-resource) | - | 木材資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-008](../requirements/REQ-008.md) |
+| [Wood Component](#wood-component) | - | 木質加工品 | [REQ-009](../requirements/REQ-009.md) |
 
 ## 名詞定義
 
@@ -39,7 +42,7 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Action
 - 中文名稱：行動
 - 定義：玩家要求後端執行的遊戲狀態變更。後端只執行明確允許的 Action。
-- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)
 - 與相似名詞的差異：Action 是行為種類。AP 是執行 Action 可以消耗的資源。
 
 ### Action: rest
@@ -74,6 +77,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-008 - Action: convert](../requirements/REQ-008.md)
 - 與相似名詞的差異：`convert` 消耗 Item 並產出 Resource。`gather` 產出 Item。
 
+### Action: craft
+
+- 正式英文名稱：Action: craft
+- 中文名稱：製作行動
+- 定義：玩家消耗 recipe 定義的基本 AP、Resource inputs 與 Item inputs，取得明確 output Item 的 Action。
+- 對應行為：[REQ-009 - Action: craft](../requirements/REQ-009.md)
+- 與相似名詞的差異：`craft` 消耗 Resource 與可選 Item inputs，產出 Item。`convert` 消耗 Item 並產出 Resource。
+
 ### Action Points (AP)
 
 - 正式英文名稱：Action Points
@@ -96,7 +107,7 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Item
 - 中文名稱：物品
 - 定義：玩家可以取得並保存在 Inventory 的離散物品種類。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)
 - 與相似名詞的差異：Item 以 Inventory quantity 保存。Resource 依 Resource type 保存獨立 quantity。
 
 ### Location
@@ -124,6 +135,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)
 - 與相似名詞的差異：Resource 依 type 累積 quantity。Item 以種類與 quantity 保存在 Inventory。
 
+### Recipe
+
+- 正式英文名稱：Recipe
+- 中文名稱：配方
+- 定義：後端定義的 crafting 規則。它包含穩定 identifier、顯示名稱、基本 AP 成本、Resource inputs、Item inputs 與明確 output Item。
+- 對應行為：[REQ-009 - Action: craft](../requirements/REQ-009.md)
+- 與相似名詞的差異：Recipe 定義 `craft` 的成本與結果。Action 是玩家要求執行 recipe 的行為。
+
 ### Wood item
 
 - 正式英文名稱：Wood item
@@ -139,3 +158,11 @@ scope: "Canonical game terms used by the application."
 - 定義：`convert` 消耗 Wood item 後增加的 typed Resource quantity。
 - 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
 - 與相似名詞的差異：Wood Resource 是 Resource quantity。Wood item 是 Inventory item。
+
+### Wood Component
+
+- 正式英文名稱：Wood Component
+- 中文名稱：木質加工品
+- 定義：第一種 crafting output Item。玩家消耗 10 Wood Resource 與 10 AP 製作 1 個 Wood Component。
+- 對應行為：[REQ-009 - Action: craft](../requirements/REQ-009.md)
+- 與相似名詞的差異：Wood Component 是 Inventory Item。Wood Resource 是 crafting input。
