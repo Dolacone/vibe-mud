@@ -120,11 +120,11 @@ Acceptance criteria:
 
 ### Task 2: Start Building construction atomically
 
-- [ ] Add a store operation that resolves a Location-independent backend-owned recipe, then assigns the new Building to the player's current Location.
-- [ ] Atomically consume every recipe input and create an in-progress owned Building.
-- [ ] Enforce one Building per owner and Location for completed and in-progress rows.
-- [ ] Preserve every player and Building value after unknown recipe, insufficient input, or occupied slot failures.
-- [ ] Cover Resource inputs, Item inputs, mixed inputs, exact depletion, uniqueness, rollback, and recipe snapshot behavior in `internal/authapi/store_test.go`.
+- [x] Add a store operation that resolves a Location-independent backend-owned recipe, then assigns the new Building to the player's current Location.
+- [x] Atomically consume every recipe input and create an in-progress owned Building.
+- [x] Enforce one Building per owner and Location for completed and in-progress rows.
+- [x] Preserve every player and Building value after unknown recipe, insufficient input, or occupied slot failures.
+- [x] Cover Resource inputs, Item inputs, mixed inputs, exact depletion, uniqueness, rollback, and recipe snapshot behavior in `internal/authapi/store_test.go`.
 
 Source files: `internal/authapi/store.go`
 

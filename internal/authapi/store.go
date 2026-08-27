@@ -27,6 +27,8 @@ var (
 	ErrInsufficientItem     = errors.New("insufficient item")
 	ErrCraftingNotFound     = errors.New("crafting recipe not found")
 	ErrInsufficientResource = errors.New("insufficient resource")
+	ErrBuildingNotFound     = errors.New("building recipe not found")
+	ErrBuildingOccupied     = errors.New("building location already occupied")
 )
 
 type Store struct {
@@ -1300,6 +1302,143 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("commit craft: %w", err)
 	}
 	return state, nil
+}
+
+func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
+	if userID <= 0 || strings.TrimSpace(recipeID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: user ID and recipe ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin building: %w", err)
+	}
+	recipe, err := buildingRecipeForID(tx, recipeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get building recipe: %w", err)
+	}
+	var locationID string
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get building location: %w", err)
+	}
+	var occupied int
+	err = tx.QueryRow(`SELECT 1 FROM buildings WHERE owner_id = ? AND location_id = ?`, userID, locationID).Scan(&occupied)
+	if err == nil {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingOccupied
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check building location: %w", err)
+	}
+	for _, input := range recipe.ResourceInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_resources WHERE user_id = ? AND resource_id = ?`, userID, input.Resource.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientResource
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get building resource: %w", err)
+		}
+	}
+	itemQuantities := make(map[string]int, len(recipe.ItemInputs))
+	for _, input := range recipe.ItemInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientItem
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get building item: %w", err)
+		}
+		itemQuantities[input.Item.ID] = quantity
+	}
+	for _, input := range recipe.ResourceInputs {
+		result, err := tx.Exec(`UPDATE player_resources SET quantity = quantity - ? WHERE user_id = ? AND resource_id = ?`, input.Quantity, userID, input.Resource.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building resource: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check building resource: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientResource
+		}
+	}
+	for _, input := range recipe.ItemInputs {
+		var result sql.Result
+		if itemQuantities[input.Item.ID] == input.Quantity {
+			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID)
+		} else {
+			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, input.Quantity, userID, input.Item.ID)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building item: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check building item: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientItem
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM player_resources WHERE user_id = ? AND quantity = 0`, userID); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("delete empty building resources: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count)
+VALUES (?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.ID, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount); err != nil {
+		_ = tx.Rollback()
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: buildings.owner_id, buildings.location_id") {
+			return PlayerState{}, ErrBuildingOccupied
+		}
+		return PlayerState{}, fmt.Errorf("create building: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit building: %w", err)
+	}
+	return state, nil
+}
+
+func buildingRecipeForID(tx *sql.Tx, recipeID string) (BuildingRecipe, error) {
+	var recipe BuildingRecipe
+	err := tx.QueryRow(`
+SELECT id, display_name, building_level, required_ap, extension_slot_count
+FROM building_recipes WHERE id = ?`, recipeID).Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount)
+	if err != nil {
+		return BuildingRecipe{}, err
+	}
+	if err := loadBuildingInputsTx(tx, &recipe); err != nil {
+		return BuildingRecipe{}, err
+	}
+	if len(recipe.ResourceInputs) == 0 && len(recipe.ItemInputs) == 0 {
+		return BuildingRecipe{}, sql.ErrNoRows
+	}
+	return recipe, nil
 }
 
 func calculateAP(fullTimestamp, now time.Time) int {
