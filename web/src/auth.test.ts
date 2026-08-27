@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { convert, craft, gather, getCurrentUser, move, rest, type CraftingRecipe, type PlayerState } from "./auth";
+import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -14,6 +14,27 @@ const woodComponentRecipe: CraftingRecipe = {
   item_inputs: [],
   output: { id: "wood_component", display_name: "Wood Component" },
   output_quantity: 1,
+};
+
+const buildingRecipe: BuildingRecipe = {
+  id: "building_lv1",
+  display_name: "Building Lv1",
+  building_level: 1,
+  required_ap: 60,
+  extension_slot_count: 1,
+  resource_inputs: [],
+  item_inputs: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 1 }],
+};
+
+const building: Building = {
+  id: 1,
+  owner: { id: 1, display_name: "Player" },
+  recipe: { id: "building_lv1", display_name: "Building Lv1" },
+  building_level: 1,
+  required_ap: 60,
+  contributed_ap: 0,
+  status: "under_construction",
+  extension_slot_count: 1,
 };
 
 const campState: PlayerState = {
@@ -31,6 +52,8 @@ const campState: PlayerState = {
   },
   resources,
   crafting_recipes: [woodComponentRecipe],
+  building_recipes: [buildingRecipe],
+  buildings: [building],
 };
 
 const forestState: PlayerState = {
@@ -46,6 +69,8 @@ const forestState: PlayerState = {
   conversion_option: null,
   resources,
   crafting_recipes: [woodComponentRecipe],
+  building_recipes: [buildingRecipe],
+  buildings: [],
 };
 
 const gatheredForestState: PlayerState = {
@@ -486,6 +511,59 @@ describe("craft", () => {
   it("rejects a blank recipe identifier before sending a request", async () => {
     const fetcher = vi.fn();
     await expect(craft("  ", fetcher)).resolves.toEqual({ status: "invalid", error: "invalid recipe identifier" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("building actions", () => {
+  it("parses typed Building state and submits only the recipe identifier", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(campState), { status: 200 }));
+    await expect(build(buildingRecipe.id, fetcher)).resolves.toEqual({ status: "success", ...campState });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/build", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe_id: "building_lv1" }),
+    });
+  });
+
+  it("submits only a Building identifier and positive AP for shared construction", async () => {
+    const state = { ...campState, ap: 2990, buildings: [{ ...building, contributed_ap: 10 }] };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(state), { status: 200 }));
+    await expect(contributeConstruction(1, 10, fetcher)).resolves.toEqual({ status: "success", ...state });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/contribute-construction", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ building_id: 1, ap: 10 }),
+    });
+  });
+
+  it("applies authoritative Building state for every server failure", async () => {
+    const state = { ...campState, ap: 0 };
+    for (const status of [400, 409]) {
+      const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "building rejected", ...state }), { status }));
+      await expect(build("building_lv1", fetcher)).resolves.toEqual({
+        status: status === 409 ? "insufficient" : "invalid",
+        error: "building rejected",
+        ...state,
+      });
+    }
+  });
+
+  it("rejects malformed Building state and server responses", async () => {
+    const malformed = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, buildings: [{ ...building, status: "broken" }] }), { status: 200 }));
+    await expect(getCurrentUser(malformed)).resolves.toMatchObject({ status: "error" });
+
+    const malformedFailure = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "rejected", ...campState, buildings: [{ ...building, contributed_ap: 61 }] }), { status: 400 }));
+    await expect(build("building_lv1", malformedFailure)).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("rejects local invalid inputs without sending requests", async () => {
+    const fetcher = vi.fn();
+    await expect(build("  ", fetcher)).resolves.toEqual({ status: "invalid", error: "invalid recipe identifier" });
+    await expect(contributeConstruction(0, 1, fetcher)).resolves.toEqual({ status: "invalid", error: "invalid building identifier" });
+    await expect(contributeConstruction(1, 0, fetcher)).resolves.toEqual({ status: "invalid", error: "invalid AP" });
     expect(fetcher).not.toHaveBeenCalled();
   });
 });

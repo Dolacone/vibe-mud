@@ -14,6 +14,8 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
 req_ref: REQ-010
 base_branch: main
 scope: "Tracks Building Lv1 placement, shared AP contributions, completion, and persistence."
@@ -221,13 +223,13 @@ Acceptance criteria:
 
 ### Task 5: Parse Building state and Actions in the frontend client
 
-- [ ] Parse recipe `id`, `display_name`, `building_level`, `required_ap`, `extension_slot_count`, `resource_inputs`, and `item_inputs` from the `building_recipes` array in `web/src/auth.ts`.
-- [ ] Parse Building numeric `id`, owner `id` and `display_name`, recipe `id` and `display_name`, `building_level`, `required_ap`, `contributed_ap`, `status`, and `extension_slot_count` from the `buildings` array.
-- [ ] Submit only recipe identifier for start and Building identifier with requested AP for contribution.
-- [ ] Apply backend-authoritative state for success and every server failure.
-- [ ] Reject malformed Building state and Action responses in `web/src/auth.test.ts`.
+- [x] Parse recipe `id`, `display_name`, `building_level`, `required_ap`, `extension_slot_count`, `resource_inputs`, and `item_inputs` from the `building_recipes` array in `web/src/auth.ts`.
+- [x] Parse Building numeric `id`, owner `id` and `display_name`, recipe `id` and `display_name`, `building_level`, `required_ap`, `contributed_ap`, `status`, and `extension_slot_count` from the `buildings` array.
+- [x] Submit only recipe identifier for start and Building identifier with requested AP for contribution.
+- [x] Apply backend-authoritative state for success and every server failure.
+- [x] Reject malformed Building state and Action responses in `web/src/auth.test.ts`.
 
-Source files: `web/src/auth.ts`
+Source files: `web/src/auth.ts`, `web/src/auth.test.ts`
 
 Acceptance criteria:
 
