@@ -9,10 +9,21 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
+
+func sortedMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 type fakeProvider struct {
 	authorizationURL string
@@ -557,7 +568,8 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	request.Header.Set("X-Request-ID", "build-api")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response := httptest.NewRecorder()
-	logOutput := captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	var logOutput string
+	logOutput = captureStdout(t, func() { handler.ServeHTTP(response, request) })
 	if response.Code != http.StatusBadRequest || strings.Contains(logOutput, `"recipe_id"`) {
 		t.Fatalf("build whitelist status/log = %d/%q", response.Code, logOutput)
 	}
@@ -577,8 +589,12 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		t.Fatalf("buildings response = %#v", body["buildings"])
 	}
 	building := buildings[0].(map[string]any)
-	if building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" {
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "extension_slot_count", "id", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" {
 		t.Fatalf("building response = %#v", building)
+	}
+	recipe := building["recipe"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(recipe), []string{"display_name", "id"}) || recipe["id"] != "building_lv1" || recipe["display_name"] != "Building Lv1" {
+		t.Fatalf("building recipe response = %#v", recipe)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":10,"extra":true}`))
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
@@ -593,6 +609,86 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	buildings = body["buildings"].([]any)
 	if buildings[0].(map[string]any)["contributed_ap"] != float64(0) {
 		t.Fatalf("rejected contribution changed state = %#v", buildings[0])
+	}
+	for _, input := range []string{`{}`, `{"building_id":1,"ap":0}`, `{"building_id":1,"ap":-1}`} {
+		request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(input))
+		request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+		failure := httptest.NewRecorder()
+		handler.ServeHTTP(failure, request)
+		if failure.Code != http.StatusBadRequest {
+			t.Fatalf("malformed contribution %s status = %d", input, failure.Code)
+		}
+		var failureBody map[string]any
+		if err := json.Unmarshal(failure.Body.Bytes(), &failureBody); err != nil {
+			t.Fatal(err)
+		}
+		if failureBody["buildings"].([]any)[0].(map[string]any)["contributed_ap"] != float64(0) {
+			t.Fatalf("malformed contribution changed state = %#v", failureBody)
+		}
+	}
+	if _, err := store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-building-location', 'Remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'remote-building-location' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":1}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("remote contribution status = %d", response.Code)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'camp' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(time.Duration(maxAP)*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":1}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("insufficient AP contribution status = %d", response.Code)
+	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":60}`))
+	request.Header.Set("X-Request-ID", "contribute-success")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	logOutput = captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, "user_id=1 action=contribute-construction outcome=success request_id=contribute-success") {
+		t.Fatalf("successful contribution status/log = %d/%q", response.Code, logOutput)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-60) || len(body["buildings"].([]any)) != 1 || body["buildings"].([]any)[0].(map[string]any)["status"] != "completed" {
+		t.Fatalf("successful contribution state = %#v", body)
+	}
+	for _, secret := range []string{"session-secret", "oauth-code-secret", "access-token", "refresh-token", "id-token"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("contribution log leaked %q: %q", secret, logOutput)
+		}
+	}
+	for _, input := range []string{`{"building_id":999,"ap":1}`, `{"building_id":1,"ap":1}`} {
+		request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(input))
+		request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+		failure := httptest.NewRecorder()
+		handler.ServeHTTP(failure, request)
+		if failure.Code != http.StatusBadRequest && failure.Code != http.StatusConflict {
+			t.Fatalf("rejected contribution %s status = %d", input, failure.Code)
+		}
+		var failureBody map[string]any
+		if err := json.Unmarshal(failure.Body.Bytes(), &failureBody); err != nil {
+			t.Fatal(err)
+		}
+		if failureBody["ap"] != float64(maxAP-60) || failureBody["buildings"].([]any)[0].(map[string]any)["contributed_ap"] != float64(60) {
+			t.Fatalf("rejected contribution changed state = %#v", failureBody)
+		}
 	}
 }
 

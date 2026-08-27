@@ -70,7 +70,7 @@ INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_compo
 		t.Fatalf("buildings = %+v, want one building", state.Buildings)
 	}
 	building := state.Buildings[0]
-	if building.Owner.ID != owner.ID || building.Recipe.ID != "resource_building" || building.BuildingLevel != 2 || building.RequiredAP != 45 || building.ContributedAP != 0 || building.Status != "under_construction" || building.ExtensionSlotCount != 3 {
+	if building.Owner.ID != owner.ID || building.Recipe.ID != "resource_building" || building.Recipe.DisplayName != "Resource Building" || building.BuildingLevel != 2 || building.RequiredAP != 45 || building.ContributedAP != 0 || building.Status != "under_construction" || building.ExtensionSlotCount != 3 {
 		t.Fatalf("building snapshot = %+v", building)
 	}
 	if _, err := db.Exec(`UPDATE building_recipes SET display_name = 'Changed', building_level = 9, required_ap = 99, extension_slot_count = 0 WHERE id = 'resource_building'`); err != nil {
@@ -81,7 +81,7 @@ INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_compo
 		t.Fatal(err)
 	}
 	building = state.Buildings[0]
-	if building.BuildingLevel != 2 || building.RequiredAP != 45 || building.ExtensionSlotCount != 3 {
+	if building.Recipe.DisplayName != "Resource Building" || building.BuildingLevel != 2 || building.RequiredAP != 45 || building.ExtensionSlotCount != 3 {
 		t.Fatalf("building snapshot changed after recipe update = %+v", building)
 	}
 }

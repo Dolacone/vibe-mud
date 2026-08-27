@@ -301,6 +301,7 @@ CREATE TABLE IF NOT EXISTS buildings (
 	owner_id INTEGER NOT NULL REFERENCES identities(id),
 	location_id TEXT NOT NULL REFERENCES locations(id),
 	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	display_name TEXT NOT NULL DEFAULT '',
 	building_level INTEGER NOT NULL CHECK (building_level > 0),
 	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
 	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
@@ -310,6 +311,10 @@ CREATE TABLE IF NOT EXISTS buildings (
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if err := ensureBuildingSchema(tx); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("upgrade building schema: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
@@ -423,6 +428,26 @@ FROM conversion_rules_legacy`); err != nil {
 		if _, err := tx.Exec(`DROP TABLE conversion_rules_legacy`); err != nil {
 			return fmt.Errorf("drop legacy conversion rules: %w", err)
 		}
+	}
+	return nil
+}
+
+func ensureBuildingSchema(tx *sql.Tx) error {
+	columns, err := tableColumns(tx, "buildings")
+	if err != nil {
+		return err
+	}
+	if columns["display_name"] {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE buildings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add building display name: %w", err)
+	}
+	if _, err := tx.Exec(`
+UPDATE buildings
+SET display_name = (SELECT display_name FROM building_recipes WHERE building_recipes.id = buildings.recipe_id)
+WHERE display_name = ''`); err != nil {
+		return fmt.Errorf("backfill building display name: %w", err)
 	}
 	return nil
 }
@@ -710,7 +735,7 @@ ORDER BY br.id`)
 		return PlayerState{}, fmt.Errorf("read building recipes: %w", err)
 	}
 	buildingRows, err := tx.Query(`
-SELECT b.id, i.id, i.display_name, br.id, br.display_name,
+SELECT b.id, i.id, i.display_name, br.id, b.display_name,
        b.building_level, b.required_ap, b.contributed_ap, b.status, b.extension_slot_count
 FROM buildings b
 JOIN identities i ON i.id = b.owner_id
@@ -1407,8 +1432,8 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("delete empty building resources: %w", err)
 	}
 	if _, err := tx.Exec(`
-INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count)
-VALUES (?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.ID, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount); err != nil {
+	INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count)
+	VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.ID, recipe.DisplayName, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount); err != nil {
 		_ = tx.Rollback()
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: buildings.owner_id, buildings.location_id") {
 			return PlayerState{}, ErrBuildingOccupied

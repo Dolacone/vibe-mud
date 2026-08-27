@@ -1,6 +1,6 @@
 ---
 title: "Building construction"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -300,9 +300,9 @@ Acceptance criteria:
 
 ## Review Issues
 
-- [ ] [Major] Snapshot the Building display name or stop reading it from the mutable recipe. Mutable recipe names currently rename existing Buildings. This violates REQ-010.16. Extend the snapshot test to cover the displayed recipe identity.
-- [ ] [Major] Align `docs/schemas.md` with the implemented `buildings` table. The document specifies `owner_user_id`, `created_at`, and `completed_at`. The implementation uses `owner_id` and `status`. The documented completion invariant is absent from the schema.
-- [ ] [Major] Complete Task 4 API tests. Cover the exact response contract and successful contribution. Cover every rejection class and state preservation. Assert required log fields, success logs, and credential sanitization.
+- [x] [Major] Snapshot the Building display name or stop reading it from the mutable recipe. Mutable recipe names currently rename existing Buildings. This violates REQ-010.16. Extend the snapshot test to cover the displayed recipe identity.
+- [x] [Major] Align `docs/schemas.md` with the implemented `buildings` table. The document specifies `owner_user_id`, `created_at`, and `completed_at`. The implementation uses `owner_id` and `status`. The documented completion invariant is absent from the schema.
+- [x] [Major] Complete Task 4 API tests. Cover the exact response contract and successful contribution. Cover every rejection class and state preservation. Assert required log fields, success logs, and credential sanitization.
 
 ## Plan Review Issues
 

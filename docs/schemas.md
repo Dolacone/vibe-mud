@@ -464,39 +464,38 @@ CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
 
 ## buildings
 
-用途：保存玩家擁有的 Building、建立 Location、施工快照與目前進度。`completed_at` 為 `NULL` 時代表施工中。
+用途：保存玩家擁有的 Building、建立 Location、名稱快照與目前進度。
 
 ```sql
 CREATE TABLE IF NOT EXISTS buildings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_user_id INTEGER NOT NULL REFERENCES identities(id),
+    owner_id INTEGER NOT NULL REFERENCES identities(id),
     location_id TEXT NOT NULL REFERENCES locations(id),
     recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+    display_name TEXT NOT NULL,
     building_level INTEGER NOT NULL CHECK (building_level > 0),
     required_ap INTEGER NOT NULL CHECK (required_ap > 0),
     contributed_ap INTEGER NOT NULL DEFAULT 0 CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
     extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
-    created_at INTEGER NOT NULL,
-    completed_at INTEGER,
-    UNIQUE (owner_user_id, location_id),
-    CHECK ((completed_at IS NULL AND contributed_ap < required_ap) OR (completed_at IS NOT NULL AND contributed_ap = required_ap))
+    status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+    UNIQUE (owner_id, location_id)
 );
 ```
 
 | Column | 用途 |
 |---|---|
 | `id` | Contribution target 使用的穩定 Building identifier。 |
-| `owner_user_id` | 開始施工並擁有 Building 的玩家。 |
+| `owner_id` | 開始施工並擁有 Building 的玩家。 |
 | `location_id` | Building 所在 Location。 |
 | `recipe_id` | 建立 Building 的 recipe。 |
+| `display_name` | 建立時從 recipe 複製的 Building 名稱快照。Recipe 改名不會改變既有 Building。 |
 | `building_level` | 建立時保存的 Building level。 |
 | `required_ap` | 建立時保存的施工 AP 需求。 |
 | `contributed_ap` | 所有玩家累計投入的 AP。 |
 | `extension_slot_count` | 建立時保存的 extension slot 數量。 |
-| `created_at` | 開始施工時間。 |
-| `completed_at` | 完成時間。施工中為 `NULL`。 |
+| `status` | `under_construction` 或 `completed`。 |
 
-索引與約束：`UNIQUE (owner_user_id, location_id)` 讓施工中與完成的 Building 都占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。完成狀態必須與 progress 一致。
+索引與約束：`UNIQUE (owner_id, location_id)` 讓施工中與完成的 Building 都占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。
 
 ## 關聯與約束
 
@@ -507,7 +506,7 @@ identities.id
 ├── player_locations.user_id  一個目前位置對一位使用者
 ├── player_inventory.user_id  玩家持有的 item quantity
 ├── player_resources.user_id  玩家持有的 typed Resource quantity
-└── buildings.owner_user_id   Building 持有者
+└── buildings.owner_id   Building 持有者
 
 locations.id
 ├── routes.origin_id             Route 起點
@@ -608,7 +607,7 @@ Existing databases gain the four Building tables and seeds during Store initiali
 
 開始施工 transaction 會依 submitted recipe identifier 與玩家目前 Location 查找 recipe、inputs 與既有 Building。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP 與 extension slot count 快照。
 
-施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統寫入 `completed_at`。
+施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`。
 
 ## 已知限制
 
