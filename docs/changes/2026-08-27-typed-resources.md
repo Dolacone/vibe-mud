@@ -10,6 +10,8 @@ source_paths:
   - docs/terminology.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-007
 related_req_refs:
   - REQ-008
@@ -80,11 +82,11 @@ Acceptance criteria:
 
 ### Task 2: Expose typed Resource state through the API
 
-- [ ] 在 `internal/authapi/server.go` 將 player state 與 conversion option 改為 typed Resource response。
-- [ ] 保留 `convert` 的 `{}` request contract、錯誤狀態與安全 rejection log。
-- [ ] 在 `internal/authapi/server_test.go` 驗證 8 種 Resource、零值、Wood output、成功與所有 rejection response。
+- [x] 在 `internal/authapi/server.go` 將 player state 與 conversion option 改為 typed Resource response。
+- [x] 保留 `convert` 的 `{}` request contract、錯誤狀態與安全 rejection log。
+- [x] 在 `internal/authapi/server_test.go` 驗證 8 種 Resource、零值、Wood output、成功與所有 rejection response。
 
-Source files: `internal/authapi/server.go`
+Source files: `internal/authapi/server.go`, `internal/authapi/server_test.go`
 
 Acceptance criteria:
 

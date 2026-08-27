@@ -63,6 +63,44 @@ func newTestServerWithFrontend(t *testing.T, provider *fakeProvider, now *time.T
 	return server, store
 }
 
+func playerResourceQuantity(state PlayerState, resourceID string) int {
+	for _, resource := range state.Resources {
+		if resource.Resource.ID == resourceID {
+			return resource.Quantity
+		}
+	}
+	return 0
+}
+
+func responseResourceQuantities(t *testing.T, body map[string]any) map[string]float64 {
+	t.Helper()
+	entries, ok := body["resources"].([]any)
+	if !ok {
+		t.Fatalf("resources response = %#v", body["resources"])
+	}
+	quantities := make(map[string]float64, len(entries))
+	for _, entry := range entries {
+		resource, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("resource response entry = %#v", entry)
+		}
+		definition, ok := resource["resource"].(map[string]any)
+		if !ok {
+			t.Fatalf("resource response definition = %#v", resource["resource"])
+		}
+		id, ok := definition["id"].(string)
+		if !ok || id == "" {
+			t.Fatalf("resource response ID = %#v", definition["id"])
+		}
+		quantity, ok := resource["quantity"].(float64)
+		if !ok {
+			t.Fatalf("resource response quantity = %#v", resource["quantity"])
+		}
+		quantities[id] = quantity
+	}
+	return quantities
+}
+
 func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -426,8 +464,17 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 10 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) || meBody["resource"] != float64(0) {
+	if len(meBody) != 10 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	resources := responseResourceQuantities(t, meBody)
+	if len(resources) != 8 {
+		t.Fatalf("GET /api/me resources = %#v", resources)
+	}
+	for _, resourceID := range []string{"food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"} {
+		if resources[resourceID] != 0 {
+			t.Fatalf("GET /api/me resource %s = %v, want 0", resourceID, resources[resourceID])
+		}
 	}
 	location, ok := meBody["location"].(map[string]any)
 	if !ok || location["id"] != "camp" || location["display_name"] != "Camp" {
@@ -447,7 +494,8 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me camp gathering option = %#v", meBody["gathering_option"])
 	}
 	conversion, ok := meBody["conversion_option"].(map[string]any)
-	if !ok || conversion["input_quantity"] != float64(1) || conversion["resource_yield"] != float64(1) || conversion["ap_cost"] != float64(1) {
+	outputResource, outputResourceOK := conversion["resource"].(map[string]any)
+	if !outputResourceOK || outputResource["id"] != "wood" || outputResource["display_name"] != "Wood" || conversion["input_quantity"] != float64(1) || conversion["resource_yield"] != float64(1) || conversion["ap_cost"] != float64(1) {
 		t.Fatalf("GET /api/me camp conversion option = %#v", meBody["conversion_option"])
 	}
 
@@ -667,8 +715,12 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-1) || body["resource"] != float64(1) || body["error"] != nil {
+	if body["ap"] != float64(maxAP-1) || body["error"] != nil {
 		t.Fatalf("convert response = %#v", body)
+	}
+	resources := responseResourceQuantities(t, body)
+	if len(resources) != 8 || resources["wood"] != float64(1) {
+		t.Fatalf("convert resources = %#v", resources)
 	}
 	inventory, ok := body["inventory"].([]any)
 	if !ok || len(inventory) != 0 {
@@ -685,7 +737,7 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	me.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	meResponse := httptest.NewRecorder()
 	server.Routes().ServeHTTP(meResponse, me)
-	if meResponse.Code != http.StatusOK || !strings.Contains(meResponse.Body.String(), `"resource":1`) || strings.Contains(meResponse.Body.String(), `"quantity":1`) {
+	if meResponse.Code != http.StatusOK || !strings.Contains(meResponse.Body.String(), `"resources"`) || !strings.Contains(meResponse.Body.String(), `"id":"wood","display_name":"Wood"`) {
 		t.Fatalf("GET /api/me after convert = %d: %s", meResponse.Code, meResponse.Body.String())
 	}
 }
@@ -732,14 +784,18 @@ func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if body["ap"] != float64(maxAP) || body["resource"] != float64(0) {
+			if body["ap"] != float64(maxAP) {
 				t.Fatalf("invalid convert response state = %#v", body)
+			}
+			resources := responseResourceQuantities(t, body)
+			if len(resources) != 8 || resources["wood"] != 0 {
+				t.Fatalf("invalid convert response resources = %#v", resources)
 			}
 			state, err := store.GetPlayerState(identity.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if state.Location.ID != "camp" || state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 0 {
+			if state.Location.ID != "camp" || state.AP != maxAP || playerResourceQuantity(state, "wood") != 0 || len(state.Inventory) != 0 {
 				t.Fatalf("invalid convert changed state = %+v", state)
 			}
 		})
@@ -767,6 +823,13 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if locationResponse.Code != http.StatusBadRequest || !strings.Contains(locationResponse.Body.String(), `"error":"conversion not found"`) {
 		t.Fatalf("location convert response = %d: %s", locationResponse.Code, locationResponse.Body.String())
 	}
+	var locationBody map[string]any
+	if err := json.Unmarshal(locationResponse.Body.Bytes(), &locationBody); err != nil {
+		t.Fatal(err)
+	}
+	if resources := responseResourceQuantities(t, locationBody); len(resources) != 8 || resources["wood"] != 0 {
+		t.Fatalf("location convert resources = %#v", resources)
+	}
 	if !strings.Contains(locationLog, "action=convert outcome=error reason="+convertReasonInvalidLocation+" request_id=convert-location-request") {
 		t.Fatalf("location convert log = %q", locationLog)
 	}
@@ -774,7 +837,7 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 || state.Resource != 0 {
+	if state.Location.ID != "forest_edge" || state.AP != maxAP-20 || playerResourceQuantity(state, "wood") != 0 {
 		t.Fatalf("location convert changed state = %+v", state)
 	}
 
@@ -789,6 +852,13 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if itemResponse.Code != http.StatusConflict || !strings.Contains(itemResponse.Body.String(), `"error":"insufficient item"`) {
 		t.Fatalf("missing Wood convert response = %d: %s", itemResponse.Code, itemResponse.Body.String())
 	}
+	var itemBody map[string]any
+	if err := json.Unmarshal(itemResponse.Body.Bytes(), &itemBody); err != nil {
+		t.Fatal(err)
+	}
+	if resources := responseResourceQuantities(t, itemBody); len(resources) != 8 || resources["wood"] != 0 {
+		t.Fatalf("missing Wood convert resources = %#v", resources)
+	}
 	if !strings.Contains(itemLog, "action=convert outcome=error reason="+convertReasonInsufficientItem+" request_id=convert-item-request") {
 		t.Fatalf("missing Wood convert log = %q", itemLog)
 	}
@@ -796,7 +866,7 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Location.ID != "camp" || state.AP != maxAP-40 || state.Resource != 0 || len(state.Inventory) != 0 {
+	if state.Location.ID != "camp" || state.AP != maxAP-40 || playerResourceQuantity(state, "wood") != 0 || len(state.Inventory) != 0 {
 		t.Fatalf("missing Wood convert changed state = %+v", state)
 	}
 }
@@ -825,6 +895,13 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"error":"insufficient action points"`) {
 		t.Fatalf("low AP convert response = %d: %s", response.Code, response.Body.String())
 	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if resources := responseResourceQuantities(t, body); len(resources) != 8 || resources["wood"] != 0 {
+		t.Fatalf("low AP convert resources = %#v", resources)
+	}
 	if !strings.Contains(logOutput, "action=convert outcome=error reason="+convertReasonInsufficientAP+" request_id=convert-low-ap-request") {
 		t.Fatalf("low AP convert log = %q", logOutput)
 	}
@@ -835,7 +912,7 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != 0 || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+	if state.AP != 0 || playerResourceQuantity(state, "wood") != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
 		t.Fatalf("low AP convert changed state = %+v", state)
 	}
 }

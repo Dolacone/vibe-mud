@@ -47,7 +47,7 @@ type currentUserResponse struct {
 	Inventory        []inventoryItemResponse   `json:"inventory"`
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
-	Resource         int                       `json:"resource"`
+	Resources        []resourceResponse        `json:"resources"`
 }
 
 type restResponse struct {
@@ -77,7 +77,7 @@ type playerStateResponse struct {
 	Inventory        []inventoryItemResponse   `json:"inventory"`
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
-	Resource         int                       `json:"resource"`
+	Resources        []resourceResponse        `json:"resources"`
 }
 
 type moveResponse struct {
@@ -336,7 +336,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		Inventory:        inventoryResponsesFromStore(state.Inventory),
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
-		Resource:         state.Resource,
+		Resources:        resourceResponsesFromStore(state.Resources),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -690,7 +690,7 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 		Inventory:        inventoryResponsesFromStore(state.Inventory),
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
-		Resource:         state.Resource,
+		Resources:        resourceResponsesFromStore(state.Resources),
 	}
 }
 
@@ -715,6 +715,7 @@ func gatheringOptionResponseFromStore(option *GatheringOption) *gatheringOptionR
 
 type conversionOptionResponse struct {
 	Item          itemResponse `json:"item"`
+	Resource      itemResponse `json:"resource"`
 	InputQuantity int          `json:"input_quantity"`
 	ResourceYield int          `json:"resource_yield"`
 	APCost        int          `json:"ap_cost"`
@@ -726,10 +727,27 @@ func conversionOptionResponseFromStore(option *ConversionOption) *conversionOpti
 	}
 	return &conversionOptionResponse{
 		Item:          itemResponse{ID: option.Item.ID, DisplayName: option.Item.DisplayName},
+		Resource:      itemResponse{ID: option.Resource.ID, DisplayName: option.Resource.DisplayName},
 		InputQuantity: option.InputQuantity,
 		ResourceYield: option.ResourceYield,
 		APCost:        option.APCost,
 	}
+}
+
+type resourceResponse struct {
+	Resource itemResponse `json:"resource"`
+	Quantity int          `json:"quantity"`
+}
+
+func resourceResponsesFromStore(resources []PlayerResource) []resourceResponse {
+	responses := make([]resourceResponse, 0, len(resources))
+	for _, resource := range resources {
+		responses = append(responses, resourceResponse{
+			Resource: itemResponse{ID: resource.Resource.ID, DisplayName: resource.Resource.DisplayName},
+			Quantity: resource.Quantity,
+		})
+	}
+	return responses
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
