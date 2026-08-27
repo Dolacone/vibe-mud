@@ -6,4 +6,4 @@
 - 已登入玩家可在 `forest_edge` 執行 `gather`，原子消耗 AP 並累加持久化 Inventory -> REQ-006
 - 玩家分別持有 8 種 typed Resource，並能查看各自的持久化 quantity -> REQ-007
 - 已登入玩家可在 `camp` 執行 `convert`，原子消耗 AP 與 Wood item 並累加 Wood Resource -> REQ-008
-- 已登入玩家可在 `camp` 執行 `craft`，原子消耗 AP 與 Wood Resource 並取得 Wood Component -> REQ-009
+- 已登入玩家可在任何 Location 執行後端定義的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
