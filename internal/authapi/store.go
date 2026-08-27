@@ -185,6 +185,10 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 	quantity INTEGER NOT NULL CHECK (quantity > 0),
 	PRIMARY KEY (user_id, item_id)
 );
+CREATE TABLE IF NOT EXISTS resource_types (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS conversion_rules (
 	location_id TEXT PRIMARY KEY REFERENCES locations(id),
 	input_item_id TEXT NOT NULL REFERENCES items(id),
@@ -198,10 +202,6 @@ CREATE TABLE IF NOT EXISTS player_resources (
 	resource_id TEXT NOT NULL REFERENCES resource_types(id),
 	quantity INTEGER NOT NULL CHECK (quantity >= 0),
 	PRIMARY KEY (user_id, resource_id)
-);
-CREATE TABLE IF NOT EXISTS resource_types (
-	id TEXT PRIMARY KEY,
-	display_name TEXT NOT NULL
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
@@ -232,15 +232,6 @@ INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 	('forest_edge', 'camp', 20);
 INSERT OR IGNORE INTO items (id, display_name) VALUES
 	('wood', 'Wood');
-INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
-	('food', 'Food'),
-	('wood', 'Wood'),
-	('stone', 'Stone'),
-	('metal', 'Metal'),
-	('fiber', 'Fiber'),
-	('hide', 'Hide'),
-	('medicinal', 'Medicinal'),
-	('arcane', 'Arcane');
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
