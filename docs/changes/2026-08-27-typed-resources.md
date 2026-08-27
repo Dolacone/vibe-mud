@@ -1,6 +1,6 @@
 ---
 title: "Typed resources"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-27
 doc_type: change
 last_reviewed: 2026-08-27
@@ -153,3 +153,8 @@ Acceptance criteria:
 - REQ-008.11: `convert` 成功後，前端必須顯示更新後的 AP、Inventory 與所有 Resource quantity。
 
 ## Review Issues
+
+- [ ] [Major] `docs/schemas.md` 記錄 `conversion_rules.output_quantity` 與 `CHECK (quantity > 0)`，但實作建立 `resource_yield` 與 `CHECK (quantity >= 0)`。文件必須與實際 SQLite schema 一致。
+- [ ] [Minor] `PlayerState.Resource` 仍保留 generic Resource mirror。其註解要求 API task 移除，但已完成的 Task 2 沒有移除。
+- [ ] [Minor] `source_paths` 未列出相對 `main` 已修改的 `requirements/BEHAVIOR.md`、`requirements/REQ-007.md` 與 `requirements/REQ-008.md`。
+- [ ] [Minor] `TestConvertAPIUpdatesStateAndUsesBackendOwnedValues` 重新讀取後只檢查 Wood Resource ID。測試在已保存 quantity 錯誤時仍會通過。
