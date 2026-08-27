@@ -48,6 +48,7 @@ type currentUserResponse struct {
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
+	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
 }
 
 type restResponse struct {
@@ -78,6 +79,7 @@ type playerStateResponse struct {
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
+	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
 }
 
 type moveResponse struct {
@@ -115,29 +117,65 @@ type convertResponse struct {
 	playerStateResponse
 }
 
+type craftResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
+type craftingResourceInputResponse struct {
+	Resource itemResponse `json:"resource"`
+	Quantity int          `json:"quantity"`
+}
+
+type craftingItemInputResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+}
+
+type craftingRecipeResponse struct {
+	ID             string                          `json:"id"`
+	DisplayName    string                          `json:"display_name"`
+	BaseAPCost     int                             `json:"base_ap_cost"`
+	ResourceInputs []craftingResourceInputResponse `json:"resource_inputs"`
+	ItemInputs     []craftingItemInputResponse     `json:"item_inputs"`
+	Output         itemResponse                    `json:"output"`
+	OutputQuantity int                             `json:"output_quantity"`
+}
+
 const (
-	moveAction                    = "move"
-	moveReasonInvalidJSON         = "invalid_json"
-	moveReasonUnknownField        = "unknown_field"
-	moveReasonDuplicate           = "duplicate_field"
-	moveReasonExtraValue          = "extra_json_value"
-	moveReasonMissingTarget       = "missing_target"
-	moveReasonInvalidTarget       = "invalid_target"
-	moveReasonUnsupported         = "unsupported_action"
-	gatherAction                  = "gather"
-	gatherReasonInvalidJSON       = "invalid_json"
-	gatherReasonUnknownField      = "unknown_field"
-	gatherReasonDuplicate         = "duplicate_field"
-	gatherReasonExtraValue        = "extra_json_value"
-	gatherReasonInvalidLocation   = "invalid_location"
-	convertAction                 = "convert"
-	convertReasonInvalidJSON      = "invalid_json"
-	convertReasonUnknownField     = "unknown_field"
-	convertReasonDuplicate        = "duplicate_field"
-	convertReasonExtraValue       = "extra_json_value"
-	convertReasonInsufficientAP   = "insufficient_ap"
-	convertReasonInvalidLocation  = "invalid_location"
-	convertReasonInsufficientItem = "insufficient_item"
+	moveAction                      = "move"
+	moveReasonInvalidJSON           = "invalid_json"
+	moveReasonUnknownField          = "unknown_field"
+	moveReasonDuplicate             = "duplicate_field"
+	moveReasonExtraValue            = "extra_json_value"
+	moveReasonMissingTarget         = "missing_target"
+	moveReasonInvalidTarget         = "invalid_target"
+	moveReasonUnsupported           = "unsupported_action"
+	gatherAction                    = "gather"
+	gatherReasonInvalidJSON         = "invalid_json"
+	gatherReasonUnknownField        = "unknown_field"
+	gatherReasonDuplicate           = "duplicate_field"
+	gatherReasonExtraValue          = "extra_json_value"
+	gatherReasonInvalidLocation     = "invalid_location"
+	convertAction                   = "convert"
+	convertReasonInvalidJSON        = "invalid_json"
+	convertReasonUnknownField       = "unknown_field"
+	convertReasonDuplicate          = "duplicate_field"
+	convertReasonExtraValue         = "extra_json_value"
+	convertReasonInsufficientAP     = "insufficient_ap"
+	convertReasonInvalidLocation    = "invalid_location"
+	convertReasonInsufficientItem   = "insufficient_item"
+	craftAction                     = "craft"
+	craftReasonInvalidJSON          = "invalid_json"
+	craftReasonUnknownField         = "unknown_field"
+	craftReasonDuplicate            = "duplicate_field"
+	craftReasonExtraValue           = "extra_json_value"
+	craftReasonMissingRecipe        = "missing_recipe_id"
+	craftReasonInvalidRecipe        = "invalid_recipe_id"
+	craftReasonInsufficientAP       = "insufficient_ap"
+	craftReasonInsufficientResource = "insufficient_resource"
+	craftReasonInsufficientItem     = "insufficient_item"
+	craftReasonUnknownRecipe        = "unknown_recipe"
 )
 
 type Config struct {
@@ -204,6 +242,7 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Post("/api/actions/move", s.move)
 	r.Post("/api/actions/gather", s.gather)
 	r.Post("/api/actions/convert", s.convert)
+	r.Post("/api/actions/craft", s.craft)
 	return r
 }
 
@@ -337,6 +376,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
+		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -396,6 +436,69 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, convertAction, "success")
 	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+}
+
+func (s *Server) craft(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeCraftRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, craftAction, reason)
+		s.writeCraftState(w, r, session.UserID, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, err := s.store.Craft(session.UserID, request.RecipeID)
+	if errors.Is(err, ErrInsufficientAP) {
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", currentAP(state, s.store, session.UserID))
+		s.logRejection(r, session.UserID, craftAction, craftReasonInsufficientAP)
+		s.writeCraftState(w, r, session.UserID, http.StatusConflict, ErrInsufficientAP.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientResource) {
+		s.logRejection(r, session.UserID, craftAction, craftReasonInsufficientResource)
+		s.writeCraftState(w, r, session.UserID, http.StatusConflict, ErrInsufficientResource.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientItem) {
+		s.logRejection(r, session.UserID, craftAction, craftReasonInsufficientItem)
+		s.writeCraftState(w, r, session.UserID, http.StatusConflict, ErrInsufficientItem.Error())
+		return
+	}
+	if errors.Is(err, ErrCraftingNotFound) {
+		s.logRejection(r, session.UserID, craftAction, craftReasonUnknownRecipe)
+		s.writeCraftState(w, r, session.UserID, http.StatusBadRequest, ErrCraftingNotFound.Error())
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
+	s.logAction(r, session.UserID, craftAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+}
+
+func (s *Server) writeCraftState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
+	state, err := s.store.GetPlayerState(userID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.writeJSON(w, status, craftResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+}
+
+func currentAP(state PlayerState, store *Store, userID int64) int {
+	if state.AP != 0 || store == nil {
+		return state.AP
+	}
+	ap, err := store.GetAP(userID)
+	if err != nil {
+		return state.AP
+	}
+	return ap
 }
 
 func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
@@ -670,6 +773,60 @@ func decodeConvertRequest(body io.Reader) string {
 	return reason
 }
 
+type craftRequest struct {
+	RecipeID string
+}
+
+func decodeCraftRequest(body io.Reader) (craftRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return craftRequest{}, craftReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return craftRequest{}, craftReasonInvalidJSON
+	}
+	var request craftRequest
+	seen := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return craftRequest{}, craftReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return craftRequest{}, craftReasonInvalidJSON
+		}
+		if field != "recipe_id" {
+			return craftRequest{}, craftReasonUnknownField
+		}
+		if seen {
+			return craftRequest{}, craftReasonDuplicate
+		}
+		seen = true
+		if err := decoder.Decode(&request.RecipeID); err != nil {
+			return craftRequest{}, craftReasonInvalidRecipe
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return craftRequest{}, craftReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return craftRequest{}, craftReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return craftRequest{}, craftReasonExtraValue
+	}
+	if !seen {
+		return craftRequest{}, craftReasonMissingRecipe
+	}
+	if strings.TrimSpace(request.RecipeID) == "" {
+		return craftRequest{}, craftReasonInvalidRecipe
+	}
+	return request, ""
+}
+
 func locationResponseFromStore(location Location) locationResponse {
 	return locationResponse{ID: location.ID, DisplayName: location.DisplayName}
 }
@@ -691,7 +848,35 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
+		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
 	}
+}
+
+func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipeResponse {
+	responses := make([]craftingRecipeResponse, 0, len(recipes))
+	for _, recipe := range recipes {
+		resourceInputs := make([]craftingResourceInputResponse, 0, len(recipe.ResourceInputs))
+		for _, input := range recipe.ResourceInputs {
+			resourceInputs = append(resourceInputs, craftingResourceInputResponse{
+				Resource: itemResponse{ID: input.Resource.ID, DisplayName: input.Resource.DisplayName},
+				Quantity: input.Quantity,
+			})
+		}
+		itemInputs := make([]craftingItemInputResponse, 0, len(recipe.ItemInputs))
+		for _, input := range recipe.ItemInputs {
+			itemInputs = append(itemInputs, craftingItemInputResponse{
+				Item:     itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName},
+				Quantity: input.Quantity,
+			})
+		}
+		responses = append(responses, craftingRecipeResponse{
+			ID: recipe.ID, DisplayName: recipe.DisplayName, BaseAPCost: recipe.BaseAPCost,
+			ResourceInputs: resourceInputs, ItemInputs: itemInputs,
+			Output:         itemResponse{ID: recipe.Output.ID, DisplayName: recipe.Output.DisplayName},
+			OutputQuantity: recipe.OutputQuantity,
+		})
+	}
+	return responses
 }
 
 func inventoryResponsesFromStore(items []InventoryItem) []inventoryItemResponse {
@@ -820,6 +1005,8 @@ func accessLogAction(r *http.Request) string {
 			return "gather"
 		case "/api/actions/convert":
 			return "convert"
+		case "/api/actions/craft":
+			return "craft"
 		default:
 			return "unknown"
 		}
