@@ -150,6 +150,156 @@ INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_compo
 	}
 }
 
+func TestContributeConstructionSharesAPAndCompletesWithOversizedRequest(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributor, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-contributor", "contributor@example.com", "Contributor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 1, 60, 20, 'under_construction', 1)`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeConstruction(contributor.ID, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-40 || len(state.Buildings) != 1 || state.Buildings[0].ContributedAP != 60 || state.Buildings[0].Status != "completed" {
+		t.Fatalf("contribution state = %+v, want capped completion and 40 AP spent", state)
+	}
+	before, err := store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeConstruction(contributor.ID, 1, 1); !errors.Is(err, ErrBuildingCompleted) {
+		t.Fatalf("repeated completion error = %v, want ErrBuildingCompleted", err)
+	}
+	after, err := store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("repeated completion changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollback(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-rollback-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributor, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-rollback-contributor", "contributor@example.com", "Contributor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp',  'building_lv1', 1, 60, 0, 'under_construction', 1)`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(2995*time.Minute).UnixNano(), contributor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ap, err := store.GetAP(contributor.ID); err != nil || ap != 5 {
+		t.Fatalf("configured contributor AP = %d, %v; want 5", ap, err)
+	}
+	before, err := store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeConstruction(contributor.ID, 10, 10); !errors.Is(err, ErrBuildingNotFound) {
+		t.Fatalf("unknown target error = %v, want ErrBuildingNotFound", err)
+	}
+	if _, err := store.ContributeConstruction(contributor.ID, 1, 10); !errors.Is(err, ErrInsufficientAP) {
+		t.Fatalf("insufficient AP error = %v, want ErrInsufficientAP", err)
+	}
+	after, err := store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("insufficient AP changed state: before=%+v after=%+v", before, after)
+	}
+	if _, err := db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote', 'Remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'remote' WHERE user_id = ?`, contributor.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err = store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeConstruction(contributor.ID, 1, 1); !errors.Is(err, ErrBuildingRemote) {
+		t.Fatalf("remote target error = %v, want ErrBuildingRemote", err)
+	}
+	after, err = store.GetPlayerState(contributor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("remote contribution changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestContributeConstructionSerializesConcurrentSharedContributors(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-concurrent-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-concurrent-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-construction-concurrent-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 1, 60, 0, 'under_construction', 1)`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, userID := range []int64{first.ID, second.ID} {
+		go func(userID int64) {
+			<-start
+			_, err := store.ContributeConstruction(userID, 1, 60)
+			results <- err
+		}(userID)
+	}
+	close(start)
+	var successes, completed int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrBuildingCompleted):
+			completed++
+		default:
+			t.Fatalf("concurrent contribution error = %v", err)
+		}
+	}
+	if successes != 1 || completed != 1 {
+		t.Fatalf("concurrent outcomes = %d successes, %d completed; want one each", successes, completed)
+	}
+	state, err := store.GetPlayerState(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 || state.Buildings[0].ContributedAP != 60 || state.Buildings[0].Status != "completed" {
+		t.Fatalf("persisted concurrent construction = %+v, want exact completion", state.Buildings)
+	}
+}
+
 func TestBuildingStateLoadsSeededDefinitionsAndOnlyCurrentLocation(t *testing.T) {
 	store, db := newTestStore(t)
 	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-building-owner", "owner@example.com", "Owner")

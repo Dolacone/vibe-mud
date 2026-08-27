@@ -29,6 +29,8 @@ var (
 	ErrInsufficientResource = errors.New("insufficient resource")
 	ErrBuildingNotFound     = errors.New("building recipe not found")
 	ErrBuildingOccupied     = errors.New("building location already occupied")
+	ErrBuildingRemote       = errors.New("building is at another location")
+	ErrBuildingCompleted    = errors.New("building is already completed")
 )
 
 type Store struct {
@@ -1420,6 +1422,114 @@ VALUES (?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.
 	}
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit building: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int) (PlayerState, error) {
+	if userID <= 0 || buildingID <= 0 || requestedAP <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID, building ID, and AP are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin construction contribution: %w", err)
+	}
+	var contributorLocation, buildingLocation, status string
+	var contributedAP, requiredAP int
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get contributor location: %w", err)
+	}
+	err = tx.QueryRow(`
+SELECT location_id, contributed_ap, required_ap, status
+FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP, &requiredAP, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get construction target: %w", err)
+	}
+	if contributorLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if status == "completed" || contributedAP >= requiredAP {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingCompleted
+	}
+
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get contributor AP: %w", err)
+	}
+	now := s.now().UTC()
+	availableAP := calculateAP(unixNano(fullTimestamp), now)
+	remainingAP := requiredAP - contributedAP
+	actualAP := requestedAP
+	if actualAP > remainingAP {
+		actualAP = remainingAP
+	}
+	if availableAP < actualAP {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).UnixNano(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume construction AP: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return PlayerState{}, fmt.Errorf("check construction AP: %w", err)
+		}
+		return PlayerState{}, ErrInsufficientAP
+	}
+	newProgress := contributedAP + actualAP
+	newStatus := "under_construction"
+	if newProgress == requiredAP {
+		newStatus = "completed"
+	}
+	result, err = tx.Exec(`
+UPDATE buildings SET contributed_ap = ?, status = ?
+WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, buildingID, contributedAP)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("update construction progress: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return PlayerState{}, fmt.Errorf("check construction progress: %w", err)
+		}
+		return PlayerState{}, ErrBuildingCompleted
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit construction contribution: %w", err)
 	}
 	return state, nil
 }

@@ -148,14 +148,14 @@ Acceptance criteria:
 
 ### Task 3: Contribute construction AP atomically
 
-- [ ] Add a store operation that accepts a Building target and requested positive AP.
-- [ ] Require the contributor to be at the Building Location.
-- [ ] Consume the smaller of requested AP and remaining AP.
-- [ ] Atomically spend contributor AP, increase progress, and mark exact completion.
-- [ ] Reject insufficient AP, completed Building, invalid target, and remote contribution without state changes.
-- [ ] Cover shared contributors, oversized input, insufficient AP, completion, repeated completion, concurrency, and rollback in `internal/authapi/store_test.go`.
+- [x] Add a store operation that accepts a Building target and requested positive AP.
+- [x] Require the contributor to be at the Building Location.
+- [x] Consume the smaller of requested AP and remaining AP.
+- [x] Atomically spend contributor AP, increase progress, and mark exact completion.
+- [x] Reject insufficient AP, completed Building, invalid target, and remote contribution without state changes.
+- [x] Cover shared contributors, oversized input, insufficient AP, completion, repeated completion, concurrency, and rollback in `internal/authapi/store_test.go`.
 
-Source files: `internal/authapi/store.go`
+Source files: `internal/authapi/store.go`, `internal/authapi/store_test.go`
 
 Acceptance criteria:
 
