@@ -1,7 +1,7 @@
 ---
 title: "Game Terminology"
 doc_type: glossary
-last_reviewed: 2026-08-26
+last_reviewed: 2026-08-27
 source_paths: []
 scope: "Canonical game terms used by the application."
 ---
@@ -18,18 +18,19 @@ scope: "Canonical game terms used by the application."
 
 | 英文名稱 | 縮寫 | 中文名稱 | 對應 REQ |
 |---|---|---|---|
-| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-007](../requirements/REQ-007.md) |
+| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
 | [Action: rest](#action-rest) | - | 休息行動 | [REQ-004](../requirements/REQ-004.md) |
 | [Action: move](#action-move) | - | 移動行動 | [REQ-005](../requirements/REQ-005.md) |
 | [Action: gather](#action-gather) | - | 採集行動 | [REQ-006](../requirements/REQ-006.md) |
-| [Action: convert](#action-convert) | - | 轉換行動 | [REQ-007](../requirements/REQ-007.md) |
+| [Action: convert](#action-convert) | - | 轉換行動 | [REQ-008](../requirements/REQ-008.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
-| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-007](../requirements/REQ-007.md) |
+| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
 | [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md) |
-| [Wood](#wood) | - | 木材物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-007](../requirements/REQ-007.md) |
+| [Wood item](#wood-item) | - | 木材物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
+| [Wood Resource](#wood-resource) | - | 木材資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-008](../requirements/REQ-008.md) |
 
 ## 名詞定義
 
@@ -38,7 +39,7 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Action
 - 中文名稱：行動
 - 定義：玩家要求後端執行的遊戲狀態變更。後端只執行明確允許的 Action。
-- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-007 - Action: convert](../requirements/REQ-007.md)
+- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
 - 與相似名詞的差異：Action 是行為種類。AP 是執行 Action 可以消耗的資源。
 
 ### Action: rest
@@ -70,7 +71,7 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Action: convert
 - 中文名稱：轉換行動
 - 定義：玩家在 `camp` 消耗後端指定的 AP 與 Inventory item，取得 Resource 的 Action。
-- 對應行為：[REQ-007 - Action: convert](../requirements/REQ-007.md)
+- 對應行為：[REQ-008 - Action: convert](../requirements/REQ-008.md)
 - 與相似名詞的差異：`convert` 消耗 Item 並產出 Resource。`gather` 產出 Item。
 
 ### Action Points (AP)
@@ -95,8 +96,8 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Item
 - 中文名稱：物品
 - 定義：玩家可以取得並保存在 Inventory 的離散物品種類。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-007 - Action: convert](../requirements/REQ-007.md)
-- 與相似名詞的差異：Item 以 Inventory quantity 保存。Resource 使用獨立 balance。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 與相似名詞的差異：Item 以 Inventory quantity 保存。Resource 依 Resource type 保存獨立 quantity。
 
 ### Location
 
@@ -118,14 +119,23 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Resource
 - 中文名稱：資源
-- 定義：玩家透過 `convert` 取得的持久化整數 balance。
-- 對應行為：[REQ-007 - Action: convert](../requirements/REQ-007.md)
-- 與相似名詞的差異：Resource 是單一 balance。Item 以種類與 quantity 保存在 Inventory。
+- 定義：玩家持有的持久化整數 quantity。每種 Resource type 分別保存，未持有時 quantity 為 0。
+- 類型：Food、Wood、Stone、Metal、Fiber、Hide、Medicinal、Arcane。
+- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)
+- 與相似名詞的差異：Resource 依 type 累積 quantity。Item 以種類與 quantity 保存在 Inventory。
 
-### Wood
+### Wood item
 
-- 正式英文名稱：Wood
+- 正式英文名稱：Wood item
 - 中文名稱：木材物品
 - 定義：玩家在 `forest_edge` 執行 `gather` 時取得的第一種 Item。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-007 - Action: convert](../requirements/REQ-007.md)
-- 與相似名詞的差異：Wood 是 Item。`convert` 會消耗 Wood 並增加 Resource。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 與相似名詞的差異：Wood item 存在 Inventory。`convert` 會消耗 Wood item 並增加 Wood Resource。
+
+### Wood Resource
+
+- 正式英文名稱：Wood Resource
+- 中文名稱：木材資源
+- 定義：`convert` 消耗 Wood item 後增加的 typed Resource quantity。
+- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 與相似名詞的差異：Wood Resource 是 Resource quantity。Wood item 是 Inventory item。

@@ -1,6 +1,11 @@
-<!-- last_reviewed: 2026-08-26 -->
+<!-- last_reviewed: 2026-08-27 -->
 
 # Changelog
+
+## 2026-08-27
+
+- Replaced the generic Resource balance with separate Food, Wood, Stone, Metal, Fiber, Hide, Medicinal, and Arcane quantities.
+- Updated conversion to produce Wood Resource while preserving existing Action behavior.
 
 ## 2026-08-26
 

@@ -26,6 +26,15 @@ func newTestStore(t *testing.T) (*Store, *sql.DB) {
 	return store, db
 }
 
+func resourceQuantity(state PlayerState, resourceID string) int {
+	for _, resource := range state.Resources {
+		if resource.Resource.ID == resourceID {
+			return resource.Quantity
+		}
+	}
+	return 0
+}
+
 func TestUpsertIdentityKeepsTheSameUserAcrossProfileChanges(t *testing.T) {
 	store, _ := newTestStore(t)
 
@@ -202,8 +211,32 @@ CREATE TABLE sessions (
 	expires_at INTEGER NOT NULL,
 	created_at INTEGER NOT NULL
 );
+CREATE TABLE player_resources (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	balance INTEGER NOT NULL CHECK (balance >= 0)
+);
+CREATE TABLE locations (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
+);
+CREATE TABLE items (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL
+);
+CREATE TABLE conversion_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	input_item_id TEXT NOT NULL REFERENCES items(id),
+	input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
+	resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+);
+INSERT INTO locations (id, display_name) VALUES ('camp', 'Camp');
+INSERT INTO items (id, display_name) VALUES ('wood', 'Wood');
+INSERT INTO conversion_rules (location_id, input_item_id, input_quantity, resource_yield, ap_cost)
+VALUES ('camp', 'wood', 1, 1, 1);
 INSERT INTO identities (issuer, subject, email, display_name, created_at, updated_at)
-VALUES ('https://accounts.google.com', 'old-subject', 'old@example.com', 'Old Name', 1, 1);`); err != nil {
+VALUES ('https://accounts.google.com', 'old-subject', 'old@example.com', 'Old Name', 1, 1);
+INSERT INTO player_resources (user_id, balance) VALUES (1, 42);`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,12 +261,31 @@ VALUES ('https://accounts.google.com', 'old-subject', 'old@example.com', 'Old Na
 	if ap, err := store.GetAP(userID); err != nil || ap != 3000 {
 		t.Fatalf("backfilled identity AP = %d, %v; want 3000", ap, err)
 	}
-	var resource int
-	if err := db.QueryRow("SELECT balance FROM player_resources WHERE user_id = ?", userID).Scan(&resource); err != nil {
+	var legacyBalanceColumn int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('player_resources') WHERE name = 'balance'").Scan(&legacyBalanceColumn); err != nil {
 		t.Fatal(err)
 	}
-	if resource != 0 {
-		t.Fatalf("backfilled identity Resource = %d, want 0", resource)
+	if legacyBalanceColumn != 0 {
+		t.Fatal("legacy generic Resource balance was retained")
+	}
+	state, err := store.GetPlayerState(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Resources) != 8 {
+		t.Fatalf("backfilled identity Resources = %+v, want all eight types", state.Resources)
+	}
+	for _, resource := range state.Resources {
+		if resource.Quantity != 0 {
+			t.Fatalf("backfilled identity Resource %s = %d, want 0", resource.Resource.ID, resource.Quantity)
+		}
+	}
+	var outputResourceID string
+	if err := db.QueryRow("SELECT output_resource_id FROM conversion_rules WHERE location_id = 'camp'").Scan(&outputResourceID); err != nil {
+		t.Fatal(err)
+	}
+	if outputResourceID != "wood" {
+		t.Fatalf("migrated conversion output Resource = %q, want wood", outputResourceID)
 	}
 
 	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", time.Unix(0, 1).UnixNano(), userID); err != nil {
@@ -332,11 +384,82 @@ func TestPlayerStateStartsAtCampWithSeededRoutes(t *testing.T) {
 	if state.GatheringOption != nil {
 		t.Fatalf("camp gathering option = %+v, want none", state.GatheringOption)
 	}
-	if state.ConversionOption == nil || state.ConversionOption.Item.ID != "wood" || state.ConversionOption.Item.DisplayName != "Wood" || state.ConversionOption.InputQuantity != 1 || state.ConversionOption.ResourceYield != 1 || state.ConversionOption.APCost != 1 {
+	if state.ConversionOption == nil || state.ConversionOption.Item.ID != "wood" || state.ConversionOption.Item.DisplayName != "Wood" || state.ConversionOption.Resource.ID != "wood" || state.ConversionOption.Resource.DisplayName != "Wood" || state.ConversionOption.InputQuantity != 1 || state.ConversionOption.ResourceYield != 1 || state.ConversionOption.APCost != 1 {
 		t.Fatalf("camp conversion option = %+v, want backend seed", state.ConversionOption)
 	}
-	if state.Resource != 0 {
-		t.Fatalf("new player Resource = %d, want 0", state.Resource)
+	wantResources := []string{"arcane", "fiber", "food", "hide", "medicinal", "metal", "stone", "wood"}
+	if len(state.Resources) != len(wantResources) {
+		t.Fatalf("new player Resources = %+v, want eight resources", state.Resources)
+	}
+	for index, resource := range state.Resources {
+		if resource.Resource.ID != wantResources[index] || resource.Quantity != 0 {
+			t.Fatalf("new player Resource[%d] = %+v, want %s at zero", index, resource, wantResources[index])
+		}
+	}
+}
+
+func TestTypedResourceRowsAreIndependentAndMissingRowsReadAsZero(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-typed-resource", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'stone', 7), (?, 'wood', 11)`, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quantities := make(map[string]int, len(state.Resources))
+	for _, resource := range state.Resources {
+		quantities[resource.Resource.ID] = resource.Quantity
+	}
+	if quantities["wood"] != 11 || quantities["stone"] != 7 || quantities["food"] != 0 || len(quantities) != 8 {
+		t.Fatalf("typed Resource quantities = %v, want independent values and zero missing rows", quantities)
+	}
+	var rows int
+	if err := db.QueryRow("SELECT COUNT(*) FROM player_resources WHERE user_id = ?", identity.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("stored typed Resource rows = %d, want only explicitly held types", rows)
+	}
+}
+
+func TestTypedResourceSchemaIsStableAcrossRepeatedStoreInitialization(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-typed-resource-reload", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'metal', 23)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		store, err = NewStore(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.now = func() time.Time { return now }
+		state, err := store.GetPlayerState(identity.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metal int
+		for _, resource := range state.Resources {
+			if resource.Resource.ID == "metal" {
+				metal = resource.Quantity
+			}
+		}
+		if metal != 23 {
+			t.Fatalf("reinitialized Metal Resource = %d, want persisted 23", metal)
+		}
 	}
 }
 
@@ -764,14 +887,14 @@ func TestConvertConsumesWoodAPAndAccumulatesResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP-1 || state.Resource != 1 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
+	if state.AP != maxAP-1 || len(state.Resources) != 8 || resourceQuantity(state, "wood") != 1 || len(state.Inventory) != 1 || state.Inventory[0].Item.ID != "wood" || state.Inventory[0].Quantity != 1 {
 		t.Fatalf("first convert state = %+v, want one Wood, one Resource and AP %d", state, maxAP-1)
 	}
 	state, err = store.Convert(identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP-2 || state.Resource != 2 || len(state.Inventory) != 0 {
+	if state.AP != maxAP-2 || resourceQuantity(state, "wood") != 2 || len(state.Inventory) != 0 {
 		t.Fatalf("second convert state = %+v, want empty inventory, two Resources and AP %d", state, maxAP-2)
 	}
 
@@ -784,7 +907,7 @@ func TestConvertConsumesWoodAPAndAccumulatesResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Resource != 2 || len(persisted.Inventory) != 0 || persisted.AP != maxAP-2 {
+	if resourceQuantity(persisted, "wood") != 2 || len(persisted.Inventory) != 0 || persisted.AP != maxAP-2 {
 		t.Fatalf("reloaded convert state = %+v, want persisted Resource and AP", persisted)
 	}
 }
@@ -814,7 +937,7 @@ func TestConvertRejectsWrongLocationWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Location != before.Location || after.AP != before.AP || after.Resource != before.Resource || len(after.Inventory) != 1 || after.Inventory[0].Quantity != before.Inventory[0].Quantity {
+	if after.Location != before.Location || after.AP != before.AP || len(after.Inventory) != 1 || after.Inventory[0].Quantity != before.Inventory[0].Quantity || resourceQuantity(after, "wood") != resourceQuantity(before, "wood") {
 		t.Fatalf("state after wrong-location convert = %+v, want unchanged %+v", after, before)
 	}
 }
@@ -845,7 +968,7 @@ func TestConvertRejectsMissingWoodWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 0 {
+	if state.AP != maxAP || len(state.Inventory) != 0 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("state after missing-Wood convert = %+v, want unchanged", state)
 	}
 }
@@ -872,7 +995,7 @@ func TestConvertRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != 0 || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+	if state.AP != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("state after insufficient-AP convert = %+v, want unchanged", state)
 	}
 	var after int64
@@ -895,8 +1018,8 @@ func TestConvertRollsBackAPAndWoodWhenResourceWriteFails(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TRIGGER fail_convert_resource_update
-BEFORE UPDATE ON player_resources
+	if _, err := db.Exec(`CREATE TRIGGER fail_convert_resource_insert
+BEFORE INSERT ON player_resources
 BEGIN
 SELECT RAISE(ABORT, 'test resource failure');
 END;`); err != nil {
@@ -909,7 +1032,7 @@ END;`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AP != maxAP || state.Resource != 0 || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 {
+	if state.AP != maxAP || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("rolled-back convert state = %+v, want original state", state)
 	}
 }

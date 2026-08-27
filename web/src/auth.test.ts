@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { convert, gather, getCurrentUser, move, rest, type PlayerState } from "./auth";
 
+const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
+  resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
+  quantity: 0,
+}));
+
 const campState: PlayerState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
@@ -9,11 +14,12 @@ const campState: PlayerState = {
   gathering_option: null,
   conversion_option: {
     item: { id: "wood", display_name: "Wood" },
+    resource: { id: "wood", display_name: "Wood" },
     input_quantity: 1,
     resource_yield: 1,
     ap_cost: 1,
   },
-  resource: 0,
+  resources,
 };
 
 const forestState: PlayerState = {
@@ -27,7 +33,7 @@ const forestState: PlayerState = {
     ap_cost: 10,
   },
   conversion_option: null,
-  resource: 0,
+  resources,
 };
 
 const gatheredForestState: PlayerState = {
@@ -308,6 +314,13 @@ describe("gather", () => {
     );
     await expect(gather(malformedOption)).resolves.toMatchObject({ status: "error" });
   });
+
+  it("rejects a conversion option without its typed Wood output", async () => {
+    const malformedOption = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...campState, conversion_option: { ...campState.conversion_option, resource: null } }), { status: 200 }),
+    );
+    await expect(getCurrentUser(malformedOption)).resolves.toMatchObject({ status: "error" });
+  });
 });
 
 describe("convert", () => {
@@ -315,7 +328,7 @@ describe("convert", () => {
     ...campState,
     ap: 2999,
     inventory: [],
-    resource: 1,
+    resources: resources.map((entry) => entry.resource.id === "wood" ? { ...entry, quantity: 1 } : entry),
   };
 
   it("sends only the supported empty payload and returns authoritative state", async () => {
@@ -371,7 +384,7 @@ describe("convert", () => {
     await expect(convert(unauthenticated)).resolves.toEqual({ status: "unauthenticated" });
 
     const malformed = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...convertedCampState, resource: -1 }), { status: 200 }),
+      new Response(JSON.stringify({ ...convertedCampState, resources: [{ resource: { id: "wood", display_name: "Wood" }, quantity: -1 }] }), { status: 200 }),
     );
     await expect(convert(malformed)).resolves.toMatchObject({
       status: "error",
@@ -387,11 +400,11 @@ describe("convert", () => {
 
   it("rejects malformed conflict and invalid-location response contracts", async () => {
     const malformedConflict = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: "insufficient item", resource: 1 }), { status: 409 }),
+      new Response(JSON.stringify({ error: "insufficient item", resources: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 1 }] }), { status: 409 }),
     );
     await expect(convert(malformedConflict)).resolves.toMatchObject({ status: "error" });
 
-    const malformedInvalid = vi.fn().mockResolvedValue(new Response(JSON.stringify({ resource: 1 }), { status: 400 }));
+    const malformedInvalid = vi.fn().mockResolvedValue(new Response(JSON.stringify({ resources: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 1 }] }), { status: 400 }));
     await expect(convert(malformedInvalid)).resolves.toMatchObject({ status: "error" });
   });
 });
