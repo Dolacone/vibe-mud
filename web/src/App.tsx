@@ -133,7 +133,12 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
       <section aria-labelledby="actions-heading">
         <h2 id="actions-heading">Actions</h2>
         <p>AP: {currentUser.ap}</p>
-        <p>Resource: {currentUser.resource}</p>
+        <h3>Resources</h3>
+        <ul aria-label="Resources">
+          {currentUser.resources.map((entry) => (
+            <li key={entry.resource.id}>{entry.resource.display_name}: {entry.quantity}</li>
+          ))}
+        </ul>
         <button type="button" onClick={() => void handleRest()} disabled={actionPendingNow}>
           {actionPendingNow ? "Resting..." : "Rest"}
         </button>
@@ -197,7 +202,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         ) : (
           <>
             <p>
-              Input: {currentUser.conversion_option.input_quantity} {currentUser.conversion_option.item.display_name}; Yield: {currentUser.conversion_option.resource_yield} Resource; Cost: {currentUser.conversion_option.ap_cost} AP
+              Input: {currentUser.conversion_option.input_quantity} {currentUser.conversion_option.item.display_name}; Yield: {currentUser.conversion_option.resource_yield} {currentUser.conversion_option.resource.display_name} Resource; Cost: {currentUser.conversion_option.ap_cost} AP
             </p>
             <button type="button" onClick={() => void handleConvert()} disabled={actionPendingNow}>
               {actionPendingNow ? "Converting..." : "Convert"}

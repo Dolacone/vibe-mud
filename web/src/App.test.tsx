@@ -14,6 +14,15 @@ const move = vi.mocked(auth.move);
 const gather = vi.mocked(auth.gather);
 const convert = vi.mocked(auth.convert);
 
+const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
+  resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
+  quantity: 0,
+}));
+
+const resourcesWithWood = (quantity: number) => resources.map((entry) => (
+  entry.resource.id === "wood" ? { ...entry, quantity } : entry
+));
+
 const campState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
@@ -22,11 +31,12 @@ const campState = {
   gathering_option: null,
   conversion_option: {
     item: { id: "wood", display_name: "Wood" },
+    resource: { id: "wood", display_name: "Wood" },
     input_quantity: 1,
     resource_yield: 1,
     ap_cost: 1,
   },
-  resource: 0,
+  resources,
 };
 
 const forestState = {
@@ -36,7 +46,7 @@ const forestState = {
   inventory: [],
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
   conversion_option: null,
-  resource: 0,
+  resources,
 };
 
 describe("App", () => {
@@ -56,14 +66,16 @@ describe("App", () => {
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(screen.getByText("AP: 3000")).toBeInTheDocument();
-    expect(screen.getByText("Resource: 0")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent(
+      "Food: 0Wood: 0Stone: 0Metal: 0Fiber: 0Hide: 0Medicinal: 0Arcane: 0",
+    );
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
     expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
     expect(screen.getByText("To forest_edge (20 AP)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();
-    expect(screen.getByText("Input: 1 Wood; Yield: 1 Resource; Cost: 1 AP")).toBeInTheDocument();
+    expect(screen.getByText("Input: 1 Wood; Yield: 1 Wood Resource; Cost: 1 AP")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
   });
@@ -130,16 +142,16 @@ describe("App", () => {
       inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 1 }],
     };
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...stateWithWood } });
-    convert.mockResolvedValue({ status: "success", ...campState, ap: 2999, resource: 1 });
+    convert.mockResolvedValue({ status: "success", ...campState, ap: 2999, resources: resourcesWithWood(1) });
     render(<App />);
 
     const button = await screen.findByRole("button", { name: "Convert" });
     button.click();
     await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
     expect(screen.getByText("AP: 2999")).toBeInTheDocument();
-    expect(screen.getByText("Resource: 1")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 1");
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
-    expect(screen.queryByText("Wood: 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Wood: 1", { selector: "li" })).toBeInTheDocument();
     expect(convert).toHaveBeenCalledTimes(1);
   });
 
@@ -148,7 +160,7 @@ describe("App", () => {
       ...campState,
       ap: 0,
       inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 2 }],
-      resource: 3,
+      resources: resourcesWithWood(3),
     };
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...stateWithWood } });
     convert.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...stateWithWood });
@@ -157,7 +169,7 @@ describe("App", () => {
     (await screen.findByRole("button", { name: "Convert" })).click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
     expect(screen.getByText("AP: 0")).toBeInTheDocument();
-    expect(screen.getByText("Resource: 3")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 3");
     expect(screen.getByText("Wood: 2")).toBeInTheDocument();
   });
 
@@ -174,8 +186,8 @@ describe("App", () => {
     button.click();
     expect(convert).toHaveBeenCalledTimes(1);
 
-    resolveConvert?.({ status: "success", ...campState, ap: 2999, resource: 1 });
-    await waitFor(() => expect(screen.getByText("Resource: 1")).toBeInTheDocument());
+    resolveConvert?.({ status: "success", ...campState, ap: 2999, resources: resourcesWithWood(1) });
+    await waitFor(() => expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 1"));
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
   });
 
@@ -189,7 +201,7 @@ describe("App", () => {
       inventory: [],
       gathering_option: null,
       conversion_option: null,
-      resource: 0,
+      resources,
     });
     render(<App />);
 
@@ -241,7 +253,7 @@ describe("App", () => {
       inventory: [],
       gathering_option: null,
       conversion_option: null,
-      resource: 0,
+      resources,
     });
     await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();

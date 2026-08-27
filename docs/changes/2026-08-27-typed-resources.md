@@ -14,6 +14,8 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
 req_ref: REQ-007
 related_req_refs:
   - REQ-008
@@ -134,9 +136,9 @@ Acceptance criteria:
 
 ### Task 4: Display all typed Resources
 
-- [ ] 在 `web/src/App.tsx` 顯示 8 種 Resource 與 quantity，並顯示 `convert` 的 Wood Resource output。
-- [ ] 成功與失敗後都套用後端權威的 typed Resource state。
-- [ ] 在 `web/src/App.test.tsx` 驗證初始零值、Wood 累加、完整列表與既有 action feedback。
+- [x] 在 `web/src/App.tsx` 顯示 8 種 Resource 與 quantity，並顯示 `convert` 的 Wood Resource output。
+- [x] 成功與失敗後都套用後端權威的 typed Resource state。
+- [x] 在 `web/src/App.test.tsx` 驗證初始零值、Wood 累加、完整列表與既有 action feedback。
 
 Source files: `web/src/App.tsx`
 
