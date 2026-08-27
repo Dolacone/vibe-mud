@@ -16,6 +16,8 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
 req_ref: REQ-010
 base_branch: main
 scope: "Tracks Building Lv1 placement, shared AP contributions, completion, and persistence."
@@ -256,13 +258,13 @@ Acceptance criteria:
 
 ### Task 6: Display and operate Building construction
 
-- [ ] Display the Building Lv1 recipe and current-Location Buildings in `web/src/App.tsx`.
-- [ ] Show owner, status, contributed AP, required AP, percentage, and empty extension slot count.
-- [ ] Start construction by recipe identifier.
-- [ ] Let any same-Location player choose positive AP and contribute to an in-progress Building.
-- [ ] Disable duplicate pending Actions and completed Building contributions.
-- [ ] Apply backend-authoritative AP, Inventory, Resources, and Building state after every result.
-- [ ] Cover start, occupied owner slot, shared progress, oversized contribution, completion, reload, and failures in `web/src/App.test.tsx`.
+- [x] Display the Building Lv1 recipe and current-Location Buildings in `web/src/App.tsx`.
+- [x] Show owner, status, contributed AP, required AP, percentage, and empty extension slot count.
+- [x] Start construction by recipe identifier.
+- [x] Let any same-Location player choose positive AP and contribute to an in-progress Building.
+- [x] Disable duplicate pending Actions and completed Building contributions.
+- [x] Apply backend-authoritative AP, Inventory, Resources, and Building state after every result.
+- [x] Cover start, occupied owner slot, shared progress, oversized contribution, completion, reload, and failures in `web/src/App.test.tsx`.
 
 Source files: `web/src/App.tsx`
 

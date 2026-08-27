@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { convert, craft, gather, getCurrentUser, move, rest, type AuthResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
+import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | { status: "idle" } | { status: "pending" };
-type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | null;
+type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | null;
 
 function Identity({ user }: { user: CurrentUser }) {
   return (
@@ -147,6 +147,27 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
+  const applyBuildingAction = async (kind: "build" | "contribute-construction", request: () => Promise<BuildResult>) => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setActionKind(kind);
+    setAction({ status: "pending" });
+    try {
+      const next = await request();
+      if (next.status === "success" || next.status === "insufficient" || next.status === "invalid") {
+        applyPlayerState(next);
+      }
+      setAction(next);
+    } catch (error) {
+      setAction({
+        status: "error",
+        error: error instanceof Error ? error : new Error(`${kind} request failed`),
+      });
+    } finally {
+      actionPending.current = false;
+    }
+  };
+
   const actionPendingNow = action.status === "pending";
 
   return (
@@ -268,6 +289,58 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         {action.status === "insufficient" && actionKind === "craft" && <p role="alert">Craft failed: {action.error}</p>}
         {action.status === "invalid" && actionKind === "craft" && <p role="alert">Craft failed: {action.error}</p>}
       </section>
+      <section aria-labelledby="building-heading">
+        <h2 id="building-heading">Buildings</h2>
+        <h3>Available recipes</h3>
+        {(currentUser.building_recipes ?? []).map((recipe) => (
+          <article key={recipe.id} aria-labelledby={`building-recipe-${recipe.id}`}>
+            <h4 id={`building-recipe-${recipe.id}`}>{recipe.display_name}</h4>
+            <p>Required AP: {recipe.required_ap}</p>
+            <p>Extension slots: {recipe.extension_slot_count}</p>
+            <p>Resource inputs:</p>
+            {recipe.resource_inputs.length === 0 ? <p>None</p> : (
+              <ul>
+                {recipe.resource_inputs.map((input) => <li key={input.resource.id}>{input.resource.display_name}: {input.quantity}</li>)}
+              </ul>
+            )}
+            <p>Item inputs:</p>
+            {recipe.item_inputs.length === 0 ? <p>None</p> : (
+              <ul>
+                {recipe.item_inputs.map((input) => <li key={input.item.id}>{input.item.display_name}: {input.quantity}</li>)}
+              </ul>
+            )}
+            <button type="button" onClick={() => void applyBuildingAction("build", () => build(recipe.id))} disabled={actionPendingNow}>
+              {actionPendingNow && actionKind === "build" ? "Building..." : `Build ${recipe.display_name}`}
+            </button>
+          </article>
+        ))}
+        <h3>Current location buildings</h3>
+        {(currentUser.buildings ?? []).length === 0 ? <p>No buildings at this location.</p> : (
+          <ul aria-label="Buildings">
+            {(currentUser.buildings ?? []).map((building) => {
+              const percentage = Math.floor((building.contributed_ap / building.required_ap) * 100);
+              const canContribute = building.status === "under_construction";
+              return (
+                <li key={building.id}>
+                  <article aria-label={`${building.recipe.display_name} building`}>
+                    <h4>{building.recipe.display_name}</h4>
+                    <p>Owner: {building.owner.display_name}</p>
+                    <p>Status: {building.status}</p>
+                    <p>Progress: {building.contributed_ap}/{building.required_ap} AP ({percentage}%)</p>
+                    <p>Empty extension slots: {building.extension_slot_count}</p>
+                    {canContribute && (
+                      <BuildingContribution buildingID={building.id} disabled={actionPendingNow} onSubmit={(ap) => void applyBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />
+                    )}
+                  </article>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {action.status === "success" && actionKind === "build" && <p role="status">Building construction started.</p>}
+        {action.status === "success" && actionKind === "contribute-construction" && <p role="status">Construction contribution succeeded.</p>}
+        {(action.status === "insufficient" || action.status === "invalid") && (actionKind === "build" || actionKind === "contribute-construction") && <p role="alert">Building action failed: {action.error}</p>}
+      </section>
       <section aria-labelledby="inventory-heading">
         <h2 id="inventory-heading">Inventory</h2>
         {currentUser.inventory.length === 0 ? (
@@ -281,6 +354,21 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         )}
       </section>
     </>
+  );
+}
+
+function BuildingContribution({ buildingID, disabled, onSubmit }: { buildingID: number; disabled: boolean; onSubmit: (ap: number) => void }) {
+  const [ap, setAP] = useState("");
+  const parsedAP = Number(ap);
+  const valid = Number.isInteger(parsedAP) && parsedAP > 0;
+  return (
+    <form onSubmit={(event) => { event.preventDefault(); if (valid) onSubmit(parsedAP); }}>
+      <label>
+        Contribution AP
+        <input aria-label={`Contribution AP for building ${buildingID}`} type="number" min="1" step="1" value={ap} onChange={(event) => setAP(event.target.value)} disabled={disabled} />
+      </label>
+      <button type="submit" disabled={disabled || !valid}>{disabled ? "Contributing..." : "Contribute AP"}</button>
+    </form>
   );
 }
 
