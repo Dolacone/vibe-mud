@@ -1159,25 +1159,62 @@ type buildingRecipeIdentityResponse struct {
 func buildingRecipeResponsesFromStore(recipes []BuildingRecipe) []buildingRecipeResponse {
 	responses := make([]buildingRecipeResponse, 0, len(recipes))
 	for _, recipe := range recipes {
-		resourceInputs := make([]buildingResourceInputResponse, 0, len(recipe.ResourceInputs))
-		for _, input := range recipe.ResourceInputs {
-			resourceInputs = append(resourceInputs, buildingResourceInputResponse{Resource: itemResponse{ID: input.Resource.ID, DisplayName: input.Resource.DisplayName}, Quantity: input.Quantity})
-		}
-		itemInputs := make([]buildingItemInputResponse, 0, len(recipe.ItemInputs))
-		for _, input := range recipe.ItemInputs {
-			itemInputs = append(itemInputs, buildingItemInputResponse{Item: itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName}, Quantity: input.Quantity})
-		}
-		responses = append(responses, buildingRecipeResponse{ID: recipe.ID, DisplayName: recipe.DisplayName, BuildingLevel: recipe.BuildingLevel, RequiredAP: recipe.RequiredAP, ExtensionSlotCount: recipe.ExtensionSlotCount, ResourceInputs: resourceInputs, ItemInputs: itemInputs})
+		responses = append(responses, buildingRecipeResponseFromStore(recipe))
 	}
 	return responses
+}
+
+func buildingRecipeResponseFromStore(recipe BuildingRecipe) buildingRecipeResponse {
+	resourceInputs := make([]buildingResourceInputResponse, 0, len(recipe.ResourceInputs))
+	for _, input := range recipe.ResourceInputs {
+		resourceInputs = append(resourceInputs, buildingResourceInputResponse{
+			Resource: itemResponse{ID: input.Resource.ID, DisplayName: input.Resource.DisplayName},
+			Quantity: input.Quantity,
+		})
+	}
+	itemInputs := make([]buildingItemInputResponse, 0, len(recipe.ItemInputs))
+	for _, input := range recipe.ItemInputs {
+		itemInputs = append(itemInputs, buildingItemInputResponse{
+			Item:     itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName},
+			Quantity: input.Quantity,
+		})
+	}
+	return buildingRecipeResponse{
+		ID:                 recipe.ID,
+		DisplayName:        recipe.DisplayName,
+		BuildingLevel:      recipe.BuildingLevel,
+		RequiredAP:         recipe.RequiredAP,
+		ExtensionSlotCount: recipe.ExtensionSlotCount,
+		ResourceInputs:     resourceInputs,
+		ItemInputs:         itemInputs,
+	}
 }
 
 func buildingResponsesFromStore(buildings []Building) []buildingResponse {
 	responses := make([]buildingResponse, 0, len(buildings))
 	for _, building := range buildings {
-		responses = append(responses, buildingResponse{ID: building.ID, Owner: buildingOwnerResponse{ID: building.Owner.ID, DisplayName: building.Owner.DisplayName}, Recipe: buildingRecipeIdentityResponse{ID: building.Recipe.ID, DisplayName: building.Recipe.DisplayName}, BuildingLevel: building.BuildingLevel, RequiredAP: building.RequiredAP, ContributedAP: building.ContributedAP, Status: building.Status, ExtensionSlotCount: building.ExtensionSlotCount})
+		responses = append(responses, buildingResponseFromStore(building))
 	}
 	return responses
+}
+
+func buildingResponseFromStore(building Building) buildingResponse {
+	return buildingResponse{
+		ID: building.ID,
+		Owner: buildingOwnerResponse{
+			ID:          building.Owner.ID,
+			DisplayName: building.Owner.DisplayName,
+		},
+		Recipe: buildingRecipeIdentityResponse{
+			ID:          building.Recipe.ID,
+			DisplayName: building.Recipe.DisplayName,
+		},
+		BuildingLevel:      building.BuildingLevel,
+		RequiredAP:         building.RequiredAP,
+		ContributedAP:      building.ContributedAP,
+		Status:             building.Status,
+		ExtensionSlotCount: building.ExtensionSlotCount,
+	}
 }
 
 func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipeResponse {
