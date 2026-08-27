@@ -6,6 +6,8 @@
 
 - Replaced the generic Resource balance with separate Food, Wood, Stone, Metal, Fiber, Hide, Medicinal, and Arcane quantities.
 - Updated conversion to produce Wood Resource while preserving existing Action behavior.
+- Added backend-owned crafting recipes with Resource inputs, optional Item inputs, and explicit Item outputs.
+- Added Wood Component crafting at every Location with atomic AP, Resource, and Inventory updates.
 
 ## 2026-08-26
 
