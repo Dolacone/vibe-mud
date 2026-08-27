@@ -476,8 +476,8 @@ CREATE TABLE IF NOT EXISTS buildings (
     building_level INTEGER NOT NULL CHECK (building_level > 0),
     required_ap INTEGER NOT NULL CHECK (required_ap > 0),
     contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
-    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
     status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
     UNIQUE (owner_id, location_id)
 );
 ```
@@ -492,8 +492,8 @@ CREATE TABLE IF NOT EXISTS buildings (
 | `building_level` | 建立時保存的 Building level。 |
 | `required_ap` | 建立時保存的施工 AP 需求。 |
 | `contributed_ap` | 所有玩家累計投入的 AP。 |
-| `extension_slot_count` | 建立時保存的 extension slot 數量。 |
 | `status` | `under_construction` 或 `completed`。 |
+| `extension_slot_count` | 建立時保存的 extension slot 數量。 |
 
 索引與約束：`UNIQUE (owner_id, location_id)` 讓施工中與完成的 Building 都占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。
 
