@@ -12,6 +12,8 @@ source_paths:
   - requirements/REQ-010.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-010
 base_branch: main
 scope: "Tracks Building Lv1 placement, shared AP contributions, completion, and persistence."
@@ -178,14 +180,14 @@ Acceptance criteria:
 
 ### Task 4: Expose Building construction through the API
 
-- [ ] Add `building_recipes` and current-Location `buildings` arrays to authenticated state in `internal/authapi/server.go`.
-- [ ] Return recipe `id`, `display_name`, `building_level`, `required_ap`, `extension_slot_count`, `resource_inputs`, and `item_inputs` with typed nested Item or Resource values.
-- [ ] Return Building numeric `id`, owner `id` and `display_name`, recipe `id` and `display_name`, `building_level`, `required_ap`, `contributed_ap`, `status`, and `extension_slot_count`.
-- [ ] Add `POST /api/actions/build` accepting only `{"recipe_id":"building_lv1"}`.
-- [ ] Add `POST /api/actions/contribute-construction` accepting only `{"building_id":1,"ap":10}` with positive integer values.
-- [ ] Reject missing, duplicate, malformed, unknown, remote, completed, and extra values with authoritative state.
-- [ ] Log success and sanitized rejection outcomes with user ID, Action, result, reason, and request ID.
-- [ ] Cover response contracts, whitelist validation, state preservation, and log sanitization in `internal/authapi/server_test.go`.
+- [x] Add `building_recipes` and current-Location `buildings` arrays to authenticated state in `internal/authapi/server.go`.
+- [x] Return recipe `id`, `display_name`, `building_level`, `required_ap`, `extension_slot_count`, `resource_inputs`, and `item_inputs` with typed nested Item or Resource values.
+- [x] Return Building numeric `id`, owner `id` and `display_name`, recipe `id` and `display_name`, `building_level`, `required_ap`, `contributed_ap`, `status`, and `extension_slot_count`.
+- [x] Add `POST /api/actions/build` accepting only `{"recipe_id":"building_lv1"}`.
+- [x] Add `POST /api/actions/contribute-construction` accepting only `{"building_id":1,"ap":10}` with positive integer values.
+- [x] Reject missing, duplicate, malformed, unknown, remote, completed, and extra values with authoritative state.
+- [x] Log success and sanitized rejection outcomes with user ID, Action, result, reason, and request ID.
+- [x] Cover response contracts, whitelist validation, state preservation, and log sanitization in `internal/authapi/server_test.go`.
 
 Source files: `internal/authapi/server.go`
 

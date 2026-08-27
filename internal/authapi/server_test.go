@@ -464,8 +464,16 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 11 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 13 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	buildingRecipes, ok := meBody["building_recipes"].([]any)
+	if !ok || len(buildingRecipes) != 1 {
+		t.Fatalf("GET /api/me building recipes = %#v", meBody["building_recipes"])
+	}
+	buildings, ok := meBody["buildings"].([]any)
+	if !ok || len(buildings) != 0 {
+		t.Fatalf("GET /api/me buildings = %#v", meBody["buildings"])
 	}
 	recipes, ok := meBody["crafting_recipes"].([]any)
 	if !ok || len(recipes) != 1 {
@@ -528,6 +536,63 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	handler.ServeHTTP(unauthenticatedResponse, unauthenticated)
 	if unauthenticatedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated rest status = %d", unauthenticatedResponse.Code)
+	}
+}
+
+func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "building-api", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Routes()
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/build", strings.NewReader(`{"recipe_id":"building_lv1","required_ap":1}`))
+	request.Header.Set("X-Request-ID", "build-api")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || strings.Contains(logOutput, `"recipe_id"`) {
+		t.Fatalf("build whitelist status/log = %d/%q", response.Code, logOutput)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/build", strings.NewReader(`{"recipe_id":"building_lv1"}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("build status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	buildings, ok := body["buildings"].([]any)
+	if !ok || len(buildings) != 1 {
+		t.Fatalf("buildings response = %#v", body["buildings"])
+	}
+	building := buildings[0].(map[string]any)
+	if building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" {
+		t.Fatalf("building response = %#v", building)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":10,"extra":true}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("contribution extra field status = %d", response.Code)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	buildings = body["buildings"].([]any)
+	if buildings[0].(map[string]any)["contributed_ap"] != float64(0) {
+		t.Fatalf("rejected contribution changed state = %#v", buildings[0])
 	}
 }
 
