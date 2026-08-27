@@ -582,11 +582,11 @@ export async function craft(recipeID: string, fetcher: typeof fetch = fetch): Pr
       if (!isCraftError(body)) {
         return { status: "error", error: new Error("craft response is invalid") };
       }
-      if (isPlayerState(body)) {
-        const { error, ...state } = body;
-        return { status: "invalid", error, state };
+      if (!isPlayerState(body)) {
+        return { status: "error", error: new Error("craft response is invalid") };
       }
-      return { status: "invalid", error: body.error };
+      const { error, ...state } = body;
+      return { status: "invalid", error, state };
     }
 
     if (response.status !== 200) {

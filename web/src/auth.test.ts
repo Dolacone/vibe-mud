@@ -451,13 +451,31 @@ describe("craft", () => {
     await expect(craft("missing", fetcher)).resolves.toEqual({ status: "invalid", error: "unknown recipe", state: campState });
   });
 
-  it("rejects malformed recipe state and craft responses", async () => {
+  it("rejects malformed recipe state and craft success responses", async () => {
     const malformedRecipe = { ...campState, crafting_recipes: [{ ...woodComponentRecipe, output: undefined }] };
     const recipeFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...malformedRecipe }), { status: 200 }));
     await expect(getCurrentUser(recipeFetcher)).resolves.toMatchObject({ status: "error" });
 
     const responseFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, crafting_recipes: [{ ...woodComponentRecipe, resource_inputs: [] }] }), { status: 200 }));
     await expect(craft(woodComponentRecipe.id, responseFetcher)).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("rejects a 400 response without authoritative state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "unknown recipe" }), { status: 400 }));
+    await expect(craft("missing", fetcher)).resolves.toEqual({
+      status: "error",
+      error: new Error("craft response is invalid"),
+    });
+  });
+
+  it("rejects a 400 response with malformed authoritative state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "unknown recipe", ...campState, resources: [] }), { status: 400 }),
+    );
+    await expect(craft("missing", fetcher)).resolves.toEqual({
+      status: "error",
+      error: new Error("craft response is invalid"),
+    });
   });
 
   it("rejects malformed conflict responses instead of inventing state", async () => {
