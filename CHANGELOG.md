@@ -6,6 +6,9 @@
 
 - Changed all persistent timestamps from Unix nanoseconds to Unix seconds.
 - Added idempotent migration and converted-value logging for existing timestamps.
+- Added seven-day time-derived durability for completed Buildings.
+- Added a shared repair Action that spends 10 AP and one Wood Resource for up to one hour.
+- Added a three-day repair window before expired Buildings disappear and release their Location slot.
 
 ## 2026-08-27
 

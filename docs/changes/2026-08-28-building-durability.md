@@ -1,6 +1,6 @@
 ---
 title: "Building durability and repair"
-status: Refactored
+status: Done
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
