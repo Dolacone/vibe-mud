@@ -407,7 +407,7 @@ CREATE TABLE IF NOT EXISTS building_recipes (
     building_level INTEGER NOT NULL CHECK (building_level > 0),
     required_ap INTEGER NOT NULL CHECK (required_ap > 0),
     extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
-    max_durability_seconds INTEGER NOT NULL CHECK (max_durability_seconds > 0)
+    max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)
 );
 ```
 
@@ -480,7 +480,7 @@ CREATE TABLE IF NOT EXISTS buildings (
     contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
     status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
     extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
-    max_durability_seconds INTEGER NOT NULL CHECK (max_durability_seconds > 0),
+    max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0),
     durability_expires_at INTEGER,
     UNIQUE (owner_id, location_id)
 );
@@ -501,7 +501,7 @@ CREATE TABLE IF NOT EXISTS buildings (
 | `max_durability_seconds` | 建立時保存的耐久上限秒數。 |
 | `durability_expires_at` | 完成 Building 的耐久期限。施工中為 `NULL`。 |
 
-索引與約束：`UNIQUE (owner_id, location_id)` 讓尚未消失的 Building 占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。後端在狀態讀取、建造與維修前刪除已超過 Disabled 保留期的 row。
+索引與約束：`UNIQUE (owner_id, location_id)` 讓尚未消失的 Building 占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。後端在狀態讀取、建造、施工貢獻與維修前刪除已超過 Disabled 保留期的 row。
 
 ## 關聯與約束
 
@@ -603,6 +603,8 @@ VALUES ('building_lv1', 'wood', 10);
 Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
 
 Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
+
+既有資料庫若缺少 durability columns，`ensureBuildingSchema` 依序執行 `ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)`、`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)` 與 `ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`。接著以 migration 當下的 UTC Unix seconds `migration_now` 執行 `UPDATE buildings SET durability_expires_at = migration_now + max_durability_seconds WHERE status = 'completed' AND durability_expires_at IS NULL`。施工中的 Building 不會被 backfill expiry。
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 

@@ -4,7 +4,10 @@ status: Ready-to-implement
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
+  - docs/schemas.md
 req_ref: REQ-011
 base_branch: main
 scope: "Tracks Building Lv1 durability, disablement, destruction, and shared repair."
@@ -51,7 +54,7 @@ Task 1: persistence and game rules
 └── Task 4: frontend interaction
 ```
 
-- [ ] Task 1: Persist and compute Building durability in `internal/authapi/store.go`. Add schema migration, completion initialization, lazy destruction, repair transaction, computation output, and store tests. Update `docs/schemas.md` with the exact migration and backfill in the same commit. This task blocks Tasks 2 and 4.
+- [x] Task 1: Persist and compute Building durability in `internal/authapi/store.go`. Add schema migration, completion initialization, lazy destruction, repair transaction, computation output, and store tests. Update `docs/schemas.md` with the exact migration and backfill in the same commit. This task blocks Tasks 2 and 4.
   - REQ-011.1: `Building Lv1` 完成時必須取得 7 天耐久時間。
   - REQ-011.2: Building 必須隨現實經過時間自然減少剩餘耐久時間。
   - REQ-011.3: 剩餘耐久時間大於 0 時，Building 必須顯示為 Active。

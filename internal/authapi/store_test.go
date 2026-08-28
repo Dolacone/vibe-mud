@@ -407,6 +407,303 @@ func TestBuildSeededRecipeRollsBackWhenEitherMixedInputIsInsufficient(t *testing
 	}
 }
 
+func TestBuildingCompletionInitializesAndComputesDurability(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-durability-completion", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 1, 60, 59, 'under_construction', 1)`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeConstruction(owner.ID, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 {
+		t.Fatalf("buildings = %+v, want one building", state.Buildings)
+	}
+	building := state.Buildings[0]
+	if building.Status != "completed" || building.MaxDurabilitySeconds != int(buildingDefaultDurability/time.Second) || building.DurabilityStatus != "active" || building.DurabilityRemainingSeconds != int(buildingDefaultDurability/time.Second) {
+		t.Fatalf("completed building durability = %+v, want active seven-day durability", building)
+	}
+	var expiry int64
+	if err := db.QueryRow(`SELECT durability_expires_at FROM buildings WHERE id = 1`).Scan(&expiry); err != nil {
+		t.Fatal(err)
+	}
+	if expiry != now.Unix()+int64(buildingDefaultDurability/time.Second) {
+		t.Fatalf("durability expiry = %d, want %d", expiry, now.Unix()+int64(buildingDefaultDurability/time.Second))
+	}
+
+	now = now.Add(2 * time.Hour)
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Buildings[0].DurabilityStatus != "active" || state.Buildings[0].DurabilityRemainingSeconds != int(buildingDefaultDurability/time.Second)-7200 {
+		t.Fatalf("elapsed durability = %+v, want two hours elapsed", state.Buildings[0])
+	}
+}
+
+func TestBuildingDurabilityDisablesThenDestroysAndReleasesSlot(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-durability-lifecycle", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := now.Add(-time.Hour).Unix()
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, ?)`, owner.ID, expiry); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 || state.Buildings[0].DurabilityStatus != "disabled" || state.Buildings[0].DurabilityRemainingSeconds != 0 {
+		t.Fatalf("disabled building = %+v, want retained disabled building", state.Buildings)
+	}
+	now = now.Add(3 * 24 * time.Hour)
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 0 {
+		t.Fatalf("destroyed buildings = %+v, want none", state.Buildings)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM buildings WHERE owner_id = ? AND location_id = 'camp'`, owner.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("destroyed row count = %d, want zero", count)
+	}
+}
+
+func TestBuildingDurabilitySchemaUpgradeBackfillsCompletedRows(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:building-durability-schema-upgrade?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createdAt := time.Date(2026, 8, 28, 11, 0, 0, 0, time.UTC).Unix()
+	if _, err := db.Exec(`
+CREATE TABLE identities (id INTEGER PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE player_ap (user_id INTEGER PRIMARY KEY, full_timestamp INTEGER NOT NULL);
+CREATE TABLE locations (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+CREATE TABLE player_locations (user_id INTEGER PRIMARY KEY, location_id TEXT NOT NULL);
+CREATE TABLE building_recipes (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, building_level INTEGER NOT NULL, required_ap INTEGER NOT NULL, extension_slot_count INTEGER NOT NULL);
+CREATE TABLE building_recipe_resource_inputs (recipe_id TEXT NOT NULL, resource_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (recipe_id, resource_id));
+CREATE TABLE building_recipe_item_inputs (recipe_id TEXT NOT NULL, item_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (recipe_id, item_id));
+CREATE TABLE buildings (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL, location_id TEXT NOT NULL, recipe_id TEXT NOT NULL, building_level INTEGER NOT NULL, required_ap INTEGER NOT NULL, contributed_ap INTEGER NOT NULL, status TEXT NOT NULL, extension_slot_count INTEGER NOT NULL, UNIQUE (owner_id, location_id));
+INSERT INTO identities VALUES (41, 'https://accounts.google.com', 'legacy-building', 'person@example.com', 'Person', ?, ?);
+INSERT INTO player_ap VALUES (41, ?);
+INSERT INTO locations VALUES ('camp', 'Camp'), ('legacy-location', 'Legacy Location');
+INSERT INTO player_locations VALUES (41, 'camp');
+INSERT INTO building_recipes VALUES ('legacy-building', 'Legacy Building', 1, 60, 1);
+INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (41, 'camp', 'legacy-building', 1, 60, 60, 'completed', 1), (41, 'legacy-location', 'legacy-building', 1, 60, 0, 'under_construction', 1);`, createdAt, createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Unix()
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var maxDurability int64
+	var displayName string
+	var expiry sql.NullInt64
+	if err := db.QueryRow(`SELECT display_name, max_durability_seconds, durability_expires_at FROM buildings WHERE id = 1`).Scan(&displayName, &maxDurability, &expiry); err != nil {
+		t.Fatal(err)
+	}
+	if displayName != "Legacy Building" || maxDurability != int64(buildingDefaultDurability/time.Second) || !expiry.Valid || expiry.Int64 < before+int64(buildingDefaultDurability/time.Second)-2 || expiry.Int64 > time.Now().UTC().Unix()+int64(buildingDefaultDurability/time.Second)+2 {
+		t.Fatalf("migrated completed building = name %q max %d expiry %v", displayName, maxDurability, expiry)
+	}
+	var underConstructionExpiry sql.NullInt64
+	if err := db.QueryRow(`SELECT durability_expires_at FROM buildings WHERE id = 2`).Scan(&underConstructionExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if underConstructionExpiry.Valid {
+		t.Fatalf("under-construction expiry = %v, want NULL", underConstructionExpiry)
+	}
+	store.now = func() time.Time { return time.Unix(before, 0).UTC() }
+	state, err := store.GetPlayerState(41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 || state.Buildings[0].DurabilityStatus != "active" {
+		t.Fatalf("migrated state = %+v, want active completed building at current location", state.Buildings)
+	}
+}
+
+func TestRepairBuildingAllowsAnyPlayerAndUpdatesAllStateAtomically(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-repair-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairer, err := store.UpsertIdentity("https://accounts.google.com", "subject-repairer", "repairer@example.com", "Repairer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := now.Add(2 * time.Hour).Unix()
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, ?)`, owner.ID, expiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2)`, repairer.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.RepairBuilding(repairer.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-buildingRepairAPCost || resourceQuantity(state, "wood") != 1 || state.RepairComputation == nil {
+		t.Fatalf("repair state = %+v, want AP and Wood cost plus computation", state)
+	}
+	computation := state.RepairComputation
+	if computation.BuildingID != 1 || computation.PriorDurabilityStatus != "active" || computation.AddedSeconds != int(buildingRepairDuration/time.Second) || computation.ResultingRemainingSeconds != int(3*time.Hour/time.Second) || computation.APCost != buildingRepairAPCost || computation.WoodCost != buildingRepairWoodCost {
+		t.Fatalf("repair computation = %+v", computation)
+	}
+	building := state.Buildings[0]
+	if building.DurabilityStatus != "active" || building.DurabilityRemainingSeconds != int(3*time.Hour/time.Second) {
+		t.Fatalf("repaired building = %+v, want three hours remaining", building)
+	}
+	var storedExpiry int64
+	if err := db.QueryRow(`SELECT durability_expires_at FROM buildings WHERE id = 1`).Scan(&storedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if storedExpiry != now.Add(3*time.Hour).Unix() {
+		t.Fatalf("stored expiry = %d, want %d", storedExpiry, now.Add(3*time.Hour).Unix())
+	}
+}
+
+func TestRepairBuildingRevivesDisabledBuildingAndClampsWithoutRefund(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-repair-disabled", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, 7200, ?)`, identity.ID, now.Add(-time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.RepairBuilding(identity.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Buildings[0].DurabilityRemainingSeconds != 3600 || state.RepairComputation.PriorDurabilityStatus != "disabled" {
+		t.Fatalf("revived building = %+v, want one hour remaining", state.Buildings[0])
+	}
+
+	now = now.Add(2 * time.Hour)
+	if _, err := db.Exec(`UPDATE buildings SET durability_expires_at = ? WHERE id = 1`, now.Add(7000*time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.RepairBuilding(identity.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Buildings[0].DurabilityRemainingSeconds != 7200 || state.AP != maxAP-buildingRepairAPCost || resourceQuantity(state, "wood") != 0 {
+		t.Fatalf("clamped repair state = %+v, want full cap with full costs", state)
+	}
+}
+
+func TestRepairBuildingRejectsInvalidTargetsAndPreservesState(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		setup      func(*testing.T, *Store, *sql.DB, Identity, time.Time)
+		repairerID func(Identity, Identity) int64
+		buildingID int64
+		wantErr    error
+	}{
+		{
+			name: "remote",
+			setup: func(t *testing.T, store *Store, db *sql.DB, owner Identity, now time.Time) {
+				if _, err := db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-repair', 'Remote Repair'); INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, durability_expires_at) VALUES (?, 'remote-repair', 'building_lv1', 1, 60, 60, 'completed', 1, ?)`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repairerID: func(owner, _ Identity) int64 { return owner.ID }, buildingID: 1, wantErr: ErrBuildingRemote,
+		},
+		{
+			name: "under-construction",
+			setup: func(t *testing.T, store *Store, db *sql.DB, owner Identity, now time.Time) {
+				if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 1, 60, 0, 'under_construction', 1)`, owner.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repairerID: func(owner, _ Identity) int64 { return owner.ID }, buildingID: 1, wantErr: ErrBuildingUnderConstruction,
+		},
+		{
+			name: "insufficient-ap",
+			setup: func(t *testing.T, store *Store, db *sql.DB, owner Identity, now time.Time) {
+				if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, ?)`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(2991*time.Minute).Unix(), owner.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, owner.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repairerID: func(owner, _ Identity) int64 { return owner.ID }, buildingID: 1, wantErr: ErrInsufficientAP,
+		},
+		{
+			name: "insufficient-wood",
+			setup: func(t *testing.T, store *Store, db *sql.DB, owner Identity, now time.Time) {
+				if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, ?)`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+					t.Fatal(err)
+				}
+			},
+			repairerID: func(owner, _ Identity) int64 { return owner.ID }, buildingID: 1, wantErr: ErrInsufficientResource,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, db := newTestStore(t)
+			now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+			store.now = func() time.Time { return now }
+			owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-repair-reject-"+test.name, "owner@example.com", "Owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := store.UpsertIdentity("https://accounts.google.com", "subject-repair-other-"+test.name, "other@example.com", "Other")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.name == "remote" {
+				if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, other.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			test.setup(t, store, db, owner, now)
+			before, err := store.GetPlayerState(owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actorID := test.repairerID(owner, other)
+			if _, err := store.RepairBuilding(actorID, test.buildingID); !errors.Is(err, test.wantErr) {
+				t.Fatalf("repair error = %v, want %v", err, test.wantErr)
+			}
+			after, err := store.GetPlayerState(owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed repair changed owner state: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
 func TestCraftLoadsSeededRecipeAndAtomicallyConsumesResources(t *testing.T) {
 	store, db := newTestStore(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
