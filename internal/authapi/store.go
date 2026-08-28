@@ -414,22 +414,22 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		{table: "player_ap", column: "full_timestamp"},
 	}
 	var convertedValues int64
-	for _, timestamp := range timestampColumns {
+	for _, timestampColumn := range timestampColumns {
 		query := fmt.Sprintf(
 			"UPDATE %s SET %s = %s / ? WHERE %s >= ? OR %s <= -?",
-			timestamp.table,
-			timestamp.column,
-			timestamp.column,
-			timestamp.column,
-			timestamp.column,
+			timestampColumn.table,
+			timestampColumn.column,
+			timestampColumn.column,
+			timestampColumn.column,
+			timestampColumn.column,
 		)
 		result, err := tx.Exec(query, nanosecondsPerSecond, unixNanosecondsThreshold, unixNanosecondsThreshold)
 		if err != nil {
-			return 0, fmt.Errorf("convert %s.%s: %w", timestamp.table, timestamp.column, err)
+			return 0, fmt.Errorf("convert %s.%s: %w", timestampColumn.table, timestampColumn.column, err)
 		}
 		rows, err := result.RowsAffected()
 		if err != nil {
-			return 0, fmt.Errorf("count converted %s.%s: %w", timestamp.table, timestamp.column, err)
+			return 0, fmt.Errorf("count converted %s.%s: %w", timestampColumn.table, timestampColumn.column, err)
 		}
 		convertedValues += rows
 	}
