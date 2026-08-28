@@ -9,6 +9,8 @@ source_paths:
   - docs/schemas.md
   - docs/terminology.md
   - docs/changes/2026-08-28-carrying-weight.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
   - requirements/BEHAVIOR.md
   - requirements/REQ-014.md
 req_ref: REQ-014
@@ -52,7 +54,7 @@ Task 1: definition weights and movement rule [parallel: no]
         └── Task 4: carrying weight interface [parallel: no]
 ```
 
-- [ ] Task 1 [parallel: no]: Add definition weight columns, their idempotent migration, derived player carrying weight, and atomic overweight Move rejection in `internal/authapi/store.go`. Update store tests. Keep Pickup, Gather, Craft, Convert, and Drop unrestricted by weight. Keep `docs/schemas.md`, `docs/terminology.md`, and `docs/architecture.md` aligned with the executable behavior.
+- [x] Task 1 [parallel: no]: Add definition weight columns, their idempotent migration, derived player carrying weight, and atomic overweight Move rejection in `internal/authapi/store.go`. Update store tests. Keep Pickup, Gather, Craft, Convert, and Drop unrestricted by weight. Keep `docs/schemas.md`, `docs/terminology.md`, and `docs/architecture.md` aligned with the executable behavior.
   - REQ-014.1: 每位玩家的移動負重門檻為 1000 重量單位。
   - REQ-014.2: Wood Item 每單位重 100。Wood Resource 每單位重 1。Wood Component 每單位重 10。其他 Resource 每單位重 1。
   - REQ-014.3: 系統依玩家持有的每種 Item 與 Resource 數量及其單位重量，計算目前攜帶重量。系統不保存計算結果。
