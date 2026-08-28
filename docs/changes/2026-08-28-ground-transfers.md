@@ -11,6 +11,7 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
   - web/src/App.test.tsx
   - docs/schemas.md
   - docs/changes/2026-08-28-ground-transfers.md
@@ -98,7 +99,7 @@ Task 1: persistence and Transfer rules [parallel: no]
   - REQ-013.10: Resource 必須依 Location 與 Resource type 合併 quantity，不得轉換成 Item。
   - REQ-013.11: Pickup 與 Drop 必須屬於 Transfer，不得視為 Action。
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
-- [ ] Task 4 [parallel: no]: Add Ground Items and Ground Resources tables plus quantity controls in `web/src/App.tsx`. Add Drop controls to Inventory and Resources. Preserve compact table behavior and update interaction tests.
+- [x] Task 4 [parallel: no]: Add Ground Items and Ground Resources tables plus quantity controls in `web/src/App.tsx`. Add Drop controls to Inventory and Resources. Preserve compact table behavior and update interaction tests.
   - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
   - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
   - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
