@@ -2366,6 +2366,93 @@ func TestItemActionsCreateFullDurabilityAndNeverConsumeExpiredInputs(t *testing.
 	}
 }
 
+func TestSuccessfulActionsPreserveItemDurabilityCleanupMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Store, *sql.DB, int64, time.Time) (PlayerState, error)
+	}{
+		{name: "pickup", run: func(store *Store, db *sql.DB, userID int64, now time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 1)`, now.Add(time.Hour).Unix())
+			if err != nil {
+				return PlayerState{}, err
+			}
+			return store.Pickup(userID, "item", "wood", 1, "active")
+		}},
+		{name: "move", run: func(store *Store, _ *sql.DB, userID int64, _ time.Time) (PlayerState, error) {
+			return store.Move(userID, "forest_edge")
+		}},
+		{name: "convert", run: func(store *Store, db *sql.DB, userID int64, now time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 1)`, userID, now.Add(time.Hour).Unix())
+			if err != nil {
+				return PlayerState{}, err
+			}
+			return store.Convert(userID)
+		}},
+		{name: "craft", run: func(store *Store, db *sql.DB, userID int64, _ time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, userID)
+			if err != nil {
+				return PlayerState{}, err
+			}
+			return store.Craft(userID, "wood_component")
+		}},
+		{name: "build", run: func(store *Store, db *sql.DB, userID int64, now time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood_component', 'active', ?, 1)`, userID, now.Add(time.Hour).Unix())
+			if err != nil {
+				return PlayerState{}, err
+			}
+			if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, userID); err != nil {
+				return PlayerState{}, err
+			}
+			return store.Build(userID, "building_lv1")
+		}},
+		{name: "construction contribution", run: func(store *Store, db *sql.DB, userID int64, _ time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 0, 'under_construction', 1, ?)`, userID, int(buildingDefaultDurability/time.Second))
+			if err != nil {
+				return PlayerState{}, err
+			}
+			return store.ContributeConstruction(userID, 1, 1)
+		}},
+		{name: "repair", run: func(store *Store, db *sql.DB, userID int64, now time.Time) (PlayerState, error) {
+			_, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, ?, ?)`, userID, int(buildingDefaultDurability/time.Second), now.Add(time.Hour).Unix())
+			if err != nil {
+				return PlayerState{}, err
+			}
+			if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, userID); err != nil {
+				return PlayerState{}, err
+			}
+			return store.RepairBuilding(userID, 1)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, db := newTestStore(t)
+			now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+			store.now = func() time.Time { return now }
+			identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-cleanup-"+test.name, test.name+"@example.com", "Person")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`INSERT INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('cleanup_item', 'Cleanup Item', 1, ?)`, int(buildingDefaultDurability/time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'cleanup_item', 'active', ?, 1)`, identity.ID, now.Add(-time.Hour).Unix()); err != nil {
+				t.Fatal(err)
+			}
+			state, err := test.run(store, db, identity.ID, now)
+			if err != nil {
+				t.Fatalf("action error = %v", err)
+			}
+			if len(state.ItemDurabilityCleanups) != 1 {
+				t.Fatalf("cleanup metadata = %+v, want one expiration", state.ItemDurabilityCleanups)
+			}
+			cleanup := state.ItemDurabilityCleanups[0]
+			if cleanup.Holding != "inventory" || cleanup.ItemID != "cleanup_item" || cleanup.Quantity != 1 || cleanup.Action != "expired" || cleanup.ExpiredAt != now.Add(-time.Hour).Unix() {
+				t.Fatalf("cleanup metadata = %+v", cleanup)
+			}
+		})
+	}
+}
+
 func TestItemTransfersPreservePartialDurabilityAndRejectExpiredPickup(t *testing.T) {
 	store, db := newTestStore(t)
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)

@@ -1604,7 +1604,8 @@ func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int, it
 		return PlayerState{}, fmt.Errorf("begin pickup: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -1657,6 +1658,7 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit pickup: %w", err)
 	}
@@ -1813,7 +1815,8 @@ func (s *Store) Move(userID int64, targetID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin move: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -1905,6 +1908,7 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit move: %w", err)
 	}
@@ -1920,7 +1924,8 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin convert: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -2010,6 +2015,7 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit convert: %w", err)
 	}
@@ -2025,7 +2031,8 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin craft: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -2145,6 +2152,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit craft: %w", err)
 	}
@@ -2160,7 +2168,8 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin building: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -2274,6 +2283,7 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit building: %w", err)
 	}
@@ -2289,7 +2299,8 @@ func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int
 		return PlayerState{}, fmt.Errorf("begin construction contribution: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -2396,6 +2407,7 @@ WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgr
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit construction contribution: %w", err)
 	}
@@ -2418,7 +2430,8 @@ func (s *Store) RepairBuilding(userID, buildingID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin building repair: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -2547,6 +2560,7 @@ WHERE id = ? AND status = 'completed' AND durability_expires_at = ?`, newExpiry,
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit building repair: %w", err)
 	}
