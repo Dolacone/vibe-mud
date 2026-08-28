@@ -4,6 +4,7 @@ import { build, contributeConstruction, convert, craft, gather, getCurrentUser, 
 type PageState = AuthResult | { status: "loading" };
 type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | { status: "idle" } | { status: "pending" };
 type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | "repair-building" | null;
+type ActiveActionKind = Exclude<ActionKind, null>;
 
 function TableScroll({ children }: { children: ReactNode }) {
   return <div className="table-scroll">{children}</div>;
@@ -27,129 +28,14 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     setCurrentUser((previous) => ({ ...previous, ...state }));
   };
 
-  const handleRest = async () => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("rest");
-    setAction({ status: "pending" });
-    try {
-      const next = await rest();
-      if (next.status === "success" || next.status === "insufficient") {
-        setCurrentUser((previous) => ({ ...previous, ap: next.ap }));
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("rest request failed"),
-      });
-    } finally {
-      actionPending.current = false;
-    }
-  };
-
-  const handleMove = async (target: string) => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("move");
-    setAction({ status: "pending" });
-    try {
-      const next = await move(target);
-      if (next.status === "success" || next.status === "insufficient") {
-        applyPlayerState(next);
-      } else if (next.status === "invalid" && next.state) {
-        applyPlayerState(next.state);
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("move request failed"),
-      });
-    } finally {
-      actionPending.current = false;
-    }
-  };
-
-  const handleGather = async () => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("gather");
-    setAction({ status: "pending" });
-    try {
-      const next = await gather();
-      if (next.status === "success" || next.status === "insufficient") {
-        applyPlayerState(next);
-      } else if (next.status === "invalid" && next.state) {
-        applyPlayerState(next.state);
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("gather request failed"),
-      });
-    } finally {
-      actionPending.current = false;
-    }
-  };
-
-  const handleConvert = async () => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("convert");
-    setAction({ status: "pending" });
-    try {
-      const next = await convert();
-      if (next.status === "success" || next.status === "insufficient") {
-        applyPlayerState(next);
-      } else if (next.status === "invalid" && next.state) {
-        applyPlayerState(next.state);
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("convert request failed"),
-      });
-    } finally {
-      actionPending.current = false;
-    }
-  };
-
-  const handleCraft = async (recipeID: string) => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("craft");
-    setAction({ status: "pending" });
-    try {
-      const next = await craft(recipeID);
-      if (next.status === "success" || next.status === "insufficient") {
-        applyPlayerState(next);
-      } else if (next.status === "invalid" && next.state) {
-        applyPlayerState(next.state);
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("craft request failed"),
-      });
-    } finally {
-      actionPending.current = false;
-    }
-  };
-
-  const applyBuildingAction = async (kind: "build" | "contribute-construction", request: () => Promise<BuildResult>) => {
+  const runAction = async <T extends ActionState>(kind: ActiveActionKind, request: () => Promise<T>, applyResult?: (result: T) => void) => {
     if (actionPending.current) return;
     actionPending.current = true;
     setActionKind(kind);
     setAction({ status: "pending" });
     try {
       const next = await request();
-      if (next.status === "success" || next.status === "insufficient" || next.status === "invalid") {
-        applyPlayerState(next);
-      }
+      applyResult?.(next);
       setAction(next);
     } catch (error) {
       setAction({
@@ -161,28 +47,45 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
-  const handleRepair = async (buildingID: number) => {
-    if (actionPending.current) return;
-    actionPending.current = true;
-    setActionKind("repair-building");
-    setAction({ status: "pending" });
-    try {
-      const next = await repairBuilding(buildingID);
-      if (next.status === "success" || next.status === "conflict") {
-        applyPlayerState(next);
-      } else if (next.status === "invalid" && next.state) {
-        applyPlayerState(next.state);
-      }
-      setAction(next);
-    } catch (error) {
-      setAction({
-        status: "error",
-        error: error instanceof Error ? error : new Error("repair-building request failed"),
-      });
-    } finally {
-      actionPending.current = false;
+  const applyPlayerActionResult = (next: MoveResult | GatherResult | ConvertResult | CraftResult) => {
+    if (next.status === "success" || next.status === "insufficient") {
+      applyPlayerState(next);
+    } else if (next.status === "invalid" && next.state) {
+      applyPlayerState(next.state);
     }
   };
+
+  const handleRest = () => runAction("rest", rest, (next) => {
+    if (next.status === "success" || next.status === "insufficient") {
+      setCurrentUser((previous) => ({ ...previous, ap: next.ap }));
+    }
+  });
+
+  const handleMove = (target: string) => runAction("move", () => move(target), applyPlayerActionResult);
+
+  const handleGather = () => runAction("gather", gather, applyPlayerActionResult);
+
+  const handleConvert = () => runAction("convert", convert, applyPlayerActionResult);
+
+  const handleCraft = (recipeID: string) => runAction("craft", () => craft(recipeID), applyPlayerActionResult);
+
+  const applyBuildingResult = (next: BuildResult) => {
+    if (next.status === "success" || next.status === "insufficient" || next.status === "invalid") {
+      applyPlayerState(next);
+    }
+  };
+
+  const applyBuildingAction = (kind: "build" | "contribute-construction", request: () => Promise<BuildResult>) => {
+    return runAction(kind, request, applyBuildingResult);
+  };
+
+  const handleRepair = (buildingID: number) => runAction("repair-building", () => repairBuilding(buildingID), (next) => {
+    if (next.status === "success" || next.status === "conflict") {
+      applyPlayerState(next);
+    } else if (next.status === "invalid" && next.state) {
+      applyPlayerState(next.state);
+    }
+  });
 
   const actionPendingNow = action.status === "pending";
 
