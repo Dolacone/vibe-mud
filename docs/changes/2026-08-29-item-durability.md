@@ -1,6 +1,6 @@
 ---
 title: "Item durability and expired retention"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
