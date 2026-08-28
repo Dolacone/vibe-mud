@@ -2300,6 +2300,175 @@ func TestGroundTransferRejectsInvalidOrInsufficientSourcesWithoutMutation(t *tes
 	}
 }
 
+func TestItemActionsCreateFullDurabilityAndNeverConsumeExpiredInputs(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-action-durability", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Gather(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].DurabilityStatus != "active" || state.Inventory[0].DurabilityRemainingSeconds == nil || *state.Inventory[0].DurabilityRemainingSeconds != int(buildingDefaultDurability/time.Second) {
+		t.Fatalf("gathered item = %+v, want a full-lifetime active stack", state.Inventory)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.Craft(identity.ID, "wood_component")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var crafted InventoryItem
+	for _, item := range state.Inventory {
+		if item.Item.ID == "wood_component" {
+			crafted = item
+		}
+	}
+	if crafted.Quantity != 1 || crafted.DurabilityStatus != "active" || crafted.DurabilityRemainingSeconds == nil || *crafted.DurabilityRemainingSeconds != int(buildingDefaultDurability/time.Second) {
+		t.Fatalf("crafted item = %+v, want a full-lifetime active stack", crafted)
+	}
+
+	converter, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-converter", "converter@example.com", "Converter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'expired', ?, 1)`, converter.ID, now.Add(itemExpiredRetention-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(converter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(converter.ID); !errors.Is(err, ErrInsufficientItem) {
+		t.Fatalf("convert with expired input error = %v, want ErrInsufficientItem", err)
+	}
+	after, err := store.GetPlayerState(converter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("expired conversion changed AP or holdings: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestItemTransfersPreservePartialDurabilityAndRejectExpiredPickup(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-transfer-durability", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeInventoryExpiry := now.Add(101 * time.Second).Unix()
+	activeGroundExpiry := now.Add(100 * time.Second).Unix()
+	expiredInventoryExpiry := now.Add(200 * time.Second).Unix()
+	expiredGroundExpiry := now.Add(300 * time.Second).Unix()
+	if _, err := db.Exec(`
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 3), (?, 'wood', 'expired', ?, 2);
+INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 2), ('camp', 'wood', 'expired', ?, 4)`, identity.ID, activeInventoryExpiry, identity.ID, expiredInventoryExpiry, activeGroundExpiry, expiredGroundExpiry); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Drop(identity.ID, "item", "wood", 1, "active"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != before.AP || inventoryStackQuantity(state, "wood", "active") != 2 || groundStackQuantity(state, "wood", "active") != 3 {
+		t.Fatalf("partial active drop state = %+v, want source and destination quantities preserved", state)
+	}
+	if remaining := stackRemaining(state.Inventory, "wood", "active"); remaining != 101 {
+		t.Fatalf("partial active source remaining = %d, want 101 seconds", remaining)
+	}
+	if remaining := groundStackRemaining(state.GroundItems, "wood", "active"); remaining != 100 {
+		t.Fatalf("weighted active destination remaining = %d, want floored 100 seconds", remaining)
+	}
+	if _, err := store.Drop(identity.ID, "item", "wood", 1, "expired"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventoryStackQuantity(state, "wood", "expired") != 1 || groundStackQuantity(state, "wood", "expired") != 5 || stackRetention(state.GroundItems, "wood") != 300 {
+		t.Fatalf("expired drop state = %+v, want merged quantity and latest deletion deadline", state)
+	}
+	before, err = store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pickup(identity.ID, "item", "wood", 1, "expired"); !errors.Is(err, ErrInsufficientTransferAsset) {
+		t.Fatalf("expired pickup error = %v, want ErrInsufficientTransferAsset", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("expired pickup changed AP or holdings: before=%+v after=%+v", before, after)
+	}
+	if _, err := store.Drop(identity.ID, "resource", "wood", 1, "active"); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("resource transfer with item status error = %v, want ErrInvalidArgument", err)
+	}
+}
+
+func inventoryStackQuantity(state PlayerState, itemID, status string) int {
+	for _, item := range state.Inventory {
+		if item.Item.ID == itemID && item.DurabilityStatus == status {
+			return item.Quantity
+		}
+	}
+	return 0
+}
+
+func groundStackQuantity(state PlayerState, itemID, status string) int {
+	for _, item := range state.GroundItems {
+		if item.Item.ID == itemID && item.DurabilityStatus == status {
+			return item.Quantity
+		}
+	}
+	return 0
+}
+
+func stackRemaining(items []InventoryItem, itemID, status string) int {
+	for _, item := range items {
+		if item.Item.ID == itemID && item.DurabilityStatus == status && item.DurabilityRemainingSeconds != nil {
+			return *item.DurabilityRemainingSeconds
+		}
+	}
+	return 0
+}
+
+func groundStackRemaining(items []GroundItem, itemID, status string) int {
+	for _, item := range items {
+		if item.Item.ID == itemID && item.DurabilityStatus == status && item.DurabilityRemainingSeconds != nil {
+			return *item.DurabilityRemainingSeconds
+		}
+	}
+	return 0
+}
+
+func stackRetention(items []GroundItem, itemID string) int {
+	for _, item := range items {
+		if item.Item.ID == itemID && item.DurabilityStatus == "expired" && item.RetentionRemainingSeconds != nil {
+			return *item.RetentionRemainingSeconds
+		}
+	}
+	return 0
+}
+
 func TestConcurrentGroundPickupCannotOverdraw(t *testing.T) {
 	store, db := newTestStore(t)
 	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-concurrent", "person@example.com", "Person")

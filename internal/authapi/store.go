@@ -1427,11 +1427,7 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	_, err = tx.Exec(`
-INSERT INTO player_inventory (user_id, item_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (user_id, item_id, durability_status) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, option.Item.ID, option.Quantity)
-	if err != nil {
+	if err := addActiveItemHoldingTx(tx, "player_inventory", "user_id", userID, option.Item.ID, option.Quantity, now.Unix()+int64(option.Item.MaxDurabilitySeconds)); err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("add gathered item: %w", err)
 	}
@@ -1446,8 +1442,12 @@ ON CONFLICT (user_id, item_id, durability_status) DO UPDATE SET quantity = playe
 	return state, nil
 }
 
-func (s *Store) Drop(userID int64, assetType, assetID string, quantity int) (PlayerState, error) {
+func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, itemStatus ...string) (PlayerState, error) {
 	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
+		return PlayerState{}, err
+	}
+	status, err := transferItemStatus(assetType, itemStatus)
+	if err != nil {
 		return PlayerState{}, err
 	}
 	tx, err := s.db.Begin()
@@ -1470,14 +1470,19 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int) (Pla
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		if err := consumeTransferQuantityTx(tx, "player_inventory", "user_id", userID, "item_id", assetID, quantity, "dropped item"); err != nil {
+		var expiresAt int64
+		if err := tx.QueryRow(`SELECT status_expires_at FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = ?`, userID, assetID, status).Scan(&expiresAt); err != nil {
+			_ = tx.Rollback()
+			if errors.Is(err, sql.ErrNoRows) {
+				return PlayerState{}, ErrInsufficientTransferAsset
+			}
+			return PlayerState{}, fmt.Errorf("get dropped item durability: %w", err)
+		}
+		if err := consumeItemHoldingTx(tx, "player_inventory", "user_id", userID, assetID, status, quantity, "dropped item"); err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		if _, err := tx.Exec(`
-INSERT INTO ground_items (location_id, item_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (location_id, item_id, durability_status) DO UPDATE SET quantity = ground_items.quantity + excluded.quantity`, locationID, assetID, quantity); err != nil {
+		if err := addItemHoldingTx(tx, "ground_items", "location_id", locationID, assetID, status, quantity, expiresAt); err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("add ground item: %w", err)
 		}
@@ -1509,9 +1514,16 @@ ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources
 	return state, nil
 }
 
-func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int) (PlayerState, error) {
+func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int, itemStatus ...string) (PlayerState, error) {
 	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
 		return PlayerState{}, err
+	}
+	status, err := transferItemStatus(assetType, itemStatus)
+	if err != nil {
+		return PlayerState{}, err
+	}
+	if assetType == "item" && status == "expired" {
+		return PlayerState{}, ErrInsufficientTransferAsset
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -1533,14 +1545,19 @@ func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int) (P
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		if err := consumeTransferQuantityTx(tx, "ground_items", "location_id", locationID, "item_id", assetID, quantity, "ground item"); err != nil {
+		var expiresAt int64
+		if err := tx.QueryRow(`SELECT status_expires_at FROM ground_items WHERE location_id = ? AND item_id = ? AND durability_status = 'active'`, locationID, assetID).Scan(&expiresAt); err != nil {
+			_ = tx.Rollback()
+			if errors.Is(err, sql.ErrNoRows) {
+				return PlayerState{}, ErrInsufficientTransferAsset
+			}
+			return PlayerState{}, fmt.Errorf("get picked item durability: %w", err)
+		}
+		if err := consumeItemHoldingTx(tx, "ground_items", "location_id", locationID, assetID, status, quantity, "ground item"); err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		if _, err := tx.Exec(`
-INSERT INTO player_inventory (user_id, item_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (user_id, item_id, durability_status) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, assetID, quantity); err != nil {
+		if err := addItemHoldingTx(tx, "player_inventory", "user_id", userID, assetID, status, quantity, expiresAt); err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("add picked item: %w", err)
 		}
@@ -1570,6 +1587,80 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		return PlayerState{}, fmt.Errorf("commit pickup: %w", err)
 	}
 	return state, nil
+}
+
+func transferItemStatus(assetType string, itemStatus []string) (string, error) {
+	if assetType == "resource" {
+		if len(itemStatus) > 0 {
+			return "", fmt.Errorf("%w: resources do not accept item status", ErrInvalidArgument)
+		}
+		return "", nil
+	}
+	if len(itemStatus) > 1 {
+		return "", fmt.Errorf("%w: one item status is required", ErrInvalidArgument)
+	}
+	status := "active"
+	if len(itemStatus) == 1 {
+		status = itemStatus[0]
+	}
+	if status != "active" && status != "expired" {
+		return "", fmt.Errorf("%w: item status must be active or expired", ErrInvalidArgument)
+	}
+	return status, nil
+}
+
+func consumeItemHoldingTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, itemID, status string, quantity int, label string) error {
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND item_id = ? AND durability_status = ? AND quantity = ?", table, scopeColumn)
+	result, err := tx.Exec(deleteQuery, scopeValue, itemID, status, quantity)
+	if err != nil {
+		return fmt.Errorf("consume %s: %w", label, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check %s: %w", label, err)
+	}
+	if rows == 0 {
+		updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity - ? WHERE %s = ? AND item_id = ? AND durability_status = ? AND quantity > ?", table, scopeColumn)
+		result, err = tx.Exec(updateQuery, quantity, scopeValue, itemID, status, quantity)
+		if err != nil {
+			return fmt.Errorf("consume %s: %w", label, err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check %s: %w", label, err)
+		}
+	}
+	if rows != 1 {
+		return ErrInsufficientTransferAsset
+	}
+	return nil
+}
+
+func addActiveItemHoldingTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, itemID string, quantity int, expiresAt int64) error {
+	return addItemHoldingTx(tx, table, scopeColumn, scopeValue, itemID, "active", quantity, expiresAt)
+}
+
+func addItemHoldingTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, itemID, status string, quantity int, expiresAt int64) error {
+	var existingQuantity, existingExpiry int64
+	query := fmt.Sprintf("SELECT quantity, status_expires_at FROM %s WHERE %s = ? AND item_id = ? AND durability_status = ?", table, scopeColumn)
+	err := tx.QueryRow(query, scopeValue, itemID, status).Scan(&existingQuantity, &existingExpiry)
+	if errors.Is(err, sql.ErrNoRows) {
+		insertQuery := fmt.Sprintf("INSERT INTO %s (%s, item_id, durability_status, status_expires_at, quantity) VALUES (?, ?, ?, ?, ?)", table, scopeColumn)
+		_, err = tx.Exec(insertQuery, scopeValue, itemID, status, expiresAt, quantity)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	newExpiry := expiresAt
+	if status == "active" {
+		newExpiry = (existingQuantity*existingExpiry + int64(quantity)*expiresAt) / (existingQuantity + int64(quantity))
+	} else if expiresAt < existingExpiry {
+		newExpiry = existingExpiry
+	}
+	updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity + ?, status_expires_at = ? WHERE %s = ? AND item_id = ? AND durability_status = ?", table, scopeColumn)
+	_, err = tx.Exec(updateQuery, quantity, newExpiry, scopeValue, itemID, status)
+	return err
 }
 
 func consumeTransferQuantityTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, assetColumn, assetID string, quantity int, label string) error {
@@ -1795,7 +1886,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("get player AP for convert: %w", err)
 	}
 	var itemQuantity int
-	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, option.Item.ID).Scan(&itemQuantity)
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID).Scan(&itemQuantity)
 	if errors.Is(err, sql.ErrNoRows) || itemQuantity < option.InputQuantity {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientItem
@@ -1830,9 +1921,9 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		return PlayerState{}, ErrInsufficientAP
 	}
 	if itemQuantity == option.InputQuantity {
-		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, option.Item.ID)
+		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID)
 	} else {
-		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, option.InputQuantity, userID, option.Item.ID)
+		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, option.InputQuantity, userID, option.Item.ID)
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -1908,7 +1999,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 	itemQuantities := make(map[string]int, len(recipe.ItemInputs))
 	for _, input := range recipe.ItemInputs {
 		var quantity int
-		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID).Scan(&quantity)
+		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, input.Item.ID).Scan(&quantity)
 		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
 			_ = tx.Rollback()
 			return PlayerState{}, ErrInsufficientItem
@@ -1953,9 +2044,9 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 	for _, input := range recipe.ItemInputs {
 		var result sql.Result
 		if itemQuantities[input.Item.ID] == input.Quantity {
-			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID)
+			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, input.Item.ID)
 		} else {
-			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, input.Quantity, userID, input.Item.ID)
+			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, input.Quantity, userID, input.Item.ID)
 		}
 		if err != nil {
 			_ = tx.Rollback()
@@ -1977,7 +2068,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("delete empty crafting items: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, ?, ?) ON CONFLICT (user_id, item_id, durability_status) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, recipe.Output.ID, recipe.OutputQuantity); err != nil {
+	if err := addActiveItemHoldingTx(tx, "player_inventory", "user_id", userID, recipe.Output.ID, recipe.OutputQuantity, now.Unix()+int64(recipe.Output.MaxDurabilitySeconds)); err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("add crafted item: %w", err)
 	}
@@ -2053,7 +2144,7 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 	itemQuantities := make(map[string]int, len(recipe.ItemInputs))
 	for _, input := range recipe.ItemInputs {
 		var quantity int
-		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID).Scan(&quantity)
+		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, input.Item.ID).Scan(&quantity)
 		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
 			_ = tx.Rollback()
 			return PlayerState{}, ErrInsufficientItem
@@ -2081,9 +2172,9 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 	for _, input := range recipe.ItemInputs {
 		var result sql.Result
 		if itemQuantities[input.Item.ID] == input.Quantity {
-			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID)
+			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, input.Item.ID)
 		} else {
-			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, input.Quantity, userID, input.Item.ID)
+			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, input.Quantity, userID, input.Item.ID)
 		}
 		if err != nil {
 			_ = tx.Rollback()

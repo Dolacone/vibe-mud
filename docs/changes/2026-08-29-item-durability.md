@@ -82,7 +82,7 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.19: Expired 堆疊合併時，結果刪除時間必須採用所有來源中最晚的刪除時間。
   - REQ-015.20: Active Item 永遠不得與 Expired Item 合併。
   - REQ-015.25: 本需求不增加 Equipment、Item instance、戰鬥耗損或耐久修復。
-- [ ] Task 2 [parallel: no]: Make Item-producing Actions create full-durability Active quantities, make Item-consuming Actions use only Active quantities, and preserve or merge durability during Item Transfers in `internal/authapi/store.go`. Update store tests without changing Resource Transfer behavior.
+- [x] Task 2 [parallel: no]: Make Item-producing Actions create full-durability Active quantities, make Item-consuming Actions use only Active quantities, and preserve or merge durability during Item Transfers in `internal/authapi/store.go`. Update store tests without changing Resource Transfer behavior.
   - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的有效或失效 Item Drop 至目前 Location。
   - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
   - REQ-013.7: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的有效地面 Item。
