@@ -9,6 +9,8 @@
 - Added seven-day time-derived durability for completed Buildings.
 - Added a shared repair Action that spends 10 AP and one Wood Resource for up to one hour.
 - Added a three-day repair window before expired Buildings disappear and release their Location slot.
+- Replaced the authenticated page's stacked lists and cards with compact gameplay tables.
+- Added responsive table regions that contain wide content on narrow screens.
 
 ## 2026-08-27
 

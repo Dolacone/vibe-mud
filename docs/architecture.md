@@ -25,7 +25,7 @@ SQLite stores absolute times as UTC Unix seconds. Store initialization converts 
 
 The frontend uses React, TypeScript, and Vite under `web/`. The Docker build compiles it into versioned static assets before copying `web/dist` into the runtime image. The Go static handler requires revalidation for the entry document and gives versioned assets an immutable one-year browser cache.
 
-The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Building recipes, current-Location Buildings, Inventory, typed Resources, and action results.
+The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Building recipes, current-Location Buildings, Inventory, typed Resources, and action results. The authenticated interface uses one compact semantic table per gameplay section. Named tables use scoped headers and one row per entity or Action. Width-constrained scroll regions contain wide tables without widening the page.
 
 ## Authentication
 
