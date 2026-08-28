@@ -19,6 +19,16 @@ export type InventoryItem = {
   quantity: number;
 };
 
+export type GroundItem = {
+  item: Item;
+  quantity: number;
+};
+
+export type GroundResource = {
+  resource: Item;
+  quantity: number;
+};
+
 export type GatheringOption = {
   item: Item;
   quantity: number;
@@ -97,6 +107,8 @@ export type PlayerState = {
   routes: Route[];
   ap: number;
   inventory: InventoryItem[];
+  ground_items: GroundItem[];
+  ground_resources: GroundResource[];
   gathering_option: GatheringOption | null;
   conversion_option: ConversionOption | null;
   resources: Resource[];
@@ -167,6 +179,24 @@ export type RepairResult =
   | ({ status: "success" } & PlayerState)
   | ({ status: "conflict"; error: string } & PlayerState)
   | { status: "invalid"; error: string; state?: PlayerState }
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type TransferAssetType = "item" | "resource";
+
+export type TransferRequest = {
+  asset_type: TransferAssetType;
+  asset_id: string;
+  quantity: number;
+};
+
+export type DropRequest = TransferRequest;
+export type PickupRequest = TransferRequest;
+
+export type TransferResult =
+  | ({ status: "success" } & PlayerState)
+  | { status: "invalid"; error: string; state?: PlayerState }
+  | ({ status: "conflict"; error: string } & PlayerState)
   | { status: "unauthenticated" }
   | { status: "error"; error: Error };
 
@@ -353,6 +383,30 @@ function isInventoryItem(value: unknown): value is InventoryItem {
   return isItem(item.item) && isQuantity(item.quantity);
 }
 
+function isGroundItem(value: unknown): value is GroundItem {
+  if (typeof value !== "object" || value === null) return false;
+  const groundItem = value as Record<string, unknown>;
+  return isItem(groundItem.item) && isQuantity(groundItem.quantity);
+}
+
+function isGroundResource(value: unknown): value is GroundResource {
+  if (typeof value !== "object" || value === null) return false;
+  const groundResource = value as Record<string, unknown>;
+  return isItem(groundResource.resource) && isQuantity(groundResource.quantity);
+}
+
+function isGroundItems(value: unknown): value is GroundItem[] {
+  if (!Array.isArray(value) || !value.every(isGroundItem)) return false;
+  const ids = value.map((groundItem) => groundItem.item.id);
+  return new Set(ids).size === ids.length;
+}
+
+function isGroundResources(value: unknown): value is GroundResource[] {
+  if (!Array.isArray(value) || !value.every(isGroundResource)) return false;
+  const ids = value.map((groundResource) => groundResource.resource.id);
+  return new Set(ids).size === ids.length;
+}
+
 function isGatheringOption(value: unknown): value is GatheringOption {
   if (typeof value !== "object" || value === null) return false;
   const option = value as Record<string, unknown>;
@@ -392,6 +446,8 @@ function isPlayerState(value: unknown): value is PlayerState {
     isAP(state.ap) &&
     Array.isArray(state.inventory) &&
     state.inventory.every(isInventoryItem) &&
+    isGroundItems(state.ground_items) &&
+    isGroundResources(state.ground_resources) &&
     (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
     (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
     isResources(state.resources) &&
@@ -458,6 +514,28 @@ function isRepairConflict(value: unknown): value is { error: string } & PlayerSt
   return isRepairError(value) && isPlayerState(value);
 }
 
+function isTransferAssetType(value: unknown): value is TransferAssetType {
+  return value === "item" || value === "resource";
+}
+
+function isTransferRequest(value: unknown): value is TransferRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const request = value as Record<string, unknown>;
+  return (
+    isTransferAssetType(request.asset_type) &&
+    isString(request.asset_id) &&
+    isQuantity(request.quantity)
+  );
+}
+
+function isTransferError(value: unknown): value is { error: string } {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).error === "string";
+}
+
+function isTransferStateResponse(value: unknown): value is PlayerState {
+  return isPlayerState(value);
+}
+
 export async function getCurrentUser(
   fetcher: typeof fetch = fetch,
 ): Promise<AuthResult> {
@@ -490,6 +568,8 @@ export async function getCurrentUser(
         location: body.location,
         routes: body.routes,
         inventory: body.inventory,
+        ground_items: body.ground_items,
+        ground_resources: body.ground_resources,
         gathering_option: body.gathering_option,
         conversion_option: body.conversion_option,
         resources: body.resources,
@@ -872,4 +952,71 @@ export async function repairBuilding(buildingID: number, fetcher: typeof fetch =
       error: error instanceof Error ? error : new Error("repair-building request failed"),
     };
   }
+}
+
+async function transfer(
+  operation: "drop" | "pickup",
+  request: TransferRequest,
+  fetcher: typeof fetch,
+): Promise<TransferResult> {
+  if (!isTransferRequest(request)) {
+    return { status: "invalid", error: "invalid transfer input" };
+  }
+
+  try {
+    const response = await fetcher(`/api/transfers/${operation}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        asset_type: request.asset_type,
+        asset_id: request.asset_id,
+        quantity: request.quantity,
+      }),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 400 || response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isTransferError(body) || !isTransferStateResponse(body)) {
+        return { status: "error", error: new Error(`${operation} response is invalid`) };
+      }
+      const { error, ...state } = body;
+      if (response.status === 400) {
+        return { status: "invalid", error, state };
+      }
+      return {
+        status: "conflict",
+        error,
+        ...state,
+      };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`${operation} request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isTransferStateResponse(body)) {
+      return { status: "error", error: new Error(`${operation} response is invalid`) };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error(`${operation} request failed`),
+    };
+  }
+}
+
+export function drop(request: DropRequest, fetcher: typeof fetch = fetch): Promise<TransferResult> {
+  return transfer("drop", request, fetcher);
+}
+
+export function pickup(request: PickupRequest, fetcher: typeof fetch = fetch): Promise<TransferResult> {
+  return transfer("pickup", request, fetcher);
 }

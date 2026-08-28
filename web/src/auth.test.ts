@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
+import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -45,6 +45,8 @@ const campState: PlayerState = {
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
   inventory: [],
+  ground_items: [],
+  ground_resources: [],
   gathering_option: null,
   conversion_option: {
     item: { id: "wood", display_name: "Wood" },
@@ -64,6 +66,8 @@ const forestState: PlayerState = {
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
   inventory: [],
+  ground_items: [],
+  ground_resources: [],
   gathering_option: {
     item: { id: "wood", display_name: "Wood" },
     quantity: 1,
@@ -80,6 +84,14 @@ const gatheredForestState: PlayerState = {
   ...forestState,
   ap: 2970,
   inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 1 }],
+};
+
+const transferState: PlayerState = {
+  ...campState,
+  inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 5 }],
+  ground_items: [{ item: { id: "wood", display_name: "Wood" }, quantity: 2 }],
+  ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
+  resources: resources.map((entry) => entry.resource.id === "wood" ? { ...entry, quantity: 7 } : entry),
 };
 
 describe("getCurrentUser", () => {
@@ -628,5 +640,111 @@ describe("building actions", () => {
         ...(status === 409 ? campState : { state: campState }),
       });
     }
+  });
+});
+
+describe("ground transfers", () => {
+  it("parses typed ground Items and Resources as part of the identity state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...transferState }), { status: 200 }),
+    );
+
+    await expect(getCurrentUser(fetcher)).resolves.toEqual({
+      status: "authenticated",
+      user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState },
+    });
+  });
+
+  it.each([
+    ["invalid asset type", { asset_type: "currency", asset_id: "wood", quantity: 1 }],
+    ["blank asset ID", { asset_type: "item", asset_id: " ", quantity: 1 }],
+    ["zero quantity", { asset_type: "item", asset_id: "wood", quantity: 0 }],
+    ["fractional quantity", { asset_type: "resource", asset_id: "wood", quantity: 1.5 }],
+  ])("rejects %s before sending a request", async (_label, request) => {
+    const fetcher = vi.fn();
+    await expect(drop(request as never, fetcher)).resolves.toEqual({ status: "invalid", error: "invalid transfer input" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("submits only asset type, identifier, and quantity for Drop and returns authoritative state", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
+    const request = { asset_type: "item" as const, asset_id: "wood", quantity: 2, secret: "must-not-send" };
+
+    await expect(drop(request, fetcher)).resolves.toEqual({ status: "success", ...transferState });
+    expect(fetcher).toHaveBeenCalledWith("/api/transfers/drop", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_type: "item", asset_id: "wood", quantity: 2 }),
+    });
+  });
+
+  it("submits the same typed contract for Resource Pickup", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
+
+    await expect(pickup({ asset_type: "resource", asset_id: "stone", quantity: 3 }, fetcher)).resolves.toEqual({ status: "success", ...transferState });
+    expect(fetcher).toHaveBeenCalledWith("/api/transfers/pickup", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_type: "resource", asset_id: "stone", quantity: 3 }),
+    });
+  });
+
+  it("supports Item Pickup and Resource Drop through their dedicated Transfer endpoints", async () => {
+    const pickupFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
+    await expect(pickup({ asset_type: "item", asset_id: "wood", quantity: 1 }, pickupFetcher)).resolves.toEqual({ status: "success", ...transferState });
+    expect(pickupFetcher).toHaveBeenCalledWith("/api/transfers/pickup", expect.objectContaining({ body: JSON.stringify({ asset_type: "item", asset_id: "wood", quantity: 1 }) }));
+
+    const dropFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
+    await expect(drop({ asset_type: "resource", asset_id: "stone", quantity: 1 }, dropFetcher)).resolves.toEqual({ status: "success", ...transferState });
+    expect(dropFetcher).toHaveBeenCalledWith("/api/transfers/drop", expect.objectContaining({ body: JSON.stringify({ asset_type: "resource", asset_id: "stone", quantity: 1 }) }));
+  });
+
+  it("returns authoritative state for handled HTTP 400 and 409 failures", async () => {
+    for (const status of [400, 409]) {
+      const fetcher = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "transfer rejected", ...transferState }), { status }),
+      );
+      await expect(pickup({ asset_type: "item", asset_id: "wood", quantity: 1 }, fetcher)).resolves.toEqual({
+        status: status === 409 ? "conflict" : "invalid",
+        error: "transfer rejected",
+        ...(status === 409 ? transferState : { state: transferState }),
+      });
+    }
+  });
+
+  it("rejects malformed ground entry shapes in authoritative responses", async () => {
+    const malformed = {
+      ...transferState,
+      ground_items: [{ item: { id: "wood", display_name: "Wood" }, quantity: 0 }],
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    await expect(drop({ asset_type: "item", asset_id: "wood", quantity: 1 }, fetcher)).resolves.toEqual({
+      status: "error",
+      error: new Error("drop response is invalid"),
+    });
+
+    const malformedResource = {
+      ...transferState,
+      ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 0 }],
+    };
+    const resourceFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(malformedResource), { status: 200 }));
+    await expect(pickup({ asset_type: "resource", asset_id: "stone", quantity: 1 }, resourceFetcher)).resolves.toEqual({
+      status: "error",
+      error: new Error("pickup response is invalid"),
+    });
+  });
+
+  it("keeps authentication and unavailable response behavior", async () => {
+    const unauthenticated = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    await expect(drop({ asset_type: "item", asset_id: "wood", quantity: 1 }, unauthenticated)).resolves.toEqual({ status: "unauthenticated" });
+
+    const unavailable = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
+    await expect(pickup({ asset_type: "resource", asset_id: "wood", quantity: 1 }, unavailable)).resolves.toEqual({
+      status: "error",
+      error: new Error("pickup request failed with status 500"),
+    });
   });
 });

@@ -9,6 +9,9 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.test.tsx
   - docs/schemas.md
   - docs/changes/2026-08-28-ground-transfers.md
 req_ref: REQ-013
@@ -86,7 +89,7 @@ Task 1: persistence and Transfer rules [parallel: no]
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
   - REQ-013.20: Backend 必須把 Transfer access 與結果寫入 stdout，並包含 user ID、Location、asset type、asset identifier、quantity、結果與 request ID。
   - REQ-013.21: Backend log 不得包含 credentials、session、OAuth 資料、cookie 或未處理的原始輸入。
-- [ ] Task 3 [parallel: no]: Add typed ground holdings, Pickup, and Drop client contracts in `web/src/auth.ts`. Submit only the planned asset fields. Parse authoritative state from success and failure responses. Update client tests.
+- [x] Task 3 [parallel: no]: Add typed ground holdings, Pickup, and Drop client contracts in `web/src/auth.ts`. Submit only the planned asset fields. Parse authoritative state from success and failure responses. Update client tests.
   - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
   - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
   - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
