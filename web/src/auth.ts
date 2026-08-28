@@ -14,14 +14,22 @@ export type Item = {
   display_name: string;
 };
 
+export type ItemStatus = "active" | "expired";
+
 export type InventoryItem = {
   item: Item;
   quantity: number;
+  durability_status: ItemStatus;
+  durability_remaining_seconds: number | null;
+  retention_remaining_seconds: number | null;
 };
 
 export type GroundItem = {
   item: Item;
   quantity: number;
+  durability_status: ItemStatus;
+  durability_remaining_seconds: number | null;
+  retention_remaining_seconds: number | null;
 };
 
 export type GroundResource = {
@@ -186,12 +194,20 @@ export type RepairResult =
 
 export type TransferAssetType = "item" | "resource";
 
-export type TransferRequest = {
-  asset_type: TransferAssetType;
+export type ItemTransferRequest = {
+  asset_type: "item";
+  asset_id: string;
+  quantity: number;
+  item_status: ItemStatus;
+};
+
+export type ResourceTransferRequest = {
+  asset_type: "resource";
   asset_id: string;
   quantity: number;
 };
 
+export type TransferRequest = ItemTransferRequest | ResourceTransferRequest;
 export type DropRequest = TransferRequest;
 export type PickupRequest = TransferRequest;
 
@@ -238,6 +254,22 @@ function isItem(value: unknown): value is Item {
 
 function isQuantity(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isItemStatus(value: unknown): value is ItemStatus {
+  return value === "active" || value === "expired";
+}
+
+function isItemDurability(value: Record<string, unknown>): value is Record<string, unknown> & {
+  durability_status: ItemStatus;
+  durability_remaining_seconds: number | null;
+  retention_remaining_seconds: number | null;
+} {
+  if (!isItemStatus(value.durability_status)) return false;
+  if (value.durability_status === "active") {
+    return isPositiveInteger(value.durability_remaining_seconds) && value.retention_remaining_seconds === null;
+  }
+  return value.durability_remaining_seconds === null && isPositiveInteger(value.retention_remaining_seconds);
 }
 
 function isResource(value: unknown): value is Resource {
@@ -386,13 +418,13 @@ function isResources(value: unknown): value is Resource[] {
 function isInventoryItem(value: unknown): value is InventoryItem {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
-  return isItem(item.item) && isQuantity(item.quantity);
+  return isItem(item.item) && isQuantity(item.quantity) && isItemDurability(item);
 }
 
 function isGroundItem(value: unknown): value is GroundItem {
   if (typeof value !== "object" || value === null) return false;
   const groundItem = value as Record<string, unknown>;
-  return isItem(groundItem.item) && isQuantity(groundItem.quantity);
+  return isItem(groundItem.item) && isQuantity(groundItem.quantity) && isItemDurability(groundItem);
 }
 
 function isGroundResource(value: unknown): value is GroundResource {
@@ -529,11 +561,9 @@ function isTransferAssetType(value: unknown): value is TransferAssetType {
 function isTransferRequest(value: unknown): value is TransferRequest {
   if (typeof value !== "object" || value === null) return false;
   const request = value as Record<string, unknown>;
-  return (
-    isTransferAssetType(request.asset_type) &&
-    isString(request.asset_id) &&
-    isQuantity(request.quantity)
-  );
+  if (!isTransferAssetType(request.asset_type) || !isString(request.asset_id) || !isQuantity(request.quantity)) return false;
+  if (request.asset_type === "resource") return !Object.prototype.hasOwnProperty.call(request, "item_status");
+  return isItemStatus(request.item_status);
 }
 
 function isTransferError(value: unknown): value is { error: string } {
@@ -982,6 +1012,7 @@ async function transfer(
         asset_type: request.asset_type,
         asset_id: request.asset_id,
         quantity: request.quantity,
+        ...(request.asset_type === "item" ? { item_status: request.item_status } : {}),
       }),
     });
 

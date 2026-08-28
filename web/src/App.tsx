@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferResult } from "./auth";
+import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
 type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | TransferResult | { status: "idle" } | { status: "pending" };
@@ -95,7 +95,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
 
-  const handleTransfer = (operation: "drop" | "pickup", request: { asset_type: TransferAssetType; asset_id: string; quantity: number }) => {
+  const handleTransfer = (operation: "drop" | "pickup", request: TransferRequest) => {
     const transfer = operation === "drop" ? drop : pickup;
     return runAction(operation, () => transfer(request), applyTransferResult);
   };
@@ -233,7 +233,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <TableScroll>
           <table aria-label="Ground Items">
             <thead><tr><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.ground_items.length === 0 ? <EmptyRow colSpan={3}>Ground items are empty.</EmptyRow> : currentUser.ground_items.map((entry) => <tr key={entry.item.id}><th scope="row">{entry.item.display_name}</th><td>{entry.quantity}</td><td><TransferQuantity operation="pickup" assetType="item" assetID={entry.item.id} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPendingNow} onSubmit={(quantity) => void handleTransfer("pickup", { asset_type: "item", asset_id: entry.item.id, quantity })} /></td></tr>)}</tbody>
+            <tbody>{currentUser.ground_items.length === 0 ? <EmptyRow colSpan={3}>Ground items are empty.</EmptyRow> : currentUser.ground_items.map((entry) => <tr key={entry.item.id}><th scope="row">{entry.item.display_name}</th><td>{entry.quantity}</td><td><TransferQuantity operation="pickup" assetType="item" assetID={entry.item.id} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPendingNow} onSubmit={(quantity) => void handleTransfer("pickup", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: "active" })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
         <h3>Ground Resources</h3>
@@ -251,7 +251,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <TableScroll>
           <table aria-label="Inventory">
             <thead><tr><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.inventory.length === 0 ? <EmptyRow colSpan={3}>Inventory is empty.</EmptyRow> : currentUser.inventory.map((entry) => <tr key={entry.item.id}><th scope="row">{entry.item.display_name}</th><td>{entry.item.display_name}: {entry.quantity}</td><td><TransferQuantity operation="drop" assetType="item" assetID={entry.item.id} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPendingNow} onSubmit={(quantity) => void handleTransfer("drop", { asset_type: "item", asset_id: entry.item.id, quantity })} /></td></tr>)}</tbody>
+            <tbody>{currentUser.inventory.length === 0 ? <EmptyRow colSpan={3}>Inventory is empty.</EmptyRow> : currentUser.inventory.map((entry) => <tr key={entry.item.id}><th scope="row">{entry.item.display_name}</th><td>{entry.item.display_name}: {entry.quantity}</td><td><TransferQuantity operation="drop" assetType="item" assetID={entry.item.id} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPendingNow} onSubmit={(quantity) => void handleTransfer("drop", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: "active" })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>

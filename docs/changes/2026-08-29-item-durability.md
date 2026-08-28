@@ -13,6 +13,10 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
   - requirements/BEHAVIOR.md
   - requirements/REQ-011.md
   - requirements/REQ-013.md
@@ -123,7 +127,7 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.21: Inventory 與地面都必須顯示尚在保留期內的 Expired Item。
   - REQ-015.23: 後端必須將 Item 耐久計算與失效清理結果寫入標準輸出。紀錄必須包含玩家 ID 或明確的 anonymous、操作、結果、request ID 與計算值。
   - REQ-015.24: Log 不得包含 credentials、session、OAuth 資料、cookie、secret 或未處理的原始輸入。
-- [ ] Task 4 [parallel: no]: Parse durability stack fields and submit strict Item or Resource Transfer payloads in `web/src/auth.ts`. Update client contract tests.
+- [x] Task 4 [parallel: no]: Parse durability stack fields and submit strict Item or Resource Transfer payloads in `web/src/auth.ts`. Update client contract tests.
   - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource。有效 Item 與 Resource 必須提供 Pickup。玩家持有的有效或失效 Item 與 Resource 必須提供 Drop。
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
   - REQ-013.22: Item Transfer 必須指定 `active` 或 `expired` 堆疊。Resource Transfer 不得指定 Item 狀態。
