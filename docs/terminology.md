@@ -33,12 +33,16 @@ scope: "Canonical game terms used by the application."
 | [Building durability](#building-durability) | - | 建築耐久度 | [REQ-011](../requirements/REQ-011.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
 | [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-010](../requirements/REQ-010.md) |
+| [Ground assets](#ground-assets) | - | 地面資產 | [REQ-013](../requirements/REQ-013.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
-| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md) |
-| [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md) |
+| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
+| [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
-| [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md) |
+| [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md) |
 | [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
+| [Transfer](#transfer) | - | 轉移 | [REQ-013](../requirements/REQ-013.md) |
+| [Transfer: Drop](#transfer-drop) | - | 放置 | [REQ-013](../requirements/REQ-013.md) |
+| [Transfer: Pickup](#transfer-pickup) | - | 撿取 | [REQ-013](../requirements/REQ-013.md) |
 | [Wood item](#wood-item) | - | 木材物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md) |
 | [Wood Resource](#wood-resource) | - | 木材資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-008](../requirements/REQ-008.md) |
 | [Wood Component](#wood-component) | - | 木質加工品 | [REQ-009](../requirements/REQ-009.md) |
@@ -49,9 +53,9 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Action
 - 中文名稱：行動
-- 定義：玩家要求後端執行的遊戲狀態變更。後端只執行明確允許的 Action。
+- 定義：玩家消耗 AP，要求後端執行的世界行為。後端只執行明確允許的 Action。
 - 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
-- 與相似名詞的差異：Action 是行為種類。AP 是執行 Action 可以消耗的資源。
+- 與相似名詞的差異：Action 消耗 AP。Transfer 搬移既有資產，不消耗 AP。
 
 ### Action: rest
 
@@ -174,21 +178,29 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)
 - 與相似名詞的差異：Inventory 保存持有狀態。Item 定義可持有的物品種類。
 
+### Ground assets
+
+- 正式英文名稱：Ground assets
+- 中文名稱：地面資產
+- 定義：位於單一 Location、沒有 owner 或權限、所有同地點玩家都能 Pickup 的公共 Item 與 Resource quantity。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Ground assets 屬於 Location 的公共狀態。Inventory 與玩家 Resource 屬於單一玩家。
+
 ### Item
 
 - 正式英文名稱：Item
 - 中文名稱：物品
-- 定義：玩家可以取得並保存在 Inventory 的離散物品種類。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)
-- 與相似名詞的差異：Item 以 Inventory quantity 保存。Resource 依 Resource type 保存獨立 quantity。
+- 定義：玩家可以取得並保存在 Inventory，或放在 Location 地面的離散物品種類。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Item 以 Inventory 或地面 quantity 保存。Resource 依 Resource type 保存，不轉換成 Item。
 
 ### Location
 
 - 正式英文名稱：Location
 - 中文名稱：位置
-- 定義：後端允許玩家停留的遊戲地點。
-- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)
-- 與相似名詞的差異：Location 是地點。Route 描述兩個 Location 間的允許移動方向。
+- 定義：後端允許玩家停留、建立 Building，並累積公共地面資產的遊戲地點。
+- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Location 保存地點範圍與公共世界狀態。Route 描述兩個 Location 間的允許移動方向。
 
 ### Route
 
@@ -202,10 +214,10 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Resource
 - 中文名稱：資源
-- 定義：玩家持有的持久化整數 quantity。每種 Resource type 分別保存，未持有時 quantity 為 0。
+- 定義：玩家或 Location 地面持有的持久化整數 quantity。每種 Resource type 分別保存。
 - 類型：Food、Wood、Stone、Metal、Fiber、Hide、Medicinal、Arcane。
-- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)
-- 與相似名詞的差異：Resource 依 type 累積 quantity。Item 以種類與 quantity 保存在 Inventory。
+- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Resource 依 type 累積 quantity。它可以在玩家與地面之間 Transfer，但不轉換成 Item。
 
 ### Recipe
 
@@ -238,3 +250,27 @@ scope: "Canonical game terms used by the application."
 - 定義：第一種 crafting output Item。玩家消耗 10 Wood Resource 與 10 AP 製作 1 個 Wood Component。
 - 對應行為：[REQ-009 - Action: craft](../requirements/REQ-009.md)
 - 與相似名詞的差異：Wood Component 是 Inventory Item。Wood Resource 是 crafting input。
+
+### Transfer
+
+- 正式英文名稱：Transfer
+- 中文名稱：轉移
+- 定義：在玩家持有狀態與目前 Location 地面之間搬移既有 quantity，且不消耗 AP 的操作。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Transfer 保持世界資產總量不變且不消耗 AP。Action 執行遊戲行為並消耗 AP。
+
+### Transfer: Drop
+
+- 正式英文名稱：Transfer: Drop
+- 中文名稱：放置
+- 定義：把玩家持有的 Item 或 Resource quantity 轉移至目前 Location 的公共地面。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Drop 的來源是玩家持有狀態。Pickup 的來源是地面資產。
+
+### Transfer: Pickup
+
+- 正式英文名稱：Transfer: Pickup
+- 中文名稱：撿取
+- 定義：把目前 Location 的公共地面 Item 或 Resource quantity 轉移給玩家。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 與相似名詞的差異：Pickup 的來源是地面資產。Drop 的來源是玩家持有狀態。

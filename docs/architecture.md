@@ -25,7 +25,7 @@ SQLite stores absolute times as UTC Unix seconds. Store initialization converts 
 
 The frontend uses React, TypeScript, and Vite under `web/`. The Docker build compiles it into versioned static assets before copying `web/dist` into the runtime image. The Go static handler requires revalidation for the entry document and gives versioned assets an immutable one-year browser cache.
 
-The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Building recipes, current-Location Buildings, Inventory, typed Resources, and action results. The authenticated interface uses one compact semantic table per gameplay section. Named tables use scoped headers and one row per entity or Action. Width-constrained scroll regions contain wide tables without widening the page.
+The browser calls relative `/auth/*` and `/api/*` paths without a proxy. The frontend displays backend-authoritative identity, AP, location, Route, gathering option, conversion option, crafting recipes, Building recipes, current-Location Buildings, Inventory, typed Resources, public ground holdings, and operation results. The authenticated interface uses one compact semantic table per gameplay section. Named tables use scoped headers and one row per entity, Action, or Transfer. Width-constrained scroll regions contain wide tables without widening the page.
 
 ## Authentication
 
@@ -33,7 +33,9 @@ Google login starts at `GET /auth/google/login` and returns through `GET /auth/g
 
 ## Game State and API
 
-`GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, and all eight typed Resource quantities. Game actions use dedicated endpoints under `/api/actions/*`.
+`GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, all eight typed Resource quantities, and nonzero public ground holdings. Game actions use dedicated endpoints under `/api/actions/*`.
+
+Pickup and Drop are AP-free Transfers under `/api/transfers/*`, not Actions. The browser submits an asset type, asset identifier, and positive quantity without a Location. The backend derives the player's current Location and atomically moves Item or Resource quantity between player holdings and public ground holdings. Ground capacity is unlimited and has no owner, access control, reservation, or history.
 
 AP persistence stores only the timestamp when the player will reach full AP. The backend derives current AP from its clock, caps it at 3000, and advances the timestamp when an action spends AP. No scheduler updates AP values.
 

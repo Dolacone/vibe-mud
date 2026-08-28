@@ -1,6 +1,6 @@
 ---
 title: "Ground asset transfers"
-status: Draft
+status: Ready-to-implement
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
@@ -17,6 +17,10 @@ Players cannot leave existing assets in the world or collect assets left by othe
 ## Recommended Direction
 
 Persist ground Item and Resource quantities separately by Location and asset type. Use dedicated Transfer endpoints for atomic Pickup and Drop operations.
+
+Expose `POST /api/transfers/drop` and `POST /api/transfers/pickup`. Both accept only `{"asset_type":"item"|"resource","asset_id":"<identifier>","quantity":<positive integer>}`. The backend derives Location from the authenticated player. Every player-state response includes nonzero `ground_items` and `ground_resources` arrays for that Location. A ground Item entry is `{"item":{"id":"<identifier>","display_name":"<name>"},"quantity":<positive integer>}`. A ground Resource entry is `{"resource":{"id":"<identifier>","display_name":"<name>"},"quantity":<positive integer>}`.
+
+Successful Transfers return HTTP 200 with authoritative state. For authenticated handled failures, malformed or unknown assets return HTTP 400 and insufficient source quantity returns HTTP 409. These responses include an error and authoritative state without changing AP or quantities. Authentication failures return HTTP 401 without player state. Unexpected internal failures return HTTP 500 without claiming authoritative state.
 
 ## Key Assumptions
 
@@ -37,4 +41,70 @@ Persist ground Item and Resource quantities separately by Location and asset typ
 
 ## Tasks
 
+```text
+Task 1: persistence and Transfer rules [parallel: no]
+└── Task 2: backend Transfer API [parallel: no]
+    └── Task 3: frontend Transfer contract [parallel: no]
+        └── Task 4: ground Transfer interface [parallel: no]
+```
+
+- [ ] Task 1 [parallel: no]: Add public Location ground persistence and atomic Item or Resource Transfer rules in `internal/authapi/store.go`. Update store tests. Update `docs/schemas.md` with exact executable schema, migration behavior, zero-row cleanup, and transaction behavior in the same commit.
+  - REQ-013.1: 每個 Location 必須具有獨立的地面 Item 與 Resource 狀態。
+  - REQ-013.2: 地面資產不得限制總重量、quantity 或堆疊數量。
+  - REQ-013.3: 地面資產不得具有 owner、存取權限或預留機制。
+  - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
+  - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
+  - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
+  - REQ-013.7: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Item。
+  - REQ-013.8: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Resource。
+  - REQ-013.9: Item 必須依 Location 與 Item type 合併 quantity。
+  - REQ-013.10: Resource 必須依 Location 與 Resource type 合併 quantity，不得轉換成 Item。
+  - REQ-013.11: Pickup 與 Drop 必須屬於 Transfer，不得視為 Action。
+  - REQ-013.12: Transfer 成功或失敗時都不得消耗或恢復 AP。
+  - REQ-013.13: Transfer 成功時，來源扣除與目的增加必須原子更新，且總 quantity 必須保持不變。
+  - REQ-013.14: 玩家持有量或地面持有量不足時，Transfer 必須失敗，且所有狀態保持不變。
+  - REQ-013.15: 玩家不得 Pickup 或 Drop 目前 Location 以外的地面資產。
+  - REQ-013.16: 多位玩家同時 Pickup 時，地面 quantity 不得低於 0，且成功取得的總量不得超過原有 quantity。
+  - REQ-013.17: 地面資產與 Transfer 結果必須在重新整理、重新登入及其他玩家讀取後保持一致。
+- [ ] Task 2 [parallel: no]: Add strict Pickup and Drop HTTP handlers in `internal/authapi/server.go`. Return typed ground holdings in every player state. Implement the planned request and status contract. Add sanitized Transfer access and computation logs. Update server tests.
+  - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
+  - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
+  - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
+  - REQ-013.7: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Item。
+  - REQ-013.8: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Resource。
+  - REQ-013.11: Pickup 與 Drop 必須屬於 Transfer，不得視為 Action。
+  - REQ-013.12: Transfer 成功或失敗時都不得消耗或恢復 AP。
+  - REQ-013.13: Transfer 成功時，來源扣除與目的增加必須原子更新，且總 quantity 必須保持不變。
+  - REQ-013.14: 玩家持有量或地面持有量不足時，Transfer 必須失敗，且所有狀態保持不變。
+  - REQ-013.15: 玩家不得 Pickup 或 Drop 目前 Location 以外的地面資產。
+  - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
+  - REQ-013.20: Backend 必須把 Transfer access 與結果寫入 stdout，並包含 user ID、Location、asset type、asset identifier、quantity、結果與 request ID。
+  - REQ-013.21: Backend log 不得包含 credentials、session、OAuth 資料、cookie 或未處理的原始輸入。
+- [ ] Task 3 [parallel: no]: Add typed ground holdings, Pickup, and Drop client contracts in `web/src/auth.ts`. Submit only the planned asset fields. Parse authoritative state from success and failure responses. Update client tests.
+  - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
+  - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
+  - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
+  - REQ-013.7: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Item。
+  - REQ-013.8: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Resource。
+  - REQ-013.10: Resource 必須依 Location 與 Resource type 合併 quantity，不得轉換成 Item。
+  - REQ-013.11: Pickup 與 Drop 必須屬於 Transfer，不得視為 Action。
+  - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
+- [ ] Task 4 [parallel: no]: Add Ground Items and Ground Resources tables plus quantity controls in `web/src/App.tsx`. Add Drop controls to Inventory and Resources. Preserve compact table behavior and update interaction tests.
+  - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
+  - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
+  - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。
+  - REQ-013.7: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Item。
+  - REQ-013.8: 玩家必須能指定正整數 quantity，Pickup 目前 Location 的任意地面 Resource。
+  - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource，並提供對應的 Pickup 與 Drop Transfer。
+  - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
+
 ## Review Issues
+
+## Plan Review Issues
+
+- [x] Update `docs/terminology.md` so Action excludes AP-free Transfer and Item or Resource definitions allow Location ground holdings. Add REQ-013 to the affected Item, Resource, and Location index entries.
+- [x] Update `docs/schemas.md` relationship map with both ground table foreign keys. State that existing databases gain empty ground tables through idempotent Store initialization.
+- [x] Define the exact JSON entry shapes for `ground_items` and `ground_resources`. Limit the authoritative-state failure contract to authenticated handled Transfer failures, because authentication and internal failures cannot always return player state.
+
+- [x] Remove the duplicate unchecked copies of the three resolved Plan Review Issues so the checklist reflects their resolved state.
+- [x] Update the `Location` definition and its corresponding-behavior links in `docs/terminology.md` for public ground holdings. The index links `Location` to REQ-013, but the definition still describes only player presence and links only REQ-005 and REQ-010.

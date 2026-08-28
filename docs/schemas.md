@@ -42,6 +42,8 @@ source_paths:
 | `resource_types` | 保存後端允許的 Resource type。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
 | `conversion_rules` | 保存 Location 可轉換的 item、typed Resource 產量與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義轉換規則，不保存玩家執行紀錄。 |
 | `player_resources` | 保存每位玩家每種 Resource 的 quantity。 | 首次取得該 Resource 時建立，後續取得時累加。 | 它保存 typed quantity，不是 Inventory item quantity。 |
+| `ground_items` | 保存每個 Location 的公共 Item quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它沒有玩家 owner，也不是玩家 Inventory。 |
+| `ground_resources` | 保存每個 Location 的公共 Resource quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它保存 Resource，不把 Resource 轉成 Item。 |
 | `crafting_recipes` | 保存後端允許的 recipe、基本 AP 成本與明確 output。 | Store 初始化時建立固定 seed。 | 它定義 recipe header，不保存 inputs 或玩家執行紀錄。 |
 | `crafting_recipe_resource_inputs` | 保存每個 recipe 消耗的 Resource inputs。 | Recipe seed 建立時加入。 | 它保存 Resource 成本，不保存玩家 Resource quantity。 |
 | `crafting_recipe_item_inputs` | 保存每個 recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存 Item 成本，不保存玩家 Inventory quantity。 |
@@ -330,6 +332,48 @@ CREATE TABLE IF NOT EXISTS player_resources (
 
 索引與約束：複合 primary key 保證每位玩家每種 Resource 只有一筆 quantity。Resource 與 Inventory 分開保存。
 
+## ground_items
+
+用途：保存每個 Location 的公共 Item quantity。地面不限制總重量、quantity 或堆疊數量，也不保存 owner 或權限。
+
+```sql
+CREATE TABLE IF NOT EXISTS ground_items (
+    location_id TEXT NOT NULL REFERENCES locations(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (location_id, item_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `location_id` | Item 所在的公共地面 Location。 |
+| `item_id` | 地面 Item type。 |
+| `quantity` | 該 Location 的正整數 Item quantity。 |
+
+索引與約束：複合 primary key 讓同 Location 的同種 Item 合併成一筆。Quantity 到 0 時刪除 row。Table 沒有 player、owner、capacity 或 reservation 欄位。
+
+## ground_resources
+
+用途：保存每個 Location 的公共 typed Resource quantity。Resource 保持 Resource 形態，不建立對應 Item。
+
+```sql
+CREATE TABLE IF NOT EXISTS ground_resources (
+    location_id TEXT NOT NULL REFERENCES locations(id),
+    resource_id TEXT NOT NULL REFERENCES resource_types(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (location_id, resource_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `location_id` | Resource 所在的公共地面 Location。 |
+| `resource_id` | 地面 Resource type。 |
+| `quantity` | 該 Location 的正整數 Resource quantity。 |
+
+索引與約束：複合 primary key 讓同 Location 的同種 Resource 合併成一筆。Quantity 到 0 時刪除 row。Table 沒有 player、owner、capacity 或 reservation 欄位。
+
 ## crafting_recipes
 
 用途：定義後端允許的 deterministic crafting recipe。Recipe 不受 Location 限制。Output Item 與 quantity 必須明確保存，不能從 recipe 名稱推導。
@@ -520,7 +564,9 @@ locations.id
 ├── player_locations.location_id 玩家目前位置
 ├── gathering_rules.location_id  Gathering 所在位置
 ├── conversion_rules.location_id Conversion 所在位置
-└── buildings.location_id        Building 所在位置
+├── buildings.location_id        Building 所在位置
+├── ground_items.location_id     公共地面 Item 所在位置
+└── ground_resources.location_id 公共地面 Resource 所在位置
 
 items.id
 ├── gathering_rules.item_id       Gathering 產出的 item
@@ -528,13 +574,15 @@ items.id
 ├── player_inventory.item_id      玩家持有的 item
 ├── crafting_recipes.output_item_id Crafting 產出的 item
 ├── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
-└── building_recipe_item_inputs.item_id Building recipe 消耗的 item
+├── building_recipe_item_inputs.item_id Building recipe 消耗的 item
+└── ground_items.item_id                 公共地面 Item type
 
 resource_types.id
 ├── conversion_rules.output_resource_id Conversion 產出的 Resource type
 ├── player_resources.resource_id         玩家持有的 Resource type
 ├── crafting_recipe_resource_inputs.resource_id Crafting 消耗的 Resource type
-└── building_recipe_resource_inputs.resource_id Building recipe 消耗的 Resource type
+├── building_recipe_resource_inputs.resource_id Building recipe 消耗的 Resource type
+└── ground_resources.resource_id                 公共地面 Resource type
 
 crafting_recipes.id
 ├── crafting_recipe_resource_inputs.recipe_id Resource inputs
@@ -604,6 +652,8 @@ Existing databases gain the three crafting tables and seeds during Store initial
 
 Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
 
+Existing databases gain empty `ground_items` and `ground_resources` tables through idempotent Store initialization. Existing player Inventory and Resource quantities remain unchanged.
+
 既有資料庫若缺少 durability columns，`ensureBuildingSchema` 依序執行 `ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)`、`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)` 與 `ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`。接著以 migration 當下的 UTC Unix seconds `migration_now` 執行 `UPDATE buildings SET durability_expires_at = migration_now + max_durability_seconds WHERE status = 'completed' AND durability_expires_at IS NULL`。施工中的 Building 不會被 backfill expiry。
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
@@ -617,6 +667,8 @@ Existing Building recipes and rows gain a seven-day maximum durability snapshot.
 `convert` transaction 會依玩家目前位置查找 conversion rule。Rule 不存在、Wood 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除 Wood item，並以 upsert 累加 Wood Resource quantity。Wood item quantity 歸零時，系統刪除該 Inventory row。三項更新必須在同一 transaction commit。
 
 `craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
+
+`drop` transaction 會從後端取得玩家目前 Location，驗證 submitted asset type、identifier 與正整數 quantity，再從玩家 Inventory 或 Resource quantity 扣除並累加對應地面 quantity。`pickup` 使用相反方向。來源不足、asset 不存在或輸入無效時，transaction 不修改資料。來源歸零時刪除 row。Transfer 不讀寫 `player_ap.full_timestamp`。
 
 開始施工 transaction 會先刪除已超過 Disabled 保留期的 Building，再依 submitted recipe identifier 查找 Location-independent recipe 與 inputs。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP、extension slot count 與最大耐久秒數快照。
 
