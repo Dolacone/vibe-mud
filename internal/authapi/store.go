@@ -1137,11 +1137,6 @@ SELECT COALESCE((SELECT SUM(pi.quantity * i.weight_units)
 	return weight, nil
 }
 
-func normalizeItemHoldingsTx(tx *sql.Tx, now time.Time, userID int64) error {
-	_, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
-	return err
-}
-
 func normalizeItemHoldingsWithMetadataTx(tx *sql.Tx, now time.Time, userID int64) ([]ItemDurabilityCleanup, error) {
 	var locationID string
 	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -1183,6 +1178,10 @@ SET status_expires_at = (SELECT ? + i.max_durability_seconds FROM items i WHERE 
 		cleanups = append(cleanups, events...)
 	}
 	return cleanups, nil
+}
+
+func prependItemDurabilityCleanups(state *PlayerState, cleanups []ItemDurabilityCleanup) {
+	state.ItemDurabilityCleanups = append(cleanups, state.ItemDurabilityCleanups...)
 }
 
 func expireItemHoldingTableWithMetadataTx(tx *sql.Tx, table, scopeColumn, holdingName string, scopeValue interface{}, now time.Time) ([]ItemDurabilityCleanup, error) {
@@ -1523,7 +1522,7 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit gather: %w", err)
 	}
@@ -1597,7 +1596,7 @@ ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit drop: %w", err)
 	}
@@ -1674,7 +1673,7 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit pickup: %w", err)
 	}
@@ -1970,7 +1969,7 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit move: %w", err)
 	}
@@ -2077,7 +2076,7 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit convert: %w", err)
 	}
@@ -2214,7 +2213,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit craft: %w", err)
 	}
@@ -2345,7 +2344,7 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit building: %w", err)
 	}
@@ -2469,7 +2468,7 @@ WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgr
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit construction contribution: %w", err)
 	}
@@ -2622,7 +2621,7 @@ WHERE id = ? AND status = 'completed' AND durability_expires_at = ?`, newExpiry,
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
-	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
+	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit building repair: %w", err)
 	}
