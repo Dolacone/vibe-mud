@@ -11,6 +11,8 @@
 - Added a three-day repair window before expired Buildings disappear and release their Location slot.
 - Replaced the authenticated page's stacked lists and cards with compact gameplay tables.
 - Added responsive table regions that contain wide content on narrow screens.
+- Added unlimited public ground holdings for Item and Resource quantities at each Location.
+- Added AP-free Pickup and Drop Transfers with atomic quantity updates.
 
 ## 2026-08-27
 
