@@ -7,6 +7,8 @@ last_reviewed: 2026-08-28
 source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
   - docs/schemas.md
   - docs/changes/2026-08-28-ground-transfers.md
 req_ref: REQ-013
@@ -70,7 +72,7 @@ Task 1: persistence and Transfer rules [parallel: no]
   - REQ-013.15: 玩家不得 Pickup 或 Drop 目前 Location 以外的地面資產。
   - REQ-013.16: 多位玩家同時 Pickup 時，地面 quantity 不得低於 0，且成功取得的總量不得超過原有 quantity。
   - REQ-013.17: 地面資產與 Transfer 結果必須在重新整理、重新登入及其他玩家讀取後保持一致。
-- [ ] Task 2 [parallel: no]: Add strict Pickup and Drop HTTP handlers in `internal/authapi/server.go`. Return typed ground holdings in every player state. Implement the planned request and status contract. Add sanitized Transfer access and computation logs. Update server tests.
+- [x] Task 2 [parallel: no]: Add strict Pickup and Drop HTTP handlers in `internal/authapi/server.go`. Return typed ground holdings in every player state. Implement the planned request and status contract. Add sanitized Transfer access and computation logs. Update server tests.
   - REQ-013.4: 玩家必須能查看目前 Location 的所有地面 Item 與 Resource quantity。
   - REQ-013.5: 玩家必須能指定正整數 quantity，將持有的任意 Item Drop 至目前 Location。
   - REQ-013.6: 玩家必須能指定正整數 quantity，將持有的任意 Resource Drop 至目前 Location。

@@ -45,6 +45,8 @@ type currentUserResponse struct {
 	Location         locationResponse          `json:"location"`
 	Routes           []routeResponse           `json:"routes"`
 	Inventory        []inventoryItemResponse   `json:"inventory"`
+	GroundItems      []groundItemResponse      `json:"ground_items"`
+	GroundResources  []groundResourceResponse  `json:"ground_resources"`
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
@@ -78,6 +80,8 @@ type playerStateResponse struct {
 	Routes           []routeResponse           `json:"routes"`
 	AP               int                       `json:"ap"`
 	Inventory        []inventoryItemResponse   `json:"inventory"`
+	GroundItems      []groundItemResponse      `json:"ground_items"`
+	GroundResources  []groundResourceResponse  `json:"ground_resources"`
 	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
@@ -102,6 +106,16 @@ type itemResponse struct {
 
 type inventoryItemResponse struct {
 	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+}
+
+type groundItemResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+}
+
+type groundResourceResponse struct {
+	Resource itemResponse `json:"resource"`
 	Quantity int          `json:"quantity"`
 }
 
@@ -141,6 +155,11 @@ type contributeConstructionResponse struct {
 	playerStateResponse
 }
 
+type transferResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
 type craftingResourceInputResponse struct {
 	Resource itemResponse `json:"resource"`
 	Quantity int          `json:"quantity"`
@@ -162,6 +181,19 @@ type craftingRecipeResponse struct {
 }
 
 const (
+	transferDropOperation          = "drop"
+	transferPickupOperation        = "pickup"
+	transferReasonInvalidJSON      = "invalid_json"
+	transferReasonUnknownField     = "unknown_field"
+	transferReasonDuplicate        = "duplicate_field"
+	transferReasonExtraValue       = "extra_json_value"
+	transferReasonMissingAssetType = "missing_asset_type"
+	transferReasonInvalidAssetType = "invalid_asset_type"
+	transferReasonMissingAssetID   = "missing_asset_id"
+	transferReasonInvalidAssetID   = "invalid_asset_id"
+	transferReasonMissingQuantity  = "missing_quantity"
+	transferReasonInvalidQuantity  = "invalid_quantity"
+
 	moveAction                       = "move"
 	moveReasonInvalidJSON            = "invalid_json"
 	moveReasonUnknownField           = "unknown_field"
@@ -301,6 +333,8 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Post("/api/actions/build", s.build)
 	r.Post("/api/actions/contribute-construction", s.contributeConstruction)
 	r.Post("/api/actions/repair-building", s.repairBuilding)
+	r.Post("/api/transfers/drop", s.drop)
+	r.Post("/api/transfers/pickup", s.pickup)
 	return r
 }
 
@@ -432,6 +466,8 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		Location:         locationResponseFromStore(state.Location),
 		Routes:           routeResponsesFromStore(state.Routes),
 		Inventory:        inventoryResponsesFromStore(state.Inventory),
+		GroundItems:      groundItemResponsesFromStore(state.GroundItems),
+		GroundResources:  groundResourceResponsesFromStore(state.GroundResources),
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
@@ -656,6 +692,73 @@ func (s *Server) repairBuilding(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logAction(r, session.UserID, repairBuildingAction, "success")
 	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
+}
+
+type transferRequest struct {
+	AssetType string
+	AssetID   string
+	Quantity  int
+}
+
+func (s *Server) drop(w http.ResponseWriter, r *http.Request) {
+	s.transfer(w, r, transferDropOperation, false)
+}
+
+func (s *Server) pickup(w http.ResponseWriter, r *http.Request) {
+	s.transfer(w, r, transferPickupOperation, true)
+}
+
+func (s *Server) transfer(w http.ResponseWriter, r *http.Request, operation string, pickup bool) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeTransferRequest(r.Body)
+	if reason != "" {
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusBadRequest, "invalid transfer input", reason)
+		return
+	}
+
+	var state PlayerState
+	if pickup {
+		state, err = s.store.Pickup(session.UserID, request.AssetType, request.AssetID, request.Quantity)
+	} else {
+		state, err = s.store.Drop(session.UserID, request.AssetType, request.AssetID, request.Quantity)
+	}
+	if err == nil {
+		s.logTransfer(r, session.UserID, operation, state.Location.ID, request.AssetType, request.AssetID, request.Quantity, "success", "")
+		s.writeJSON(w, http.StatusOK, transferResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
+	if errors.Is(err, ErrTransferAssetNotFound) {
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusBadRequest, err.Error(), "unknown_asset")
+		return
+	}
+	if errors.Is(err, ErrInvalidArgument) {
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusBadRequest, err.Error(), "invalid_argument")
+		return
+	}
+	if errors.Is(err, ErrInsufficientTransferAsset) {
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusConflict, err.Error(), "insufficient_source")
+		return
+	}
+	s.logTransfer(r, session.UserID, operation, "unknown", request.AssetType, "unknown", request.Quantity, "error", "internal_error")
+	s.writeError(w, http.StatusInternalServerError, "transfer unavailable")
+}
+
+func (s *Server) writeTransferState(w http.ResponseWriter, r *http.Request, userID int64, operation string, request transferRequest, status int, message, reason string) {
+	state, err := s.store.GetPlayerState(userID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "transfer unavailable")
+		return
+	}
+	assetID := request.AssetID
+	if reason == "unknown_asset" || reason == "invalid_argument" || strings.HasPrefix(reason, "invalid_") || strings.HasSuffix(reason, "_field") || reason == "extra_json_value" {
+		assetID = "unknown"
+	}
+	s.logTransfer(r, userID, operation, state.Location.ID, request.AssetType, assetID, request.Quantity, "error", reason)
+	s.writeJSON(w, status, transferResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
 }
 
 func (s *Server) writeRepairBuildingState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
@@ -905,6 +1008,90 @@ func decodeMoveRequest(body io.Reader) (moveRequest, string) {
 	}
 	if strings.TrimSpace(request.Target) == "" {
 		return moveRequest{}, moveReasonInvalidTarget
+	}
+	return request, ""
+}
+
+func decodeTransferRequest(body io.Reader) (transferRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return transferRequest{}, transferReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return transferRequest{}, transferReasonInvalidJSON
+	}
+	var request transferRequest
+	seenType, seenID, seenQuantity := false, false, false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return transferRequest{}, transferReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return transferRequest{}, transferReasonInvalidJSON
+		}
+		switch field {
+		case "asset_type":
+			if seenType {
+				return transferRequest{}, transferReasonDuplicate
+			}
+			seenType = true
+			if err := decoder.Decode(&request.AssetType); err != nil {
+				return transferRequest{}, transferReasonInvalidAssetType
+			}
+		case "asset_id":
+			if seenID {
+				return transferRequest{}, transferReasonDuplicate
+			}
+			seenID = true
+			if err := decoder.Decode(&request.AssetID); err != nil {
+				return transferRequest{}, transferReasonInvalidAssetID
+			}
+		case "quantity":
+			if seenQuantity {
+				return transferRequest{}, transferReasonDuplicate
+			}
+			seenQuantity = true
+			if err := decoder.Decode(&request.Quantity); err != nil {
+				return transferRequest{}, transferReasonInvalidQuantity
+			}
+		default:
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return transferRequest{}, transferReasonInvalidJSON
+			}
+			return transferRequest{}, transferReasonUnknownField
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return transferRequest{}, transferReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return transferRequest{}, transferReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return transferRequest{}, transferReasonExtraValue
+	}
+	if !seenType {
+		return transferRequest{}, transferReasonMissingAssetType
+	}
+	if request.AssetType != "item" && request.AssetType != "resource" {
+		return transferRequest{}, transferReasonInvalidAssetType
+	}
+	if !seenID {
+		return transferRequest{}, transferReasonMissingAssetID
+	}
+	if strings.TrimSpace(request.AssetID) == "" {
+		return transferRequest{}, transferReasonInvalidAssetID
+	}
+	if !seenQuantity {
+		return transferRequest{}, transferReasonMissingQuantity
+	}
+	if request.Quantity <= 0 {
+		return transferRequest{}, transferReasonInvalidQuantity
 	}
 	return request, ""
 }
@@ -1237,6 +1424,8 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 		Routes:           routeResponsesFromStore(state.Routes),
 		AP:               state.AP,
 		Inventory:        inventoryResponsesFromStore(state.Inventory),
+		GroundItems:      groundItemResponsesFromStore(state.GroundItems),
+		GroundResources:  groundResourceResponsesFromStore(state.GroundResources),
 		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
@@ -1249,6 +1438,28 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
 	return playerStateResponseFromStore(state)
+}
+
+func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
+	responses := make([]groundItemResponse, 0, len(items))
+	for _, item := range items {
+		responses = append(responses, groundItemResponse{
+			Item:     itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName},
+			Quantity: item.Quantity,
+		})
+	}
+	return responses
+}
+
+func groundResourceResponsesFromStore(resources []GroundResource) []groundResourceResponse {
+	responses := make([]groundResourceResponse, 0, len(resources))
+	for _, resource := range resources {
+		responses = append(responses, groundResourceResponse{
+			Resource: itemResponse{ID: resource.Resource.ID, DisplayName: resource.Resource.DisplayName},
+			Quantity: resource.Quantity,
+		})
+	}
+	return responses
 }
 
 type buildingResourceInputResponse struct {
@@ -1529,6 +1740,12 @@ func accessLogAction(r *http.Request) string {
 			return "unknown"
 		}
 	}
+	if r.URL.Path == "/api/transfers/drop" {
+		return "transfer-drop"
+	}
+	if r.URL.Path == "/api/transfers/pickup" {
+		return "transfer-pickup"
+	}
 	return r.Method + " " + r.URL.Path
 }
 
@@ -1591,6 +1808,33 @@ func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
 
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
+}
+
+func (s *Server) logTransfer(r *http.Request, userID int64, operation, locationID, assetType, assetID string, quantity int, outcome, reason string) {
+	assetID = sanitizeLogValue(assetID)
+	if locationID == "" {
+		locationID = "unknown"
+	}
+	if assetType != "item" && assetType != "resource" {
+		assetType = "unknown"
+	}
+	if reason == "" {
+		reason = "none"
+	}
+	fmt.Fprintf(os.Stdout, "user_id=%d action=transfer-%s location_id=%s asset_type=%s asset_id=%s quantity=%d outcome=%s reason=%s request_id=%s\n", userID, operation, sanitizeLogValue(locationID), assetType, assetID, quantity, outcome, reason, requestID(r))
+}
+
+func sanitizeLogValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 {
+		return "unknown"
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return "unknown"
+		}
+	}
+	return value
 }
 
 func (s *Server) logConstructionComputation(r *http.Request, userID int64, computation *ConstructionComputation) {
