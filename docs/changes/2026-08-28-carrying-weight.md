@@ -11,6 +11,8 @@ source_paths:
   - docs/changes/2026-08-28-carrying-weight.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
   - requirements/BEHAVIOR.md
   - requirements/REQ-014.md
 req_ref: REQ-014
@@ -63,7 +65,7 @@ Task 1: definition weights and movement rule [parallel: no]
   - REQ-014.7: 如果玩家的目前重量小於或等於 1000，Move 可以依既有規則執行。
   - REQ-014.8: 如果玩家的目前重量大於 1000，Move 必須原子失敗。玩家的位置與 AP 都維持不變。
   - REQ-014.10: 本需求不增加 Item 耐久度、倉庫、裝備負重加成、載具、體積或批次 Convert。
-- [ ] Task 2 [parallel: no]: Add `carried_weight` and `movement_weight_threshold` to authoritative state responses in `internal/authapi/server.go`. Return an HTTP 409 overweight Move response with current state. Log carrying weight calculations and rejections with safe computation fields. Update server tests.
+- [x] Task 2 [parallel: no]: Add `carried_weight` and `movement_weight_threshold` to authoritative state responses in `internal/authapi/server.go`. Return an HTTP 409 overweight Move response with current state. Log carrying weight calculations and rejections with safe computation fields. Update server tests.
   - REQ-014.3: 系統依玩家持有的每種 Item 與 Resource 數量及其單位重量，計算目前攜帶重量。系統不保存計算結果。
   - REQ-014.4: 前端顯示後端回傳的目前攜帶重量與移動負重門檻。超重時必須顯示不能移動。
   - REQ-014.8: 如果玩家的目前重量大於 1000，Move 必須原子失敗。玩家的位置與 AP 都維持不變。

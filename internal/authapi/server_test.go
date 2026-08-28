@@ -476,8 +476,11 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 15 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 17 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	if meBody["carried_weight"] != float64(0) || meBody["movement_weight_threshold"] != float64(movementWeightThreshold) {
+		t.Fatalf("GET /api/me carrying weight = %#v/%#v, want 0/%d", meBody["carried_weight"], meBody["movement_weight_threshold"], movementWeightThreshold)
 	}
 	if groundItems, ok := meBody["ground_items"].([]any); !ok || len(groundItems) != 0 {
 		t.Fatalf("GET /api/me ground items = %#v", meBody["ground_items"])
@@ -1888,7 +1891,7 @@ func TestMoveAPIUpdatesLocationAndAP(t *testing.T) {
 	request.Header.Set("X-Request-ID", "move-request")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
 	if response.Code != http.StatusOK {
 		t.Fatalf("move status = %d: %s", response.Code, response.Body.String())
 	}
@@ -1897,8 +1900,11 @@ func TestMoveAPIUpdatesLocationAndAP(t *testing.T) {
 		t.Fatal(err)
 	}
 	location, ok := body["location"].(map[string]any)
-	if !ok || location["id"] != "forest_edge" || body["ap"] != float64(maxAP-20) {
+	if !ok || location["id"] != "forest_edge" || body["ap"] != float64(maxAP-20) || body["carried_weight"] != float64(0) || body["movement_weight_threshold"] != float64(movementWeightThreshold) {
 		t.Fatalf("move response = %#v", body)
+	}
+	if !strings.Contains(logOutput, "user_id="+strconv.FormatInt(identity.ID, 10)+" action=carrying_weight_calculation outcome=success carried_weight=0 movement_weight_threshold=1000 request_id=move-request") {
+		t.Fatalf("move carrying weight computation log = %q", logOutput)
 	}
 	if _, hasError := body["error"]; hasError {
 		t.Fatalf("successful move returned error: %#v", body)
@@ -1998,6 +2004,59 @@ func TestMoveAPIInsufficientAPPreservesState(t *testing.T) {
 	}
 	if state.Location.ID != "camp" || state.AP != 0 {
 		t.Fatalf("insufficient move changed state = %+v", state)
+	}
+}
+
+func TestMoveAPIRejectsOverweightWithAuthoritativeStateAndSafeComputationLog(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-overweight-move-api", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 11)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "overweight-move-request"
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/move", strings.NewReader(`{"target":"forest_edge"}`))
+	request.Header.Set("X-Request-ID", requestID)
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("overweight move status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	location, ok := body["location"].(map[string]any)
+	if !ok || body["error"] != ErrOverweight.Error() || location["id"] != "camp" || body["ap"] != float64(maxAP) || body["carried_weight"] != float64(1100) || body["movement_weight_threshold"] != float64(movementWeightThreshold) {
+		t.Fatalf("overweight move response = %#v", body)
+	}
+	wantWeightLog := "user_id=" + strconv.FormatInt(identity.ID, 10) + " action=carrying_weight_calculation outcome=success carried_weight=1100 movement_weight_threshold=1000 request_id=" + requestID
+	if !strings.Contains(logOutput, wantWeightLog) {
+		t.Fatalf("overweight carrying weight computation log = %q, want %q", logOutput, wantWeightLog)
+	}
+	wantRejectionLog := "user_id=" + strconv.FormatInt(identity.ID, 10) + " action=move outcome=error reason=overweight carried_weight=1100 movement_weight_threshold=1000 request_id=" + requestID
+	if !strings.Contains(logOutput, wantRejectionLog) {
+		t.Fatalf("overweight rejection log = %q, want %q", logOutput, wantRejectionLog)
+	}
+	for _, secret := range []string{"session-secret", `{"target":"forest_edge"}`} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("overweight move log leaked %q: %q", secret, logOutput)
+		}
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Location.ID != "camp" || state.AP != maxAP || state.CarriedWeight != 1100 {
+		t.Fatalf("overweight move changed authoritative state = %+v", state)
 	}
 }
 
