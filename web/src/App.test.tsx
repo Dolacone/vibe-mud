@@ -38,6 +38,14 @@ const activeItem = (item: { id: string; display_name: string }, quantity: number
   retention_remaining_seconds: null,
 });
 
+const expiredItem = (item: { id: string; display_name: string }, quantity: number) => ({
+  item,
+  quantity,
+  durability_status: "expired" as const,
+  durability_remaining_seconds: null,
+  retention_remaining_seconds: 604700,
+});
+
 const woodComponentRecipe = {
   id: "wood_component",
   display_name: "Wood Component",
@@ -272,6 +280,59 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Pickup succeeded.")).toBeInTheDocument());
     expect(pickup).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood_component", quantity: 1, item_status: "active" });
     expect(within(groundItems).getByText("1")).toBeInTheDocument();
+  });
+
+  it("keeps active and expired stacks distinct so players can retain expired items without reusing them", async () => {
+    const mixedState = {
+      ...transferState,
+      inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 3)],
+      ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2), expiredItem({ id: "wood_component", display_name: "Wood Component" }, 5)],
+    };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...mixedState } });
+    render(<App />);
+
+    const inventory = await screen.findByRole("table", { name: "Inventory" });
+    const groundItems = screen.getByRole("table", { name: "Ground Items" });
+    expect(inventory.querySelectorAll("tbody > tr")).toHaveLength(2);
+    expect(groundItems.querySelectorAll("tbody > tr")).toHaveLength(2);
+    expect(inventory).toHaveTextContent("Status: active");
+    expect(inventory).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(inventory).toHaveTextContent("Status: expired");
+    expect(inventory).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeEnabled();
+    expect(within(inventory).getByRole("button", { name: "Drop Wood (expired)" })).toBeEnabled();
+    expect(groundItems).toHaveTextContent("Status: active");
+    expect(groundItems).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(groundItems).toHaveTextContent("Status: expired");
+    expect(groundItems).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(within(groundItems).getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
+    expect(within(groundItems).queryByRole("button", { name: "Pickup Wood Component (expired)" })).not.toBeInTheDocument();
+  });
+
+  it("drops the selected expired stack and renders the authoritative retention state", async () => {
+    const mixedState = {
+      ...transferState,
+      inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 3)],
+      ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2), expiredItem({ id: "wood_component", display_name: "Wood Component" }, 5)],
+    };
+    const nextState = {
+      ...mixedState,
+      inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 2)],
+      ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2), expiredItem({ id: "wood_component", display_name: "Wood Component" }, 6)],
+    };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...mixedState } });
+    drop.mockResolvedValue({ status: "success", ...nextState });
+    render(<App />);
+
+    const inventory = await screen.findByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood (expired)" });
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "expired" });
+    expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("6")).toBeInTheDocument();
+    expect(within(inventory).getByText("Remaining retention: 604700 seconds")).toBeInTheDocument();
   });
 
   it("applies authoritative state after an unsuccessful Resource pickup", async () => {

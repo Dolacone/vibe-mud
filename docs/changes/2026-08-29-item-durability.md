@@ -137,7 +137,7 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.7: Active 與 Expired Item 必須顯示為不同堆疊。
   - REQ-015.8: 玩家必須能看到每個 Item 堆疊的狀態與剩餘有效時間。
   - REQ-015.21: Inventory 與地面都必須顯示尚在保留期內的 Expired Item。
-- [ ] Task 5 [parallel: no]: Display separate Active and Expired Inventory and ground rows with the correct remaining time and available Transfer controls in `web/src/App.tsx`. Update interface tests.
+- [x] Task 5 [parallel: no]: Display separate Active and Expired Inventory and ground rows with the correct remaining time and available Transfer controls in `web/src/App.tsx`. Update interface tests.
   - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource。有效 Item 與 Resource 必須提供 Pickup。玩家持有的有效或失效 Item 與 Resource 必須提供 Drop。
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
   - REQ-013.22: Item Transfer 必須指定 `active` 或 `expired` 堆疊。Resource Transfer 不得指定 Item 狀態。
