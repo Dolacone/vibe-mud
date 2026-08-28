@@ -5,6 +5,10 @@ created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
 source_paths:
+  - docs/architecture.md
+  - docs/schemas.md
+  - docs/terminology.md
+  - docs/changes/2026-08-28-ground-transfers.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
   - internal/authapi/server.go
@@ -13,8 +17,8 @@ source_paths:
   - web/src/auth.test.ts
   - web/src/App.tsx
   - web/src/App.test.tsx
-  - docs/schemas.md
-  - docs/changes/2026-08-28-ground-transfers.md
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-013.md
 req_ref: REQ-013
 base_branch: main
 scope: "Tracks AP-free transfers between player holdings and public Location ground assets."
