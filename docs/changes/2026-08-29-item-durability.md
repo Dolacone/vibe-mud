@@ -5,6 +5,7 @@ created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
 source_paths:
+  - CHANGELOG.md
   - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
@@ -15,7 +16,6 @@ source_paths:
   - internal/authapi/store_durability_overflow_test.go
   - internal/authapi/store_durability_attribution_test.go
   - internal/authapi/server.go
-  - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
   - web/src/App.tsx
@@ -169,6 +169,6 @@ Task 1: durability schema and lifecycle [parallel: no]
 - [x] [Major] Item normalization processes every player's Inventory, but cleanup metadata omits the holding owner. A request by one player can log another player's cleanup with the requester's `user_id`, so the stable application user ID is incorrect.
 - [x] [Major] Active-stack weighting multiplies persisted quantities by Unix deadlines in `int64` without overflow checks. Valid large quantities can wrap the weighted deadline and corrupt durability instead of applying the required floored weighted average.
 - [ ] [Minor] Frontend response validation enforces unique `(item_id, durability_status)` ground stacks but does not enforce the same Inventory invariant. A malformed response with duplicate Active or duplicate Expired Inventory rows is accepted and reaches React with duplicate row keys.
-- [ ] [Major] `CHANGELOG.md` still states that Wood and Wood Component have seven-day durability and Expired Items have seven-day retention. Task 6 changed those settings to one hour and one day, so the release record contradicts the implemented behavior.
-- [ ] [Minor] `source_paths` omits the modified `CHANGELOG.md` and lists `internal/authapi/server_test.go` twice, so it does not match the branch diff.
-- [ ] [Minor] The modified `CHANGELOG.md` retains `last_reviewed: 2026-08-28` instead of today's review date.
+- [x] [Major] `CHANGELOG.md` still states that Wood and Wood Component have seven-day durability and Expired Items have seven-day retention. Task 6 changed those settings to one hour and one day, so the release record contradicts the implemented behavior.
+- [x] [Minor] `source_paths` omits the modified `CHANGELOG.md` and lists `internal/authapi/server_test.go` twice, so it does not match the branch diff.
+- [x] [Minor] The modified `CHANGELOG.md` retains `last_reviewed: 2026-08-28` instead of today's review date.
