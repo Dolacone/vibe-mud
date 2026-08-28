@@ -55,6 +55,9 @@ const underConstruction = {
   contributed_ap: 0,
   status: "under_construction" as const,
   extension_slot_count: 1,
+  max_durability_seconds: 604800,
+  durability_status: null,
+  durability_remaining_seconds: null,
 };
 
 const campState = {

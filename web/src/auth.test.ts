@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
+import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -35,6 +35,9 @@ const building: Building = {
   contributed_ap: 0,
   status: "under_construction",
   extension_slot_count: 1,
+  max_durability_seconds: 604800,
+  durability_status: null,
+  durability_remaining_seconds: null,
 };
 
 const campState: PlayerState = {
@@ -565,5 +568,65 @@ describe("building actions", () => {
     await expect(contributeConstruction(0, 1, fetcher)).resolves.toEqual({ status: "invalid", error: "invalid building identifier" });
     await expect(contributeConstruction(1, 0, fetcher)).resolves.toEqual({ status: "invalid", error: "invalid AP" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("submits only a positive Building identifier and parses durability state", async () => {
+    const completed = {
+      ...building,
+      status: "completed" as const,
+      durability_status: "active" as const,
+      durability_remaining_seconds: 604800,
+    };
+    const state = { ...campState, ap: 2990, buildings: [completed] };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(state), { status: 200 }));
+
+    await expect(repairBuilding(1, fetcher)).resolves.toEqual({ status: "success", ...state });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/repair-building", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ building_id: 1 }),
+    });
+  });
+
+  it("parses disabled durability and rejects inconsistent Building durability fields", async () => {
+    const disabled = {
+      ...building,
+      status: "completed" as const,
+      durability_status: "disabled" as const,
+      durability_remaining_seconds: 0,
+    };
+    const disabledState = { ...campState, buildings: [disabled] };
+    const disabledFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(disabledState), { status: 200 }));
+    await expect(repairBuilding(1, disabledFetcher)).resolves.toEqual({ status: "success", ...disabledState });
+
+    const malformedFetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, durability_status: "active", durability_remaining_seconds: 0 }] }), { status: 200 }),
+    );
+    await expect(repairBuilding(1, malformedFetcher)).resolves.toMatchObject({
+      status: "error",
+      error: new Error("repair-building response is invalid"),
+    });
+
+    const missingMaximumFetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, max_durability_seconds: undefined }] }), { status: 200 }),
+    );
+    await expect(repairBuilding(1, missingMaximumFetcher)).resolves.toMatchObject({
+      status: "error",
+      error: new Error("repair-building response is invalid"),
+    });
+  });
+
+  it("returns authoritative state for HTTP 400 and 409 repair failures", async () => {
+    for (const status of [400, 409]) {
+      const fetcher = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "building rejected", ...campState }), { status }),
+      );
+      await expect(repairBuilding(1, fetcher)).resolves.toEqual({
+        status: status === 409 ? "conflict" : "invalid",
+        error: "building rejected",
+        ...(status === 409 ? campState : { state: campState }),
+      });
+    }
   });
 });
