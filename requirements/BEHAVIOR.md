@@ -10,3 +10,4 @@
 - 玩家可建立 Building Lv1，並由同地點玩家共同投入 AP 完成施工 -> REQ-010
 - 完成的 Building 會自然耗損，所有同地點玩家都能消耗 AP 與 Wood Resource 維修 -> REQ-011
 - 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
+- 玩家可在目前 Location 免費 Pickup 或 Drop 公共地面 Item 與 Resource，Transfer 不消耗 AP -> REQ-013

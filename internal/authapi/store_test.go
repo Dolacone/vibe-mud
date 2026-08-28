@@ -2111,3 +2111,231 @@ func TestSessionLookupStoresOnlyAHashAndRejectsExpiry(t *testing.T) {
 		t.Fatalf("expired session was accepted or returned the wrong error: %v", err)
 	}
 }
+
+func groundItemQuantity(state PlayerState, itemID string) int {
+	for _, item := range state.GroundItems {
+		if item.Item.ID == itemID {
+			return item.Quantity
+		}
+	}
+	return 0
+}
+
+func groundResourceQuantity(state PlayerState, resourceID string) int {
+	for _, resource := range state.GroundResources {
+		if resource.Resource.ID == resourceID {
+			return resource.Quantity
+		}
+	}
+	return 0
+}
+
+func TestGroundTransfersPersistByLocationAndKeepAPUnchanged(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-transfer", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-reader", "reader@example.com", "Reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 5);
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7);`, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.GroundItems) != 0 || len(before.GroundResources) != 0 {
+		t.Fatalf("initial ground holdings = %+v, want empty", before)
+	}
+	if _, err := store.Drop(identity.ID, "item", "wood", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Drop(identity.ID, "resource", "wood", 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Drop(identity.ID, "item", "wood", 1); err != nil {
+		t.Fatal(err)
+	}
+	afterDrop, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterDrop.AP != before.AP || groundItemQuantity(afterDrop, "wood") != 4 || groundResourceQuantity(afterDrop, "wood") != 4 || inventoryQuantity(afterDrop, "wood") != 1 || resourceQuantity(afterDrop, "wood") != 3 {
+		t.Fatalf("drop state = %+v, want merged location holdings and unchanged AP", afterDrop)
+	}
+	otherState, err := store.GetPlayerState(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groundItemQuantity(otherState, "wood") != 4 || groundResourceQuantity(otherState, "wood") != 4 {
+		t.Fatalf("other player ground state = %+v, want shared camp holdings", otherState)
+	}
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistedState, err := reloaded.GetPlayerState(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groundItemQuantity(persistedState, "wood") != 4 || groundResourceQuantity(persistedState, "wood") != 4 {
+		t.Fatalf("reloaded ground state = %+v, want persisted public holdings", persistedState)
+	}
+	for _, table := range []string{"ground_items", "ground_resources"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?)`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 3 {
+			t.Fatalf("%s columns = %d, want location, asset ID, and quantity only", table, count)
+		}
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name IN ('owner_id', 'capacity', 'max_capacity', 'reservation_id')`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s has ownership or capacity columns", table)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO locations (id, display_name) VALUES ('ground-remote', 'Ground Remote'); UPDATE player_locations SET location_id = 'ground-remote' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	remoteState, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remoteState.GroundItems) != 0 || len(remoteState.GroundResources) != 0 {
+		t.Fatalf("remote ground state = %+v, want isolated holdings", remoteState)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'camp' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	picked, err := store.Pickup(identity.ID, "item", "wood", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked.AP != before.AP || groundItemQuantity(picked, "wood") != 0 || inventoryQuantity(picked, "wood") != 5 {
+		t.Fatalf("pickup item state = %+v, want complete transfer without AP change", picked)
+	}
+	picked, err = store.Pickup(identity.ID, "resource", "wood", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groundResourceQuantity(picked, "wood") != 0 || resourceQuantity(picked, "wood") != 7 {
+		t.Fatalf("pickup resource state = %+v, want complete Resource transfer", picked)
+	}
+	var groundRows int
+	if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM ground_items) + (SELECT COUNT(*) FROM ground_resources)`).Scan(&groundRows); err != nil {
+		t.Fatal(err)
+	}
+	if groundRows != 0 {
+		t.Fatalf("zero quantity ground rows remain: %d", groundRows)
+	}
+}
+
+func TestGroundTransferRejectsInvalidOrInsufficientSourcesWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-reject", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 2)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2); INSERT INTO ground_resources (location_id, resource_id, quantity) VALUES ('camp', 'wood', 2)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		pickup    bool
+		assetType string
+		assetID   string
+		quantity  int
+		wantErr   error
+	}{
+		{name: "zero quantity", assetType: "item", assetID: "wood", quantity: 0, wantErr: ErrInvalidArgument},
+		{name: "unknown type", assetType: "currency", assetID: "wood", quantity: 1, wantErr: ErrInvalidArgument},
+		{name: "unknown item", assetType: "item", assetID: "missing", quantity: 1, wantErr: ErrTransferAssetNotFound},
+		{name: "unknown resource", assetType: "resource", assetID: "missing", quantity: 1, wantErr: ErrTransferAssetNotFound},
+		{name: "insufficient item", assetType: "item", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
+		{name: "insufficient resource", assetType: "resource", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
+		{name: "insufficient ground item", pickup: true, assetType: "item", assetID: "wood", quantity: 1, wantErr: ErrInsufficientTransferAsset},
+		{name: "insufficient ground resource", pickup: true, assetType: "resource", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var state PlayerState
+			var err error
+			if test.pickup {
+				state, err = store.Pickup(identity.ID, test.assetType, test.assetID, test.quantity)
+			} else {
+				state, err = store.Drop(identity.ID, test.assetType, test.assetID, test.quantity)
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("transfer error = %v, want %v", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(state, PlayerState{}) {
+				t.Fatalf("failed transfer returned state = %+v, want empty state", state)
+			}
+			after, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed transfer changed state: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
+func TestConcurrentGroundPickupCannotOverdraw(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-concurrent", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO ground_items (location_id, item_id, quantity) VALUES ('camp', 'wood', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := store.Pickup(identity.ID, "item", "wood", 1)
+			results <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes := 0
+	insufficient := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		} else if errors.Is(err, ErrInsufficientTransferAsset) {
+			insufficient++
+		} else {
+			t.Fatalf("concurrent pickup error = %v", err)
+		}
+	}
+	if successes != 1 || insufficient != 1 {
+		t.Fatalf("concurrent pickup outcomes = %d successes, %d insufficient; want one each", successes, insufficient)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groundItemQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood") != 1 || state.AP != maxAP {
+		t.Fatalf("concurrent pickup state = %+v, want one item and unchanged AP", state)
+	}
+}

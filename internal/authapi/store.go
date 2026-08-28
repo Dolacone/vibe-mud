@@ -33,6 +33,8 @@ var (
 	ErrBuildingRemote            = errors.New("building is at another location")
 	ErrBuildingCompleted         = errors.New("building is already completed")
 	ErrBuildingUnderConstruction = errors.New("building is under construction")
+	ErrTransferAssetNotFound     = errors.New("transfer asset not found")
+	ErrInsufficientTransferAsset = errors.New("insufficient transfer asset")
 )
 
 type Store struct {
@@ -102,6 +104,16 @@ type ResourceType struct {
 }
 
 type PlayerResource struct {
+	Resource ResourceType
+	Quantity int
+}
+
+type GroundItem struct {
+	Item     Item
+	Quantity int
+}
+
+type GroundResource struct {
 	Resource ResourceType
 	Quantity int
 }
@@ -178,6 +190,8 @@ type PlayerState struct {
 	Routes                  []Route
 	AP                      int
 	Inventory               []InventoryItem
+	GroundItems             []GroundItem
+	GroundResources         []GroundResource
 	GatheringOption         *GatheringOption
 	ConversionOption        *ConversionOption
 	Resources               []PlayerResource
@@ -289,6 +303,18 @@ CREATE TABLE IF NOT EXISTS player_resources (
 	resource_id TEXT NOT NULL REFERENCES resource_types(id),
 	quantity INTEGER NOT NULL CHECK (quantity >= 0),
 	PRIMARY KEY (user_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS ground_items (
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (location_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS ground_resources (
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (location_id, resource_id)
 );
 CREATE TABLE IF NOT EXISTS crafting_recipes (
 	id TEXT PRIMARY KEY,
@@ -708,7 +734,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
 	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
 		return PlayerState{}, err
 	}
@@ -794,6 +820,46 @@ ORDER BY rt.id`, userID)
 	}
 	if err := resourceRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read player resources: %w", err)
+	}
+	groundItemRows, err := tx.Query(`
+SELECT i.id, i.display_name, gi.quantity
+FROM ground_items gi
+JOIN items i ON i.id = gi.item_id
+WHERE gi.location_id = ?
+ORDER BY gi.item_id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get ground items: %w", err)
+	}
+	defer groundItemRows.Close()
+	for groundItemRows.Next() {
+		var groundItem GroundItem
+		if err := groundItemRows.Scan(&groundItem.Item.ID, &groundItem.Item.DisplayName, &groundItem.Quantity); err != nil {
+			return PlayerState{}, fmt.Errorf("scan ground item: %w", err)
+		}
+		state.GroundItems = append(state.GroundItems, groundItem)
+	}
+	if err := groundItemRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read ground items: %w", err)
+	}
+	groundResourceRows, err := tx.Query(`
+SELECT rt.id, rt.display_name, gr.quantity
+FROM ground_resources gr
+JOIN resource_types rt ON rt.id = gr.resource_id
+WHERE gr.location_id = ?
+ORDER BY gr.resource_id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get ground resources: %w", err)
+	}
+	defer groundResourceRows.Close()
+	for groundResourceRows.Next() {
+		var groundResource GroundResource
+		if err := groundResourceRows.Scan(&groundResource.Resource.ID, &groundResource.Resource.DisplayName, &groundResource.Quantity); err != nil {
+			return PlayerState{}, fmt.Errorf("scan ground resource: %w", err)
+		}
+		state.GroundResources = append(state.GroundResources, groundResource)
+	}
+	if err := groundResourceRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read ground resources: %w", err)
 	}
 	recipeRows, err := tx.Query(`
 SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, cr.output_quantity
@@ -1135,6 +1201,192 @@ ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = player_inventory.quantit
 		return PlayerState{}, fmt.Errorf("commit gather: %w", err)
 	}
 	return state, nil
+}
+
+func (s *Store) Drop(userID int64, assetType, assetID string, quantity int) (PlayerState, error) {
+	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
+		return PlayerState{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin drop: %w", err)
+	}
+	locationID, err := playerLocationTx(tx, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	switch assetType {
+	case "item":
+		if err := requireItemTx(tx, assetID); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if err := consumeTransferQuantityTx(tx, "player_inventory", "user_id", userID, "item_id", assetID, quantity, "dropped item"); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if _, err := tx.Exec(`
+INSERT INTO ground_items (location_id, item_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (location_id, item_id) DO UPDATE SET quantity = ground_items.quantity + excluded.quantity`, locationID, assetID, quantity); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("add ground item: %w", err)
+		}
+	case "resource":
+		if err := requireResourceTx(tx, assetID); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if err := consumeTransferQuantityTx(tx, "player_resources", "user_id", userID, "resource_id", assetID, quantity, "dropped resource"); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if _, err := tx.Exec(`
+INSERT INTO ground_resources (location_id, resource_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources.quantity + excluded.quantity`, locationID, assetID, quantity); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("add ground resource: %w", err)
+		}
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit drop: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int) (PlayerState, error) {
+	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
+		return PlayerState{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin pickup: %w", err)
+	}
+	locationID, err := playerLocationTx(tx, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	switch assetType {
+	case "item":
+		if err := requireItemTx(tx, assetID); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if err := consumeTransferQuantityTx(tx, "ground_items", "location_id", locationID, "item_id", assetID, quantity, "ground item"); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if _, err := tx.Exec(`
+INSERT INTO player_inventory (user_id, item_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = player_inventory.quantity + excluded.quantity`, userID, assetID, quantity); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("add picked item: %w", err)
+		}
+	case "resource":
+		if err := requireResourceTx(tx, assetID); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if err := consumeTransferQuantityTx(tx, "ground_resources", "location_id", locationID, "resource_id", assetID, quantity, "ground resource"); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, err
+		}
+		if _, err := tx.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity)
+VALUES (?, ?, ?)
+ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, assetID, quantity); err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("add picked resource: %w", err)
+		}
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit pickup: %w", err)
+	}
+	return state, nil
+}
+
+func consumeTransferQuantityTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, assetColumn, assetID string, quantity int, label string) error {
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND %s = ? AND quantity = ?", table, scopeColumn, assetColumn)
+	result, err := tx.Exec(deleteQuery, scopeValue, assetID, quantity)
+	if err != nil {
+		return fmt.Errorf("consume %s: %w", label, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check %s: %w", label, err)
+	}
+	if rows == 0 {
+		updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity - ? WHERE %s = ? AND %s = ? AND quantity > ?", table, scopeColumn, assetColumn)
+		result, err = tx.Exec(updateQuery, quantity, scopeValue, assetID, quantity)
+		if err != nil {
+			return fmt.Errorf("consume %s: %w", label, err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check %s: %w", label, err)
+		}
+	}
+	if rows != 1 {
+		return ErrInsufficientTransferAsset
+	}
+	return nil
+}
+
+func validateTransfer(userID int64, assetType, assetID string, quantity int) error {
+	if userID <= 0 || (assetType != "item" && assetType != "resource") || strings.TrimSpace(assetID) == "" || quantity <= 0 {
+		return fmt.Errorf("%w: valid transfer asset and positive quantity are required", ErrInvalidArgument)
+	}
+	return nil
+}
+
+func playerLocationTx(tx *sql.Tx, userID int64) (string, error) {
+	var locationID string
+	err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrIdentityNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get player location for transfer: %w", err)
+	}
+	return locationID, nil
+}
+
+func requireItemTx(tx *sql.Tx, itemID string) error {
+	var exists int
+	err := tx.QueryRow(`SELECT 1 FROM items WHERE id = ?`, itemID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTransferAssetNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("find transfer item: %w", err)
+	}
+	return nil
+}
+
+func requireResourceTx(tx *sql.Tx, resourceID string) error {
+	var exists int
+	err := tx.QueryRow(`SELECT 1 FROM resource_types WHERE id = ?`, resourceID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTransferAssetNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("find transfer resource: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Move(userID int64, targetID string) (PlayerState, error) {

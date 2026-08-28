@@ -476,8 +476,14 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 13 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 15 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	if groundItems, ok := meBody["ground_items"].([]any); !ok || len(groundItems) != 0 {
+		t.Fatalf("GET /api/me ground items = %#v", meBody["ground_items"])
+	}
+	if groundResources, ok := meBody["ground_resources"].([]any); !ok || len(groundResources) != 0 {
+		t.Fatalf("GET /api/me ground resources = %#v", meBody["ground_resources"])
 	}
 	buildingRecipes, ok := meBody["building_recipes"].([]any)
 	if !ok || len(buildingRecipes) != 1 {
@@ -2170,5 +2176,228 @@ func TestAccessLogIncludesRequestIDAndOmitsSessionSecret(t *testing.T) {
 	}
 	if strings.Contains(text, "session-secret") {
 		t.Fatalf("access log leaked session secret: %q", text)
+	}
+}
+
+func TestGroundTransferAPIReturnsTypedStateAndKeepsTransferOutOfActions(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-api", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 5);
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7)`, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Routes()
+	request := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(`{"asset_type":"item","asset_id":"wood","quantity":2}`))
+	request.Header.Set("X-Request-ID", "ground-drop-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("drop status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["error"]; exists {
+		t.Fatalf("successful transfer returned error: %#v", body)
+	}
+	if body["ap"] != float64(maxAP) {
+		t.Fatalf("drop changed AP: %#v", body["ap"])
+	}
+	groundItems, ok := body["ground_items"].([]any)
+	if !ok || len(groundItems) != 1 {
+		t.Fatalf("ground item response = %#v", body["ground_items"])
+	}
+	groundItem := groundItems[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"item", "quantity"}) || groundItem["quantity"] != float64(2) {
+		t.Fatalf("ground item shape = %#v", groundItem)
+	}
+	item := groundItem["item"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(item), []string{"display_name", "id"}) || item["id"] != "wood" || item["display_name"] != "Wood" {
+		t.Fatalf("ground item identity = %#v", item)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=transfer-drop location_id=camp asset_type=item asset_id=wood quantity=2 outcome=success reason=none request_id=ground-drop-request") {
+		t.Fatalf("drop computation log = %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=transfer-drop outcome=success request_id=ground-drop-request") {
+		t.Fatalf("drop access log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, "api/actions") {
+		t.Fatalf("transfer was routed as an Action: %q", logOutput)
+	}
+
+	resourceDrop := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(`{"asset_type":"resource","asset_id":"wood","quantity":2}`))
+	resourceDrop.Header.Set("X-Request-ID", "ground-resource-drop-request")
+	resourceDrop.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	resourceDropResponse := httptest.NewRecorder()
+	resourceDropLog := captureStdout(t, func() { handler.ServeHTTP(resourceDropResponse, resourceDrop) })
+	if resourceDropResponse.Code != http.StatusOK || !strings.Contains(resourceDropLog, "asset_type=resource asset_id=wood quantity=2 outcome=success") {
+		t.Fatalf("resource drop status/log = %d/%q", resourceDropResponse.Code, resourceDropLog)
+	}
+	pickup := httptest.NewRequest(http.MethodPost, "/api/transfers/pickup", strings.NewReader(`{"asset_type":"resource","asset_id":"wood","quantity":1}`))
+	pickup.Header.Set("X-Request-ID", "ground-pickup-request")
+	pickup.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	pickupResponse := httptest.NewRecorder()
+	pickupLog := captureStdout(t, func() { handler.ServeHTTP(pickupResponse, pickup) })
+	if pickupResponse.Code != http.StatusOK {
+		t.Fatalf("pickup status = %d: %s", pickupResponse.Code, pickupResponse.Body.String())
+	}
+	var pickupBody map[string]any
+	if err := json.Unmarshal(pickupResponse.Body.Bytes(), &pickupBody); err != nil {
+		t.Fatal(err)
+	}
+	groundResources, ok := pickupBody["ground_resources"].([]any)
+	if !ok || len(groundResources) != 1 {
+		t.Fatalf("ground resource response = %#v", pickupBody["ground_resources"])
+	}
+	groundResource := groundResources[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(groundResource), []string{"quantity", "resource"}) || groundResource["quantity"] != float64(1) {
+		t.Fatalf("ground resource shape = %#v", groundResource)
+	}
+	resource := groundResource["resource"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(resource), []string{"display_name", "id"}) || resource["id"] != "wood" || resource["display_name"] != "Wood" {
+		t.Fatalf("ground resource identity = %#v", resource)
+	}
+	if !strings.Contains(pickupLog, "user_id=1 action=transfer-pickup location_id=camp asset_type=resource asset_id=wood quantity=1 outcome=success reason=none request_id=ground-pickup-request") {
+		t.Fatalf("pickup computation log = %q", pickupLog)
+	}
+}
+
+func TestGroundTransferAPIRejectsStrictInputAndReturnsAuthoritativeState(t *testing.T) {
+	tests := []struct {
+		name, body, reason string
+	}{
+		{"invalid JSON", `{`, transferReasonInvalidJSON},
+		{"unknown field", `{"asset_type":"item","asset_id":"wood","quantity":1,"secret":"credential-sentinel"}`, transferReasonUnknownField},
+		{"duplicate field", `{"asset_type":"item","asset_type":"item","asset_id":"wood","quantity":1}`, transferReasonDuplicate},
+		{"extra JSON value", `{"asset_type":"item","asset_id":"wood","quantity":1}{}`, transferReasonExtraValue},
+		{"missing asset type", `{"asset_id":"wood","quantity":1}`, transferReasonMissingAssetType},
+		{"invalid asset type", `{"asset_type":"currency","asset_id":"wood","quantity":1}`, transferReasonInvalidAssetType},
+		{"missing asset ID", `{"asset_type":"item","quantity":1}`, transferReasonMissingAssetID},
+		{"invalid asset ID", `{"asset_type":"item","asset_id":" ","quantity":1}`, transferReasonInvalidAssetID},
+		{"missing quantity", `{"asset_type":"item","asset_id":"wood"}`, transferReasonMissingQuantity},
+		{"invalid quantity", `{"asset_type":"item","asset_id":"wood","quantity":0}`, transferReasonInvalidQuantity},
+		{"fraction quantity", `{"asset_type":"item","asset_id":"wood","quantity":1.5}`, transferReasonInvalidQuantity},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+			server, store := newTestServer(t, &fakeProvider{}, &now)
+			identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-invalid-"+strings.ReplaceAll(test.name, " ", "-"), "person@example.com", "Person")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 2)`, identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "ground-invalid-" + strings.ReplaceAll(test.name, " ", "-")
+			request := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(test.body))
+			request.Header.Set("X-Request-ID", requestID)
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest || !strings.Contains(logOutput, "user_id=1 action=transfer-drop location_id=camp asset_type=unknown asset_id=unknown quantity=0 outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("invalid transfer status/log = %d/%q", response.Code, logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] == nil || body["ap"] == nil || body["ground_items"] == nil || body["ground_resources"] == nil {
+				t.Fatalf("invalid transfer lacks authoritative state = %#v", body)
+			}
+			if strings.Contains(logOutput, "credential-sentinel") {
+				t.Fatalf("invalid transfer log leaked raw input: %q", logOutput)
+			}
+			after, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("invalid transfer changed state: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
+func TestGroundTransferAPIDomainFailuresAndAuthenticationContract(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-ground-domain", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, body, reason string
+		status             int
+	}{
+		{"unknown asset", `{"asset_type":"item","asset_id":"unknown","quantity":1}`, "unknown_asset", http.StatusBadRequest},
+		{"insufficient source", `{"asset_type":"item","asset_id":"wood","quantity":2}`, "insufficient_source", http.StatusConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestID := "ground-domain-" + strings.ReplaceAll(test.name, " ", "-")
+			request := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(test.body))
+			request.Header.Set("X-Request-ID", requestID)
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+			if response.Code != test.status || !strings.Contains(logOutput, "user_id=1 action=transfer-drop location_id=camp asset_type=item") || !strings.Contains(logOutput, "reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("domain failure status/log = %d/%q", response.Code, logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] == nil || body["ap"] == nil || body["ground_items"] == nil || body["ground_resources"] == nil {
+				t.Fatalf("domain failure lacks authoritative state = %#v", body)
+			}
+			after, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("domain failure changed state: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/transfers/pickup", strings.NewReader(`{"asset_type":"item","asset_id":"wood","quantity":1}`))
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, unauthenticated)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated transfer status = %d", response.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 || body["error"] != "authentication required" {
+		t.Fatalf("unauthenticated transfer body = %#v", body)
 	}
 }

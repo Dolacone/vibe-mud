@@ -6,7 +6,7 @@ import "./styles.css";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn(), build: vi.fn(), contributeConstruction: vi.fn(), repairBuilding: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn(), build: vi.fn(), contributeConstruction: vi.fn(), repairBuilding: vi.fn(), drop: vi.fn(), pickup: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
@@ -18,6 +18,8 @@ const craft = vi.mocked(auth.craft);
 const build = vi.mocked(auth.build);
 const contributeConstruction = vi.mocked(auth.contributeConstruction);
 const repairBuilding = vi.mocked(auth.repairBuilding);
+const drop = vi.mocked(auth.drop);
+const pickup = vi.mocked(auth.pickup);
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -81,6 +83,8 @@ const campState = {
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
   inventory: [],
+  ground_items: [],
+  ground_resources: [],
   gathering_option: null,
   conversion_option: {
     item: { id: "wood", display_name: "Wood" },
@@ -100,12 +104,22 @@ const forestState = {
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
   inventory: [],
+  ground_items: [],
+  ground_resources: [],
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
   conversion_option: null,
   resources,
   crafting_recipes: [woodComponentRecipe],
   building_recipes: [buildingRecipe],
   buildings: [],
+};
+
+const transferState = {
+  ...campState,
+  inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 4 }],
+  resources: resourcesWithWood(6),
+  ground_items: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 2 }],
+  ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
 };
 
 const apRow = (value: number) => within(screen.getByRole("table", { name: "Player summary" })).getByRole("row", { name: new RegExp(`AP.*${value}`) });
@@ -121,6 +135,8 @@ describe("App", () => {
     build.mockReset();
     contributeConstruction.mockReset();
     repairBuilding.mockReset();
+    drop.mockReset();
+    pickup.mockReset();
   });
 
   it("renders the authenticated game state as named compact tables", async () => {
@@ -128,18 +144,18 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("table", { name: "Player summary" })).toBeInTheDocument();
-    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Inventory"]) {
+    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Ground Items", "Ground Resources", "Inventory"]) {
       expect(screen.getByRole("table", { name })).toBeInTheDocument();
     }
-    expect(screen.getAllByRole("table")).toHaveLength(10);
+    expect(screen.getAllByRole("table")).toHaveLength(12);
     expect(screen.getAllByRole("table").every((table) => table.parentElement?.classList.contains("table-scroll"))).toBe(true);
     expect(screen.getByRole("table", { name: "Player summary" }).querySelectorAll('th[scope="row"]')).toHaveLength(5);
-    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Inventory"]) {
+    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Ground Items", "Ground Resources", "Inventory"]) {
       const headers = screen.getByRole("table", { name }).querySelectorAll("thead th");
       expect(headers.length).toBeGreaterThan(0);
       expect([...headers].every((header) => header.getAttribute("scope") === "col")).toBe(true);
     }
-    expect(screen.getByRole("table", { name: "Resources" }).querySelectorAll('thead th[scope="col"]')).toHaveLength(2);
+    expect(screen.getByRole("table", { name: "Resources" }).querySelectorAll('thead th[scope="col"]')).toHaveLength(3);
     expect(screen.getByRole("table", { name: "Craft" }).querySelectorAll("tbody > tr")).toHaveLength(1);
     expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood: 10");
     expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood Component: 1");
@@ -157,7 +173,101 @@ describe("App", () => {
     expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("No crafting recipes available.");
     expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("No building recipes available.");
     expect(screen.getByRole("table", { name: "Buildings" })).toHaveTextContent("No buildings at this location.");
+    expect(screen.getByRole("table", { name: "Ground Items" })).toHaveTextContent("Ground items are empty.");
+    expect(screen.getByRole("table", { name: "Ground Resources" })).toHaveTextContent("Ground resources are empty.");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+  });
+
+  it("renders public ground items and resources with pickup controls", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    render(<App />);
+
+    const groundItems = await screen.findByRole("table", { name: "Ground Items" });
+    const groundResources = screen.getByRole("table", { name: "Ground Resources" });
+    expect(groundItems).toHaveTextContent("Wood Component");
+    expect(groundItems).toHaveTextContent("2");
+    expect(within(groundItems).getByRole("spinbutton", { name: "Pickup quantity for Wood Component" })).toHaveValue(1);
+    expect(within(groundItems).getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
+    expect(groundResources).toHaveTextContent("Stone");
+    expect(groundResources).toHaveTextContent("3");
+    expect(within(groundResources).getByRole("spinbutton", { name: "Pickup quantity for Stone" })).toHaveValue(1);
+    expect(within(groundResources).getByRole("button", { name: "Pickup Stone" })).toBeEnabled();
+  });
+
+  it("drops an Item with the requested quantity and applies authoritative state", async () => {
+    const nextState = { ...transferState, inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 2 }], ground_items: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 4 }] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    drop.mockResolvedValue({ status: "success", ...nextState });
+    render(<App />);
+
+    const inventory = await screen.findByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 2 });
+    expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("4")).toBeInTheDocument();
+  });
+
+  it("drops a Resource with a positive integer quantity", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    drop.mockResolvedValue({ status: "success", ...transferState, resources: resourcesWithWood(4), ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 5 }] });
+    render(<App />);
+
+    const resourcesTable = await screen.findByRole("table", { name: "Resources" });
+    const input = within(resourcesTable).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "resource", asset_id: "wood", quantity: 2 });
+    expect(within(resourcesTable).getByText("Wood: 4")).toBeInTheDocument();
+  });
+
+  it("picks up an Item with the requested quantity", async () => {
+    const nextState = { ...transferState, inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 5 }], ground_items: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 1 }] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    pickup.mockResolvedValue({ status: "success", ...nextState });
+    render(<App />);
+
+    const groundItems = await screen.findByRole("table", { name: "Ground Items" });
+    const input = within(groundItems).getByRole("spinbutton", { name: "Pickup quantity for Wood Component" });
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Pickup succeeded.")).toBeInTheDocument());
+    expect(pickup).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood_component", quantity: 1 });
+    expect(within(groundItems).getByText("1")).toBeInTheDocument();
+  });
+
+  it("applies authoritative state after an unsuccessful Resource pickup", async () => {
+    const nextState = { ...transferState, ap: 2998, resources: resourcesWithWood(8), ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 1 }] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    pickup.mockResolvedValue({ status: "conflict", error: "insufficient ground quantity", ...nextState });
+    render(<App />);
+
+    const groundResources = await screen.findByRole("table", { name: "Ground Resources" });
+    fireEvent.submit(within(groundResources).getByRole("spinbutton", { name: "Pickup quantity for Stone" }).closest("form")!);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient ground quantity"));
+    expect(pickup).toHaveBeenCalledWith({ asset_type: "resource", asset_id: "stone", quantity: 1 });
+    expect(apRow(2998)).toBeInTheDocument();
+    expect(within(groundResources).getByText("1")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 8");
+  });
+
+  it("prevents duplicate transfers while one request is pending", async () => {
+    let resolveDrop: ((value: auth.TransferResult) => void) | undefined;
+    drop.mockReturnValue(new Promise((resolve) => { resolveDrop = resolve; }));
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState } });
+    render(<App />);
+
+    const inventory = await screen.findByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeDisabled());
+    fireEvent.submit(input.closest("form")!);
+    expect(drop).toHaveBeenCalledTimes(1);
+    resolveDrop?.({ status: "success", ...transferState });
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
   });
 
   it("keeps tables inside the page width and gives gameplay headers column scope", async () => {
@@ -509,6 +619,8 @@ describe("App", () => {
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
       inventory: [],
+      ground_items: [],
+      ground_resources: [],
       gathering_option: null,
       conversion_option: null,
       resources,
@@ -561,6 +673,8 @@ describe("App", () => {
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
       inventory: [],
+      ground_items: [],
+      ground_resources: [],
       gathering_option: null,
       conversion_option: null,
       resources,
