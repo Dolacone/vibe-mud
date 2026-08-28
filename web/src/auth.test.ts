@@ -44,6 +44,8 @@ const campState: PlayerState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
+  carried_weight: 0,
+  movement_weight_threshold: 1000,
   inventory: [],
   ground_items: [],
   ground_resources: [],
@@ -65,6 +67,8 @@ const forestState: PlayerState = {
   location: { id: "forest_edge", display_name: "Forest edge" },
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
+  carried_weight: 0,
+  movement_weight_threshold: 1000,
   inventory: [],
   ground_items: [],
   ground_resources: [],
@@ -83,11 +87,13 @@ const forestState: PlayerState = {
 const gatheredForestState: PlayerState = {
   ...forestState,
   ap: 2970,
+  carried_weight: 100,
   inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 1 }],
 };
 
 const transferState: PlayerState = {
   ...campState,
+  carried_weight: 510,
   inventory: [{ item: { id: "wood", display_name: "Wood" }, quantity: 5 }],
   ground_items: [{ item: { id: "wood", display_name: "Wood" }, quantity: 2 }],
   ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
@@ -167,6 +173,19 @@ describe("getCurrentUser", () => {
       await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
     },
   );
+
+  it.each([
+    ["negative carried weight", { carried_weight: -1 }],
+    ["fractional carried weight", { carried_weight: 1.5 }],
+    ["missing movement threshold", { movement_weight_threshold: undefined }],
+    ["non-positive movement threshold", { movement_weight_threshold: 0 }],
+  ])("rejects %s because the UI needs authoritative movement limits", async (_label, override) => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ...override }), { status: 200 }),
+    );
+
+    await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
+  });
 });
 
 describe("move", () => {
@@ -194,6 +213,19 @@ describe("move", () => {
       error: "insufficient action points",
       ...campState,
       ap: 0,
+    });
+  });
+
+  it("preserves authoritative overweight state through the Move conflict path", async () => {
+    const overweightState = { ...campState, carried_weight: 1100 };
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "player is overweight", ...overweightState }), { status: 409 }),
+    );
+
+    await expect(move("forest_edge", fetcher)).resolves.toEqual({
+      status: "insufficient",
+      error: "player is overweight",
+      ...overweightState,
     });
   });
 
@@ -379,6 +411,7 @@ describe("convert", () => {
   const convertedCampState: PlayerState = {
     ...campState,
     ap: 2999,
+    carried_weight: 1,
     inventory: [],
     resources: resources.map((entry) => entry.resource.id === "wood" ? { ...entry, quantity: 1 } : entry),
   };
@@ -466,6 +499,7 @@ describe("craft", () => {
     const craftedState: PlayerState = {
       ...campState,
       ap: 2990,
+      carried_weight: 10,
       resources: resources.map((entry) => entry.resource.id === "wood" ? { ...entry, quantity: 0 } : entry),
       inventory: [{ item: woodComponentRecipe.output, quantity: 1 }],
     };

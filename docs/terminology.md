@@ -31,14 +31,16 @@ scope: "Canonical game terms used by the application."
 | [Building](#building) | - | 建築 | [REQ-010](../requirements/REQ-010.md) |
 | [Building recipe](#building-recipe) | - | 建築配方 | [REQ-010](../requirements/REQ-010.md) |
 | [Building durability](#building-durability) | - | 建築耐久度 | [REQ-011](../requirements/REQ-011.md) |
+| [Carrying weight](#carrying-weight) | - | 攜帶重量 | [REQ-014](../requirements/REQ-014.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
 | [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-010](../requirements/REQ-010.md) |
 | [Ground assets](#ground-assets) | - | 地面資產 | [REQ-013](../requirements/REQ-013.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
-| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
+| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
 | [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
-| [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md) |
+| [Movement weight threshold](#movement-weight-threshold) | - | 移動負重門檻 | [REQ-014](../requirements/REQ-014.md) |
+| [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
 | [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
 | [Transfer](#transfer) | - | 轉移 | [REQ-013](../requirements/REQ-013.md) |
 | [Transfer: Drop](#transfer-drop) | - | 放置 | [REQ-013](../requirements/REQ-013.md) |
@@ -178,6 +180,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)
 - 與相似名詞的差異：Inventory 保存持有狀態。Item 定義可持有的物品種類。
 
+### Carrying weight
+
+- 正式英文名稱：Carrying weight
+- 中文名稱：攜帶重量
+- 定義：玩家持有的每種 Item 與 Resource quantity 乘以對應單位重量後的總和。系統讀取玩家狀態時即時計算，不保存總和。
+- 對應行為：[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
+- 與相似名詞的差異：Carrying weight 是目前計算值。Movement weight threshold 是判斷能否移動的固定門檻。
+
 ### Ground assets
 
 - 正式英文名稱：Ground assets
@@ -190,8 +200,8 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Item
 - 中文名稱：物品
-- 定義：玩家可以取得並保存在 Inventory，或放在 Location 地面的離散物品種類。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 定義：玩家可以取得並保存在 Inventory，或放在 Location 地面的離散物品種類。每種 Item 定義正整數單位重量。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
 - 與相似名詞的差異：Item 以 Inventory 或地面 quantity 保存。Resource 依 Resource type 保存，不轉換成 Item。
 
 ### Location
@@ -210,13 +220,21 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)
 - 與相似名詞的差異：Route 是有向規則。Location 是玩家目前停留或可以到達的地點。
 
+### Movement weight threshold
+
+- 正式英文名稱：Movement weight threshold
+- 中文名稱：移動負重門檻
+- 定義：判斷玩家能否 Move 的固定攜帶重量門檻。MVP 為 1000 重量單位。
+- 對應行為：[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
+- 與相似名詞的差異：Movement weight threshold 不限制玩家持有資產。Carrying weight 超過門檻時只禁止 Move。
+
 ### Resource
 
 - 正式英文名稱：Resource
 - 中文名稱：資源
-- 定義：玩家或 Location 地面持有的持久化整數 quantity。每種 Resource type 分別保存。
+- 定義：玩家或 Location 地面持有的持久化整數 quantity。每種 Resource type 分別保存，並定義正整數單位重量。
 - 類型：Food、Wood、Stone、Metal、Fiber、Hide、Medicinal、Arcane。
-- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 對應行為：[REQ-007 - Typed resources](../requirements/REQ-007.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
 - 與相似名詞的差異：Resource 依 type 累積 quantity。它可以在玩家與地面之間 Transfer，但不轉換成 Item。
 
 ### Recipe

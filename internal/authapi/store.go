@@ -22,6 +22,7 @@ var (
 	ErrSessionNotFound           = errors.New("session not found")
 	ErrSessionExpired            = errors.New("session expired")
 	ErrInsufficientAP            = errors.New("insufficient action points")
+	ErrOverweight                = errors.New("player is overweight")
 	ErrRouteNotFound             = errors.New("route not found")
 	ErrGatheringNotFound         = errors.New("gathering not found")
 	ErrConversionNotFound        = errors.New("conversion not found")
@@ -200,6 +201,8 @@ type PlayerState struct {
 	Buildings               []Building
 	ConstructionComputation *ConstructionComputation
 	RepairComputation       *RepairComputation
+	CarriedWeight           int
+	MovementWeightThreshold int
 }
 
 const (
@@ -210,6 +213,7 @@ const (
 	buildingRepairAPCost      = 10
 	buildingRepairWoodCost    = 1
 	buildingDisabledRetention = 3 * 24 * time.Hour
+	movementWeightThreshold   = 1000
 	unixNanosecondsThreshold  = int64(1_000_000_000_000_000)
 	nanosecondsPerSecond      = int64(time.Second)
 )
@@ -272,7 +276,8 @@ CREATE TABLE IF NOT EXISTS player_locations (
 );
 CREATE TABLE IF NOT EXISTS items (
 	id TEXT PRIMARY KEY,
-	display_name TEXT NOT NULL
+	display_name TEXT NOT NULL,
+	weight_units INTEGER NOT NULL CHECK (weight_units > 0)
 );
 CREATE TABLE IF NOT EXISTS gathering_rules (
 	location_id TEXT PRIMARY KEY REFERENCES locations(id),
@@ -288,7 +293,8 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 );
 CREATE TABLE IF NOT EXISTS resource_types (
 	id TEXT PRIMARY KEY,
-	display_name TEXT NOT NULL
+	display_name TEXT NOT NULL,
+	weight_units INTEGER NOT NULL CHECK (weight_units > 0)
 );
 CREATE TABLE IF NOT EXISTS conversion_rules (
 	location_id TEXT PRIMARY KEY REFERENCES locations(id),
@@ -382,16 +388,21 @@ CREATE TABLE IF NOT EXISTS buildings (
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("upgrade building schema: %w", err)
 	}
+	if err := ensureWeightSchema(tx); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("upgrade weight schema: %w", err)
+	}
 	if _, err := tx.Exec(`
-INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
-	('food', 'Food'),
-	('wood', 'Wood'),
-	('stone', 'Stone'),
-	('metal', 'Metal'),
-	('fiber', 'Fiber'),
-	('hide', 'Hide'),
-	('medicinal', 'Medicinal'),
-	('arcane', 'Arcane')`); err != nil {
+INSERT OR IGNORE INTO resource_types (id, display_name, weight_units) VALUES
+	('food', 'Food', 1),
+	('wood', 'Wood', 1),
+	('stone', 'Stone', 1),
+	('metal', 'Metal', 1),
+	('fiber', 'Fiber', 1),
+	('hide', 'Hide', 1),
+	('medicinal', 'Medicinal', 1),
+	('arcane', 'Arcane', 1);
+UPDATE resource_types SET weight_units = 1;`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed resource types: %w", err)
 	}
@@ -406,9 +417,11 @@ INSERT OR IGNORE INTO locations (id, display_name) VALUES
 INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 	('camp', 'forest_edge', 20),
 	('forest_edge', 'camp', 20);
-INSERT OR IGNORE INTO items (id, display_name) VALUES
-	('wood', 'Wood'),
-	('wood_component', 'Wood Component');
+INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES
+	('wood', 'Wood', 100),
+	('wood_component', 'Wood Component', 10);
+UPDATE items SET weight_units = 100 WHERE id = 'wood';
+UPDATE items SET weight_units = 10 WHERE id = 'wood_component';
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
@@ -483,6 +496,28 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		convertedValues += rows
 	}
 	return convertedValues, nil
+}
+
+func ensureWeightSchema(tx *sql.Tx) error {
+	itemColumns, err := tableColumns(tx, "items")
+	if err != nil {
+		return err
+	}
+	if !itemColumns["weight_units"] {
+		if _, err := tx.Exec(`ALTER TABLE items ADD COLUMN weight_units INTEGER NOT NULL DEFAULT 1 CHECK (weight_units > 0)`); err != nil {
+			return fmt.Errorf("add item weight: %w", err)
+		}
+	}
+	resourceColumns, err := tableColumns(tx, "resource_types")
+	if err != nil {
+		return err
+	}
+	if !resourceColumns["weight_units"] {
+		if _, err := tx.Exec(`ALTER TABLE resource_types ADD COLUMN weight_units INTEGER NOT NULL DEFAULT 1 CHECK (weight_units > 0)`); err != nil {
+			return fmt.Errorf("add resource weight: %w", err)
+		}
+	}
+	return nil
 }
 
 func ensureTypedResourceSchema(tx *sql.Tx) error {
@@ -734,7 +769,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0), MovementWeightThreshold: movementWeightThreshold}
 	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
 		return PlayerState{}, err
 	}
@@ -956,7 +991,28 @@ ORDER BY destination_id`, state.Location.ID)
 	if err := rows.Close(); err != nil {
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
+	state.CarriedWeight, err = carryingWeightTx(tx, userID)
+	if err != nil {
+		return PlayerState{}, err
+	}
 	return state, nil
+}
+
+func carryingWeightTx(tx *sql.Tx, userID int64) (int, error) {
+	var weight int
+	err := tx.QueryRow(`
+SELECT COALESCE((SELECT SUM(pi.quantity * i.weight_units)
+                 FROM player_inventory pi
+                 JOIN items i ON i.id = pi.item_id
+                 WHERE pi.user_id = ?), 0)
+     + COALESCE((SELECT SUM(pr.quantity * rt.weight_units)
+                 FROM player_resources pr
+                 JOIN resource_types rt ON rt.id = pr.resource_id
+                 WHERE pr.user_id = ?), 0)`, userID, userID).Scan(&weight)
+	if err != nil {
+		return 0, fmt.Errorf("calculate carrying weight: %w", err)
+	}
+	return weight, nil
 }
 
 func setBuildingDurability(building *Building, expiresAt sql.NullInt64, now time.Time) {
@@ -1437,6 +1493,15 @@ WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.Ori
 	if calculateAP(unixSeconds(fullTimestamp), now) < route.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
+	}
+	carriedWeight, err := carryingWeightTx(tx, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if carriedWeight > movementWeightThreshold {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrOverweight
 	}
 	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {

@@ -2339,3 +2339,130 @@ func TestConcurrentGroundPickupCannotOverdraw(t *testing.T) {
 		t.Fatalf("concurrent pickup state = %+v, want one item and unchanged AP", state)
 	}
 }
+
+func TestWeightSchemaUpgradePreservesQuantitiesAndIsIdempotent(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:weight-schema-upgrade?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Unix()
+	if _, err := db.Exec(`
+CREATE TABLE identities (id INTEGER PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE oauth_attempts (state_hash BLOB PRIMARY KEY, browser_token_hash BLOB, nonce TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER);
+CREATE TABLE sessions (token_hash BLOB PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE player_ap (user_id INTEGER PRIMARY KEY, full_timestamp INTEGER NOT NULL);
+CREATE TABLE locations (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+CREATE TABLE player_locations (user_id INTEGER PRIMARY KEY, location_id TEXT NOT NULL);
+CREATE TABLE items (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+CREATE TABLE resource_types (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+CREATE TABLE player_inventory (user_id INTEGER NOT NULL, item_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (user_id, item_id));
+CREATE TABLE player_resources (user_id INTEGER NOT NULL, resource_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (user_id, resource_id));
+CREATE TABLE conversion_rules (location_id TEXT PRIMARY KEY, input_item_id TEXT NOT NULL, input_quantity INTEGER NOT NULL, resource_yield INTEGER NOT NULL, ap_cost INTEGER NOT NULL);
+INSERT INTO identities VALUES (41, 'https://accounts.google.com', 'legacy-weight', 'person@example.com', 'Person', ?, ?);
+INSERT INTO player_ap VALUES (41, ?);
+INSERT INTO locations VALUES ('camp', 'Camp');
+INSERT INTO player_locations VALUES (41, 'camp');
+INSERT INTO items VALUES ('wood', 'Wood'), ('wood_component', 'Wood Component');
+INSERT INTO resource_types VALUES ('wood', 'Wood'), ('stone', 'Stone');
+INSERT INTO player_inventory VALUES (41, 'wood', 3);
+INSERT INTO player_resources VALUES (41, 'stone', 7);`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return time.Unix(now, 0).UTC() }
+	for _, table := range []string{"items", "resource_types"} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = 'weight_units'", table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s weight column count = %d, want one", table, count)
+		}
+	}
+	var woodWeight, componentWeight, stoneWeight int
+	if err := db.QueryRow("SELECT weight_units FROM items WHERE id = 'wood'").Scan(&woodWeight); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT weight_units FROM items WHERE id = 'wood_component'").Scan(&componentWeight); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT weight_units FROM resource_types WHERE id = 'stone'").Scan(&stoneWeight); err != nil {
+		t.Fatal(err)
+	}
+	if woodWeight != 100 || componentWeight != 10 || stoneWeight != 1 {
+		t.Fatalf("migrated weights = wood %d, component %d, stone %d; want 100, 10, 1", woodWeight, componentWeight, stoneWeight)
+	}
+	state, err := store.GetPlayerState(41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CarriedWeight != 307 || state.MovementWeightThreshold != movementWeightThreshold {
+		t.Fatalf("migrated carrying state = %+v, want weight 307 and threshold %d", state, movementWeightThreshold)
+	}
+	var itemQuantity, resourceQuantity int
+	if err := db.QueryRow("SELECT quantity FROM player_inventory WHERE user_id = 41 AND item_id = 'wood'").Scan(&itemQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT quantity FROM player_resources WHERE user_id = 41 AND resource_id = 'stone'").Scan(&resourceQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if itemQuantity != 3 || resourceQuantity != 7 {
+		t.Fatalf("migrated quantities = item %d, resource %d; want 3 and 7", itemQuantity, resourceQuantity)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT quantity FROM player_inventory WHERE user_id = 41 AND item_id = 'wood'").Scan(&itemQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if itemQuantity != 3 {
+		t.Fatalf("idempotent migration changed item quantity to %d", itemQuantity)
+	}
+}
+
+func TestMoveRejectsOverweightAtomicallyAndDropCanRestoreMovement(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-overweight-move", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 11)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.CarriedWeight != 1100 {
+		t.Fatalf("overweight state = %d, want 1100", before.CarriedWeight)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); !errors.Is(err, ErrOverweight) {
+		t.Fatalf("overweight move error = %v, want ErrOverweight", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Location.ID != "camp" || after.AP != maxAP || after.CarriedWeight != 1100 {
+		t.Fatalf("rejected overweight move state = %+v, want unchanged camp, AP, and weight", after)
+	}
+	if _, err := store.Drop(identity.ID, "item", "wood", 1); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.CarriedWeight != movementWeightThreshold {
+		t.Fatalf("drop-restored weight = %d, want threshold %d", ready.CarriedWeight, movementWeightThreshold)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatalf("move at weight threshold failed: %v", err)
+	}
+}

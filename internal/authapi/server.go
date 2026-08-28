@@ -38,21 +38,10 @@ type ProviderIdentity struct {
 }
 
 type currentUserResponse struct {
-	ID               int64                     `json:"id"`
-	DisplayName      string                    `json:"display_name"`
-	Email            string                    `json:"email"`
-	AP               int                       `json:"ap"`
-	Location         locationResponse          `json:"location"`
-	Routes           []routeResponse           `json:"routes"`
-	Inventory        []inventoryItemResponse   `json:"inventory"`
-	GroundItems      []groundItemResponse      `json:"ground_items"`
-	GroundResources  []groundResourceResponse  `json:"ground_resources"`
-	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
-	ConversionOption *conversionOptionResponse `json:"conversion_option"`
-	Resources        []resourceResponse        `json:"resources"`
-	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
-	BuildingRecipes  []buildingRecipeResponse  `json:"building_recipes"`
-	Buildings        []buildingResponse        `json:"buildings"`
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	playerStateResponse
 }
 
 type restResponse struct {
@@ -76,18 +65,20 @@ type routeResponse struct {
 }
 
 type playerStateResponse struct {
-	Location         locationResponse          `json:"location"`
-	Routes           []routeResponse           `json:"routes"`
-	AP               int                       `json:"ap"`
-	Inventory        []inventoryItemResponse   `json:"inventory"`
-	GroundItems      []groundItemResponse      `json:"ground_items"`
-	GroundResources  []groundResourceResponse  `json:"ground_resources"`
-	GatheringOption  *gatheringOptionResponse  `json:"gathering_option"`
-	ConversionOption *conversionOptionResponse `json:"conversion_option"`
-	Resources        []resourceResponse        `json:"resources"`
-	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
-	BuildingRecipes  []buildingRecipeResponse  `json:"building_recipes"`
-	Buildings        []buildingResponse        `json:"buildings"`
+	Location                locationResponse          `json:"location"`
+	Routes                  []routeResponse           `json:"routes"`
+	AP                      int                       `json:"ap"`
+	CarriedWeight           int                       `json:"carried_weight"`
+	MovementWeightThreshold int                       `json:"movement_weight_threshold"`
+	Inventory               []inventoryItemResponse   `json:"inventory"`
+	GroundItems             []groundItemResponse      `json:"ground_items"`
+	GroundResources         []groundResourceResponse  `json:"ground_resources"`
+	GatheringOption         *gatheringOptionResponse  `json:"gathering_option"`
+	ConversionOption        *conversionOptionResponse `json:"conversion_option"`
+	Resources               []resourceResponse        `json:"resources"`
+	CraftingRecipes         []craftingRecipeResponse  `json:"crafting_recipes"`
+	BuildingRecipes         []buildingRecipeResponse  `json:"building_recipes"`
+	Buildings               []buildingResponse        `json:"buildings"`
 }
 
 type moveResponse struct {
@@ -201,6 +192,7 @@ const (
 	moveReasonExtraValue             = "extra_json_value"
 	moveReasonMissingTarget          = "missing_target"
 	moveReasonInvalidTarget          = "invalid_target"
+	moveReasonOverweight             = "overweight"
 	moveReasonUnsupported            = "unsupported_action"
 	gatherAction                     = "gather"
 	gatherReasonInvalidJSON          = "invalid_json"
@@ -457,23 +449,13 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
 	response := currentUserResponse{
-		ID:               identity.ID,
-		DisplayName:      identity.DisplayName,
-		Email:            identity.Email,
-		AP:               state.AP,
-		Location:         locationResponseFromStore(state.Location),
-		Routes:           routeResponsesFromStore(state.Routes),
-		Inventory:        inventoryResponsesFromStore(state.Inventory),
-		GroundItems:      groundItemResponsesFromStore(state.GroundItems),
-		GroundResources:  groundResourceResponsesFromStore(state.GroundResources),
-		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
-		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
-		Resources:        resourceResponsesFromStore(state.Resources),
-		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
-		BuildingRecipes:  buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:        buildingResponsesFromStore(state.Buildings),
+		ID:                  identity.ID,
+		DisplayName:         identity.DisplayName,
+		Email:               identity.Email,
+		playerStateResponse: playerStateResponseFromStore(state),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -932,6 +914,16 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logAction(r, session.UserID, moveAction, "insufficient_ap")
 		s.writeJSON(w, http.StatusConflict, moveResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
+	if errors.Is(err, ErrOverweight) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logWeightRejection(r, session.UserID, moveAction, moveReasonOverweight, state)
+		s.writeJSON(w, http.StatusConflict, moveResponse{Error: ErrOverweight.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if errors.Is(err, ErrRouteNotFound) {
@@ -1420,22 +1412,25 @@ func routeResponsesFromStore(routes []Route) []routeResponse {
 
 func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 	return playerStateResponse{
-		Location:         locationResponseFromStore(state.Location),
-		Routes:           routeResponsesFromStore(state.Routes),
-		AP:               state.AP,
-		Inventory:        inventoryResponsesFromStore(state.Inventory),
-		GroundItems:      groundItemResponsesFromStore(state.GroundItems),
-		GroundResources:  groundResourceResponsesFromStore(state.GroundResources),
-		GatheringOption:  gatheringOptionResponseFromStore(state.GatheringOption),
-		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
-		Resources:        resourceResponsesFromStore(state.Resources),
-		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
-		BuildingRecipes:  buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:        buildingResponsesFromStore(state.Buildings),
+		Location:                locationResponseFromStore(state.Location),
+		Routes:                  routeResponsesFromStore(state.Routes),
+		AP:                      state.AP,
+		CarriedWeight:           state.CarriedWeight,
+		MovementWeightThreshold: state.MovementWeightThreshold,
+		Inventory:               inventoryResponsesFromStore(state.Inventory),
+		GroundItems:             groundItemResponsesFromStore(state.GroundItems),
+		GroundResources:         groundResourceResponsesFromStore(state.GroundResources),
+		GatheringOption:         gatheringOptionResponseFromStore(state.GatheringOption),
+		ConversionOption:        conversionOptionResponseFromStore(state.ConversionOption),
+		Resources:               resourceResponsesFromStore(state.Resources),
+		CraftingRecipes:         craftingRecipeResponsesFromStore(state.CraftingRecipes),
+		BuildingRecipes:         buildingRecipeResponsesFromStore(state.BuildingRecipes),
+		Buildings:               buildingResponsesFromStore(state.Buildings),
 	}
 }
 
 func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
+	s.logCarryingWeightComputation(r, userID, state)
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
 	return playerStateResponseFromStore(state)
 }
@@ -1808,6 +1803,14 @@ func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
 
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
+}
+
+func (s *Server) logCarryingWeightComputation(r *http.Request, userID int64, state PlayerState) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=carrying_weight_calculation outcome=success carried_weight=%d movement_weight_threshold=%d request_id=%s\n", userID, state.CarriedWeight, state.MovementWeightThreshold, requestID(r))
+}
+
+func (s *Server) logWeightRejection(r *http.Request, userID int64, action, reason string, state PlayerState) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=error reason=%s carried_weight=%d movement_weight_threshold=%d request_id=%s\n", userID, action, reason, state.CarriedWeight, state.MovementWeightThreshold, requestID(r))
 }
 
 func (s *Server) logTransfer(r *http.Request, userID int64, operation, locationID, assetType, assetID string, quantity int, outcome, reason string) {
