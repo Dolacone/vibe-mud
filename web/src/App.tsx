@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RestResult } from "./auth";
+import { build, contributeConstruction, convert, craft, gather, getCurrentUser, move, repairBuilding, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type MoveResult, type PlayerState, type RepairResult, type RestResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | { status: "idle" } | { status: "pending" };
-type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | null;
+type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | "repair-building" | null;
 
 function Identity({ user }: { user: CurrentUser }) {
   return (
@@ -162,6 +162,29 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
       setAction({
         status: "error",
         error: error instanceof Error ? error : new Error(`${kind} request failed`),
+      });
+    } finally {
+      actionPending.current = false;
+    }
+  };
+
+  const handleRepair = async (buildingID: number) => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setActionKind("repair-building");
+    setAction({ status: "pending" });
+    try {
+      const next = await repairBuilding(buildingID);
+      if (next.status === "success" || next.status === "conflict") {
+        applyPlayerState(next);
+      } else if (next.status === "invalid" && next.state) {
+        applyPlayerState(next.state);
+      }
+      setAction(next);
+    } catch (error) {
+      setAction({
+        status: "error",
+        error: error instanceof Error ? error : new Error("repair-building request failed"),
       });
     } finally {
       actionPending.current = false;
@@ -328,6 +351,15 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
                     <p>Status: {building.status}</p>
                     <p>Progress: {building.contributed_ap}/{building.required_ap} AP ({percentage}%)</p>
                     <p>Empty extension slots: {building.extension_slot_count}</p>
+                    {building.status === "completed" && building.durability_status !== null && building.durability_remaining_seconds !== null && (
+                      <>
+                        <p>Durability status: {building.durability_status}</p>
+                        <p>Remaining durability: {Math.max(0, building.durability_remaining_seconds)} seconds</p>
+                        <button type="button" onClick={() => void handleRepair(building.id)} disabled={actionPendingNow}>
+                          {actionPendingNow && actionKind === "repair-building" ? "Repairing..." : `Repair building ${building.id}`}
+                        </button>
+                      </>
+                    )}
                     {canContribute && (
                       <BuildingContribution buildingID={building.id} disabled={actionPendingNow} onSubmit={(ap) => void applyBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />
                     )}
@@ -340,6 +372,8 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         {action.status === "success" && actionKind === "build" && <p role="status">Building construction started.</p>}
         {action.status === "success" && actionKind === "contribute-construction" && <p role="status">Construction contribution succeeded.</p>}
         {(action.status === "insufficient" || action.status === "invalid") && (actionKind === "build" || actionKind === "contribute-construction") && <p role="alert">Building action failed: {action.error}</p>}
+        {action.status === "success" && actionKind === "repair-building" && <p role="status">Building repair succeeded.</p>}
+        {(action.status === "conflict" || action.status === "invalid") && actionKind === "repair-building" && <p role="alert">Building repair failed: {action.error}</p>}
       </section>
       <section aria-labelledby="inventory-heading">
         <h2 id="inventory-heading">Inventory</h2>

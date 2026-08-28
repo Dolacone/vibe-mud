@@ -12,6 +12,7 @@ source_paths:
   - docs/schemas.md
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
   - web/src/App.test.tsx
 req_ref: REQ-011
 base_branch: main
@@ -91,7 +92,7 @@ Task 1: persistence and game rules
 - [x] Task 3: Add the typed repair request and durability response contract in `web/src/auth.ts`, with parser and request tests. Submit only `{"building_id": <positive integer>}`. Require `max_durability_seconds` on every Building. Require null durability fields during construction and typed Active or Disabled fields after completion. Reject inconsistent combinations and parse authoritative state from HTTP 400 or 409 failures. This task depends on Task 2 and blocks Task 4.
   - REQ-011.4: 玩家必須能看到 Building 的耐久狀態與剩餘耐久時間。
   - REQ-011.22: 前端必須提供維修 Action，並在成功後顯示最新狀態。
-- [ ] Task 4: Render completed Building durability status and non-negative remaining seconds in `web/src/App.tsx`. Provide a repair control for completed Buildings. Apply authoritative state after success or failure and show the result. Add interaction tests. This task depends on Tasks 1 and 3.
+- [x] Task 4: Render completed Building durability status and non-negative remaining seconds in `web/src/App.tsx`. Provide a repair control for completed Buildings. Apply authoritative state after success or failure and show the result. Add interaction tests. This task depends on Tasks 1 and 3.
   - REQ-011.3: 剩餘耐久時間大於 0 時，Building 必須顯示為 Active。
   - REQ-011.4: 玩家必須能看到 Building 的耐久狀態與剩餘耐久時間。
   - REQ-011.5: 剩餘耐久時間到達 0 時，Building 必須顯示為 Disabled。

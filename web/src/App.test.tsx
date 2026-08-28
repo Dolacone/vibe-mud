@@ -5,7 +5,7 @@ import * as auth from "./auth";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn(), build: vi.fn(), contributeConstruction: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn(), build: vi.fn(), contributeConstruction: vi.fn(), repairBuilding: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
@@ -16,6 +16,7 @@ const convert = vi.mocked(auth.convert);
 const craft = vi.mocked(auth.craft);
 const build = vi.mocked(auth.build);
 const contributeConstruction = vi.mocked(auth.contributeConstruction);
+const repairBuilding = vi.mocked(auth.repairBuilding);
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -60,6 +61,20 @@ const underConstruction = {
   durability_remaining_seconds: null,
 };
 
+const completedActive = {
+  ...underConstruction,
+  contributed_ap: 60,
+  status: "completed" as const,
+  durability_status: "active" as const,
+  durability_remaining_seconds: 604700,
+};
+
+const completedDisabled = {
+  ...completedActive,
+  durability_status: "disabled" as const,
+  durability_remaining_seconds: 0,
+};
+
 const campState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
@@ -102,6 +117,49 @@ describe("App", () => {
     craft.mockReset();
     build.mockReset();
     contributeConstruction.mockReset();
+    repairBuilding.mockReset();
+  });
+
+  it("shows active Building durability and a repair action", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedActive] } });
+    render(<App />);
+
+    expect(await screen.findByText("Durability status: active")).toBeInTheDocument();
+    expect(screen.getByText("Remaining durability: 604700 seconds")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
+  });
+
+  it("shows disabled Building durability with zero remaining seconds", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedDisabled] } });
+    render(<App />);
+
+    expect(await screen.findByText("Durability status: disabled")).toBeInTheDocument();
+    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
+  });
+
+  it("repairs a completed Building and applies the authoritative state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedActive] } });
+    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_remaining_seconds: 604800 }] });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Repair building 1" })).click();
+    await waitFor(() => expect(screen.getByText("Building repair succeeded.")).toBeInTheDocument());
+    expect(repairBuilding).toHaveBeenCalledWith(1);
+    expect(screen.getByText("AP: 2990")).toBeInTheDocument();
+    expect(screen.getByText("Remaining durability: 604800 seconds")).toBeInTheDocument();
+  });
+
+  it("shows a repair failure and applies its authoritative state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedActive] } });
+    repairBuilding.mockResolvedValue({ status: "conflict", error: "insufficient action points", ...campState, ap: 5, buildings: [completedDisabled] });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Repair building 1" })).click();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByText("AP: 5")).toBeInTheDocument();
+    expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
+    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
   });
 
   it("displays the backend building recipe and current-location construction state", async () => {
