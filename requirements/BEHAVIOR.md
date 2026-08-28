@@ -8,7 +8,8 @@
 - 已登入玩家可在 `camp` 執行 `convert`，原子消耗 AP 與 Wood item 並累加 Wood Resource -> REQ-008
 - 已登入玩家可在任何 Location 執行後端定義的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可建立 Building Lv1，並由同地點玩家共同投入 AP 完成施工 -> REQ-010
-- 完成的 Building 會自然耗損，所有同地點玩家都能消耗 AP 與 Wood Resource 維修 -> REQ-011
+- 完成的 Building 會自然耗損，Disabled 後保留 7 天，所有同地點玩家都能消耗 AP 與 Wood Resource 維修 -> REQ-011
 - 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
-- 玩家可在目前 Location 免費 Pickup 或 Drop 公共地面 Item 與 Resource，Transfer 不消耗 AP -> REQ-013
+- 玩家可在目前 Location 免費 Transfer 資產，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
 - 玩家可持有超過負重門檻的資產，但超重時不能 Move -> REQ-014
+- Item 依各自耐久上限自然失效，分開保存 Active 與 Expired 堆疊，失效後保留 7 天 -> REQ-015
