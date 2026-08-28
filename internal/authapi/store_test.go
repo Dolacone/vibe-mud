@@ -2370,9 +2370,10 @@ func TestItemTransfersPreservePartialDurabilityAndRejectExpiredPickup(t *testing
 	activeGroundExpiry := now.Add(100 * time.Second).Unix()
 	expiredInventoryExpiry := now.Add(200 * time.Second).Unix()
 	expiredGroundExpiry := now.Add(300 * time.Second).Unix()
-	if _, err := db.Exec(`
-INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 3), (?, 'wood', 'expired', ?, 2);
-INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 2), ('camp', 'wood', 'expired', ?, 4)`, identity.ID, activeInventoryExpiry, identity.ID, expiredInventoryExpiry, activeGroundExpiry, expiredGroundExpiry); err != nil {
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 3), (?, 'wood', 'expired', ?, 2)`, identity.ID, activeInventoryExpiry, identity.ID, expiredInventoryExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 2), ('camp', 'wood', 'expired', ?, 4)`, activeGroundExpiry, expiredGroundExpiry); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetPlayerState(identity.ID)
