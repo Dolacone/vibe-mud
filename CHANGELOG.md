@@ -5,7 +5,7 @@
 ## 2026-08-28
 
 - Changed all persistent timestamps from Unix nanoseconds to Unix seconds.
-- Added an idempotent migration for existing timestamps.
+- Added idempotent migration and converted-value logging for existing timestamps.
 
 ## 2026-08-27
 
