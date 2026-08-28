@@ -1171,6 +1171,28 @@ func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing
 	}
 }
 
+func TestPlayerStateResponseLogsBuildingDurabilityComputation(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "building-durability-computation-log")
+	prepareCompletedBuilding(t, fixture, fixture.now.Add(24*time.Hour))
+	requestID := "building-durability-computation-request"
+	request := fixture.request(http.MethodGet, "/api/me", "", requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+	}
+	want := "user_id=1 action=building_durability_calculation outcome=success building_id=1 durability_status=active remaining_seconds=86400 request_id=" + requestID
+	if !strings.Contains(logOutput, want) {
+		t.Fatalf("building durability computation log = %q, want %q", logOutput, want)
+	}
+	for _, secret := range []string{"session-token", "authorization-code", "request-body"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("building durability log leaked %q: %q", secret, logOutput)
+		}
+	}
+}
+
 func TestRepairBuildingAPIRejectsInvalidRequestsWithAuthoritativeState(t *testing.T) {
 	tests := []struct {
 		name, body, reason string

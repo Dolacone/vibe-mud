@@ -423,6 +423,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
 	response := currentUserResponse{
 		ID:               identity.ID,
 		DisplayName:      identity.DisplayName,
@@ -454,7 +455,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
 			return
 		}
-		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid action input", playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid action input", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	state, err := s.store.Convert(session.UserID)
@@ -466,7 +467,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logRejection(r, session.UserID, convertAction, convertReasonInsufficientAP)
-		s.writeJSON(w, http.StatusConflict, convertResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusConflict, convertResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if errors.Is(err, ErrInsufficientItem) {
@@ -476,7 +477,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logRejection(r, session.UserID, convertAction, convertReasonInsufficientItem)
-		s.writeJSON(w, http.StatusConflict, convertResponse{Error: ErrInsufficientItem.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusConflict, convertResponse{Error: ErrInsufficientItem.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if errors.Is(err, ErrConversionNotFound) {
@@ -486,7 +487,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logRejection(r, session.UserID, convertAction, convertReasonInvalidLocation)
-		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if err != nil {
@@ -495,7 +496,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, convertAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) craft(w http.ResponseWriter, r *http.Request) {
@@ -538,7 +539,7 @@ func (s *Server) craft(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, craftAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) writeCraftState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
@@ -547,7 +548,7 @@ func (s *Server) writeCraftState(w http.ResponseWriter, r *http.Request, userID 
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.writeJSON(w, status, craftResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+	s.writeJSON(w, status, craftResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
 }
 
 type buildRequest struct {
@@ -592,7 +593,7 @@ func (s *Server) build(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logAction(r, session.UserID, buildAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) writeBuildingState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
@@ -601,7 +602,7 @@ func (s *Server) writeBuildingState(w http.ResponseWriter, r *http.Request, user
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.writeJSON(w, status, buildResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+	s.writeJSON(w, status, buildResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
 }
 
 type repairBuildingRequest struct {
@@ -654,7 +655,7 @@ func (s *Server) repairBuilding(w http.ResponseWriter, r *http.Request) {
 		s.logRepairComputation(r, session.UserID, computation)
 	}
 	s.logAction(r, session.UserID, repairBuildingAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) writeRepairBuildingState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
@@ -663,7 +664,7 @@ func (s *Server) writeRepairBuildingState(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.writeJSON(w, status, repairBuildingResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+	s.writeJSON(w, status, repairBuildingResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
 }
 
 type contributeConstructionRequest struct {
@@ -712,7 +713,7 @@ func (s *Server) contributeConstruction(w http.ResponseWriter, r *http.Request) 
 		s.logConstructionComputation(r, session.UserID, computation)
 	}
 	s.logAction(r, session.UserID, contributeConstructionAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func currentAP(state PlayerState, store *Store, userID int64) int {
@@ -739,7 +740,7 @@ func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
 			return
 		}
-		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: "invalid action input", playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: "invalid action input", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	state, err := s.store.Gather(session.UserID)
@@ -751,7 +752,7 @@ func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logAction(r, session.UserID, gatherAction, "insufficient_ap")
-		s.writeJSON(w, http.StatusConflict, gatherResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusConflict, gatherResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if errors.Is(err, ErrGatheringNotFound) {
@@ -762,7 +763,7 @@ func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "invalid_location", state.AP)
 		s.logRejection(r, session.UserID, gatherAction, gatherReasonInvalidLocation)
-		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: ErrGatheringNotFound.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusBadRequest, gatherResponse{Error: ErrGatheringNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if err != nil {
@@ -771,7 +772,7 @@ func (s *Server) gather(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, gatherAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
@@ -827,7 +828,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logAction(r, session.UserID, moveAction, "insufficient_ap")
-		s.writeJSON(w, http.StatusConflict, moveResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusConflict, moveResponse{Error: ErrInsufficientAP.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if errors.Is(err, ErrRouteNotFound) {
@@ -838,7 +839,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logComputation(r, session.UserID, "ap_calculation", "invalid_target", state.AP)
 		s.logRejection(r, session.UserID, moveAction, moveReasonInvalidTarget)
-		s.writeJSON(w, http.StatusBadRequest, moveResponse{Error: "invalid target", playerStateResponse: playerStateResponseFromStore(state)})
+		s.writeJSON(w, http.StatusBadRequest, moveResponse{Error: "invalid target", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if err != nil {
@@ -847,7 +848,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, moveAction, "success")
-	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
 }
 
 func (s *Server) authenticatedSession(r *http.Request) (Session, error) {
@@ -1245,6 +1246,11 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 	}
 }
 
+func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
+	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
+	return playerStateResponseFromStore(state)
+}
+
 type buildingResourceInputResponse struct {
 	Resource itemResponse `json:"resource"`
 	Quantity int          `json:"quantity"`
@@ -1593,6 +1599,15 @@ func (s *Server) logConstructionComputation(r *http.Request, userID int64, compu
 
 func (s *Server) logRepairComputation(r *http.Request, userID int64, computation *RepairComputation) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=success building_id=%d prior_durability_status=%s added_seconds=%d resulting_remaining_seconds=%d ap_cost=%d wood_cost=%d request_id=%s\n", userID, repairBuildingAction, computation.BuildingID, computation.PriorDurabilityStatus, computation.AddedSeconds, computation.ResultingRemainingSeconds, computation.APCost, computation.WoodCost, requestID(r))
+}
+
+func (s *Server) logBuildingDurabilityComputation(r *http.Request, userID int64, buildings []Building) {
+	for _, building := range buildings {
+		if building.Status != "completed" || building.DurabilityStatus == "" {
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "user_id=%d action=building_durability_calculation outcome=success building_id=%d durability_status=%s remaining_seconds=%d request_id=%s\n", userID, building.ID, building.DurabilityStatus, building.DurabilityRemainingSeconds, requestID(r))
+	}
 }
 
 func canonicalOrigin(frontend *url.URL) (string, error) {

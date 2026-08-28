@@ -590,8 +590,8 @@ VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
 INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
 VALUES ('wood_component', 'wood', 10);
 
-INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count, max_durability_seconds)
-VALUES ('building_lv1', 'Building Lv1', 1, 60, 1, 604800);
+INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count)
+VALUES ('building_lv1', 'Building Lv1', 1, 60, 1);
 
 INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity)
 VALUES ('building_lv1', 'wood_component', 1);
