@@ -166,6 +166,36 @@ describe("getCurrentUser", () => {
     await expect(getCurrentUser(stringID)).resolves.toMatchObject({ status: "error" });
   });
 
+  it("accepts active and expired ground stacks for the same Item", async () => {
+    const state = {
+      ...campState,
+      ground_items: [
+        activeItem({ id: "wood", display_name: "Wood" }, 2),
+        expiredItem({ id: "wood", display_name: "Wood" }, 1),
+      ],
+    };
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }),
+    );
+
+    await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated", user: state });
+  });
+
+  it("rejects duplicate ground stacks with the same Item status", async () => {
+    const state = {
+      ...campState,
+      ground_items: [
+        activeItem({ id: "wood", display_name: "Wood" }, 2),
+        activeItem({ id: "wood", display_name: "Wood" }, 1),
+      ],
+    };
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }),
+    );
+
+    await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
+  });
+
   it("does not read browser storage", async () => {
     const storageRead = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("browser storage must not be read");

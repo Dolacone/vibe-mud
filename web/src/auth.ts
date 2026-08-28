@@ -435,8 +435,14 @@ function isGroundResource(value: unknown): value is GroundResource {
 
 function isGroundItems(value: unknown): value is GroundItem[] {
   if (!Array.isArray(value) || !value.every(isGroundItem)) return false;
-  const ids = value.map((groundItem) => groundItem.item.id);
-  return new Set(ids).size === ids.length;
+  const statusesByID = new Map<string, Set<ItemStatus>>();
+  for (const groundItem of value) {
+    const statuses = statusesByID.get(groundItem.item.id) ?? new Set<ItemStatus>();
+    if (statuses.has(groundItem.durability_status)) return false;
+    statuses.add(groundItem.durability_status);
+    statusesByID.set(groundItem.item.id, statuses);
+  }
+  return true;
 }
 
 function isGroundResources(value: unknown): value is GroundResource[] {
