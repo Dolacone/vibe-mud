@@ -1222,33 +1222,9 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int) (Pla
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		result, err := tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND quantity = ?`, userID, assetID, quantity)
-		if err != nil {
+		if err := consumeTransferQuantityTx(tx, "player_inventory", "user_id", userID, "item_id", assetID, quantity, "dropped item"); err != nil {
 			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("consume dropped item: %w", err)
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("check dropped item: %w", err)
-		}
-		if rows == 0 {
-			result, err = tx.Exec(`
-UPDATE player_inventory SET quantity = quantity - ?
-WHERE user_id = ? AND item_id = ? AND quantity > ?`, quantity, userID, assetID, quantity)
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("consume dropped item: %w", err)
-			}
-			rows, err = result.RowsAffected()
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("check dropped item: %w", err)
-			}
-		}
-		if rows != 1 {
-			_ = tx.Rollback()
-			return PlayerState{}, ErrInsufficientTransferAsset
+			return PlayerState{}, err
 		}
 		if _, err := tx.Exec(`
 INSERT INTO ground_items (location_id, item_id, quantity)
@@ -1262,33 +1238,9 @@ ON CONFLICT (location_id, item_id) DO UPDATE SET quantity = ground_items.quantit
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		result, err := tx.Exec(`DELETE FROM player_resources WHERE user_id = ? AND resource_id = ? AND quantity = ?`, userID, assetID, quantity)
-		if err != nil {
+		if err := consumeTransferQuantityTx(tx, "player_resources", "user_id", userID, "resource_id", assetID, quantity, "dropped resource"); err != nil {
 			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("consume dropped resource: %w", err)
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("check dropped resource: %w", err)
-		}
-		if rows == 0 {
-			result, err = tx.Exec(`
-UPDATE player_resources SET quantity = quantity - ?
-WHERE user_id = ? AND resource_id = ? AND quantity > ?`, quantity, userID, assetID, quantity)
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("consume dropped resource: %w", err)
-			}
-			rows, err = result.RowsAffected()
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("check dropped resource: %w", err)
-			}
-		}
-		if rows != 1 {
-			_ = tx.Rollback()
-			return PlayerState{}, ErrInsufficientTransferAsset
+			return PlayerState{}, err
 		}
 		if _, err := tx.Exec(`
 INSERT INTO ground_resources (location_id, resource_id, quantity)
@@ -1328,33 +1280,9 @@ func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int) (P
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		result, err := tx.Exec(`DELETE FROM ground_items WHERE location_id = ? AND item_id = ? AND quantity = ?`, locationID, assetID, quantity)
-		if err != nil {
+		if err := consumeTransferQuantityTx(tx, "ground_items", "location_id", locationID, "item_id", assetID, quantity, "ground item"); err != nil {
 			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("consume ground item: %w", err)
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("check ground item: %w", err)
-		}
-		if rows == 0 {
-			result, err = tx.Exec(`
-UPDATE ground_items SET quantity = quantity - ?
-WHERE location_id = ? AND item_id = ? AND quantity > ?`, quantity, locationID, assetID, quantity)
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("consume ground item: %w", err)
-			}
-			rows, err = result.RowsAffected()
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("check ground item: %w", err)
-			}
-		}
-		if rows != 1 {
-			_ = tx.Rollback()
-			return PlayerState{}, ErrInsufficientTransferAsset
+			return PlayerState{}, err
 		}
 		if _, err := tx.Exec(`
 INSERT INTO player_inventory (user_id, item_id, quantity)
@@ -1368,33 +1296,9 @@ ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = player_inventory.quantit
 			_ = tx.Rollback()
 			return PlayerState{}, err
 		}
-		result, err := tx.Exec(`DELETE FROM ground_resources WHERE location_id = ? AND resource_id = ? AND quantity = ?`, locationID, assetID, quantity)
-		if err != nil {
+		if err := consumeTransferQuantityTx(tx, "ground_resources", "location_id", locationID, "resource_id", assetID, quantity, "ground resource"); err != nil {
 			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("consume ground resource: %w", err)
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("check ground resource: %w", err)
-		}
-		if rows == 0 {
-			result, err = tx.Exec(`
-UPDATE ground_resources SET quantity = quantity - ?
-WHERE location_id = ? AND resource_id = ? AND quantity > ?`, quantity, locationID, assetID, quantity)
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("consume ground resource: %w", err)
-			}
-			rows, err = result.RowsAffected()
-			if err != nil {
-				_ = tx.Rollback()
-				return PlayerState{}, fmt.Errorf("check ground resource: %w", err)
-			}
-		}
-		if rows != 1 {
-			_ = tx.Rollback()
-			return PlayerState{}, ErrInsufficientTransferAsset
+			return PlayerState{}, err
 		}
 		if _, err := tx.Exec(`
 INSERT INTO player_resources (user_id, resource_id, quantity)
@@ -1413,6 +1317,33 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 		return PlayerState{}, fmt.Errorf("commit pickup: %w", err)
 	}
 	return state, nil
+}
+
+func consumeTransferQuantityTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, assetColumn, assetID string, quantity int, label string) error {
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND %s = ? AND quantity = ?", table, scopeColumn, assetColumn)
+	result, err := tx.Exec(deleteQuery, scopeValue, assetID, quantity)
+	if err != nil {
+		return fmt.Errorf("consume %s: %w", label, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check %s: %w", label, err)
+	}
+	if rows == 0 {
+		updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity - ? WHERE %s = ? AND %s = ? AND quantity > ?", table, scopeColumn, assetColumn)
+		result, err = tx.Exec(updateQuery, quantity, scopeValue, assetID, quantity)
+		if err != nil {
+			return fmt.Errorf("consume %s: %w", label, err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check %s: %w", label, err)
+		}
+	}
+	if rows != 1 {
+		return ErrInsufficientTransferAsset
+	}
+	return nil
 }
 
 func validateTransfer(userID int64, assetType, assetID string, quantity int) error {
