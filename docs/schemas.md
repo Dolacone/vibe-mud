@@ -45,10 +45,10 @@ source_paths:
 | `crafting_recipes` | 保存後端允許的 recipe、基本 AP 成本與明確 output。 | Store 初始化時建立固定 seed。 | 它定義 recipe header，不保存 inputs 或玩家執行紀錄。 |
 | `crafting_recipe_resource_inputs` | 保存每個 recipe 消耗的 Resource inputs。 | Recipe seed 建立時加入。 | 它保存 Resource 成本，不保存玩家 Resource quantity。 |
 | `crafting_recipe_item_inputs` | 保存每個 recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存 Item 成本，不保存玩家 Inventory quantity。 |
-| `building_recipes` | 保存後端允許的 Building recipe 與完成結果。 | Store 初始化時建立固定 seed。 | 它定義 Building，不保存玩家施工狀態。 |
+| `building_recipes` | 保存後端允許的 Building recipe、完成結果與耐久上限。 | Store 初始化時建立固定 seed。 | 它定義 Building，不保存玩家施工或耐久狀態。 |
 | `building_recipe_resource_inputs` | 保存 Building recipe 消耗的 Resource inputs。 | Recipe 需要 Resource 時加入。 | 它保存成本，不保存玩家 Resource quantity。 |
 | `building_recipe_item_inputs` | 保存 Building recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存成本，不保存玩家 Inventory quantity。 |
-| `buildings` | 保存玩家在 Location 建立的 Building 與施工進度。 | 開始施工時建立，完成時更新。 | 它保存世界狀態，不定義 recipe。 |
+| `buildings` | 保存玩家在 Location 建立的 Building、施工進度與耐久期限。 | 開始施工時建立，完成、維修或消失時更新。 | 它保存世界狀態，不定義 recipe。 |
 
 ## identities
 
@@ -406,7 +406,8 @@ CREATE TABLE IF NOT EXISTS building_recipes (
     display_name TEXT NOT NULL,
     building_level INTEGER NOT NULL CHECK (building_level > 0),
     required_ap INTEGER NOT NULL CHECK (required_ap > 0),
-    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0)
+    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+    max_durability_seconds INTEGER NOT NULL CHECK (max_durability_seconds > 0)
 );
 ```
 
@@ -417,6 +418,7 @@ CREATE TABLE IF NOT EXISTS building_recipes (
 | `building_level` | Recipe 建立的 Building level。 |
 | `required_ap` | 完成施工所需的 AP。 |
 | `extension_slot_count` | 完成後可用的 extension slot 數量。 |
+| `max_durability_seconds` | Recipe 定義的最大耐久秒數。Building 建立時保存此值。 |
 
 索引與約束：Primary key 為 `id`。Recipe 不限制 Location。後端只回傳至少有一筆 Resource 或 Item input 的 recipe。
 
@@ -478,6 +480,8 @@ CREATE TABLE IF NOT EXISTS buildings (
     contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
     status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
     extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+    max_durability_seconds INTEGER NOT NULL CHECK (max_durability_seconds > 0),
+    durability_expires_at INTEGER,
     UNIQUE (owner_id, location_id)
 );
 ```
@@ -494,8 +498,10 @@ CREATE TABLE IF NOT EXISTS buildings (
 | `contributed_ap` | 所有玩家累計投入的 AP。 |
 | `status` | `under_construction` 或 `completed`。 |
 | `extension_slot_count` | 建立時保存的 extension slot 數量。 |
+| `max_durability_seconds` | 建立時保存的耐久上限秒數。 |
+| `durability_expires_at` | 完成 Building 的耐久期限。施工中為 `NULL`。 |
 
-索引與約束：`UNIQUE (owner_id, location_id)` 讓施工中與完成的 Building 都占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。
+索引與約束：`UNIQUE (owner_id, location_id)` 讓尚未消失的 Building 占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。後端在狀態讀取、建造與維修前刪除已超過 Disabled 保留期的 row。
 
 ## 關聯與約束
 
@@ -584,8 +590,8 @@ VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
 INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
 VALUES ('wood_component', 'wood', 10);
 
-INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count)
-VALUES ('building_lv1', 'Building Lv1', 1, 60, 1);
+INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count, max_durability_seconds)
+VALUES ('building_lv1', 'Building Lv1', 1, 60, 1, 604800);
 
 INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity)
 VALUES ('building_lv1', 'wood_component', 1);
@@ -596,7 +602,7 @@ VALUES ('building_lv1', 'wood', 10);
 
 Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
 
-Existing databases gain the four Building tables and seeds during Store initialization. Existing player state remains unchanged.
+Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
@@ -610,9 +616,13 @@ Existing databases gain the four Building tables and seeds during Store initiali
 
 `craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
 
-開始施工 transaction 會依 submitted recipe identifier 查找 Location-independent recipe 與 inputs，再查找玩家目前 Location 的既有 Building。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP 與 extension slot count 快照。
+開始施工 transaction 會先刪除已超過 Disabled 保留期的 Building，再依 submitted recipe identifier 查找 Location-independent recipe 與 inputs。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP、extension slot count 與最大耐久秒數快照。
 
-施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`。
+施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`，並將耐久期限設為後端目前時間加最大耐久秒數。
+
+狀態讀取 transaction 會先刪除耐久期限不晚於目前時間減 3 天的 completed Building。回傳的 completed Building 會包含後端依目前時間計算的 Active 或 Disabled 狀態與剩餘耐久秒數。永久消失的 Building 不再占用 `UNIQUE (owner_id, location_id)` 名額。
+
+維修 transaction 會先刪除已永久消失的 Building，再查找 submitted Building identifier。玩家不在該 Location、Building 尚未完成、AP 不足或 Wood Resource 不足時，transaction 不修改資料。成功時，系統扣除 10 AP 與 1 Wood Resource。Active Building 從既有期限延長，Disabled Building 從目前時間延長。每次最多增加 3600 秒，最終期限不超過目前時間加最大耐久秒數。接近上限時仍扣除完整成本。
 
 ## 已知限制
 
