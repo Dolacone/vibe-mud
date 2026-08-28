@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS buildings (
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
 	}
-	migratedTimestampRows, err := migrateTimestampsToUnixSeconds(tx)
+	migratedTimestampValues, err := migrateTimestampsToUnixSeconds(tx)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("migrate timestamps to Unix seconds: %w", err)
@@ -396,7 +396,7 @@ SELECT id, 'camp' FROM identities`); err != nil {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
-	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_rows=%d request_id=unavailable\n", migratedTimestampRows)
+	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
 	return &Store{db: db, now: time.Now}, nil
 }
 
@@ -413,7 +413,7 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		{table: "sessions", column: "created_at"},
 		{table: "player_ap", column: "full_timestamp"},
 	}
-	var convertedRows int64
+	var convertedValues int64
 	for _, timestamp := range timestampColumns {
 		query := fmt.Sprintf(
 			"UPDATE %s SET %s = %s / ? WHERE %s >= ? OR %s <= -?",
@@ -431,9 +431,9 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("count converted %s.%s: %w", timestamp.table, timestamp.column, err)
 		}
-		convertedRows += rows
+		convertedValues += rows
 	}
-	return convertedRows, nil
+	return convertedValues, nil
 }
 
 func ensureTypedResourceSchema(tx *sql.Tx) error {

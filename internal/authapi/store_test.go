@@ -707,7 +707,7 @@ func TestNewStoreMigratesPersistentTimestampsToUnixSecondsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logOutput, "user_id=anonymous action=timestamp_migration outcome=success converted_rows=7 request_id=unavailable") {
+	if !strings.Contains(logOutput, "user_id=anonymous action=timestamp_migration outcome=success converted_values=7 request_id=unavailable") {
 		t.Fatalf("timestamp migration log = %q", logOutput)
 	}
 	migratedStore.now = func() time.Time { return now }
@@ -724,7 +724,7 @@ func TestNewStoreMigratesPersistentTimestampsToUnixSecondsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logOutput, "converted_rows=0") {
+	if !strings.Contains(logOutput, "converted_values=0") {
 		t.Fatalf("idempotent timestamp migration log = %q", logOutput)
 	}
 	if got := readTimestamps(); !reflect.DeepEqual(got, want) {

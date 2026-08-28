@@ -49,12 +49,12 @@ Task 1: Timestamp storage, migration, regression tests, and documentation
 
 ### Task 1: Timestamp storage, migration, regression tests, and documentation
 
-- [ ] Replace new timestamp persistence and decoding with UTC Unix seconds in `internal/authapi/store.go`.
-- [ ] Convert every legacy absolute timestamp column from nanoseconds to seconds during Store initialization.
-- [ ] Keep migration idempotent for values already stored as seconds.
-- [ ] Log the number of converted timestamp values as `converted_values`.
-- [ ] Cover new writes, migration, idempotency, AP boundaries, session expiry, and OAuth expiry with tests.
-- [ ] Align architecture, schema, and changelog documentation with the implementation.
+- [x] Replace new timestamp persistence and decoding with UTC Unix seconds in `internal/authapi/store.go`.
+- [x] Convert every legacy absolute timestamp column from nanoseconds to seconds during Store initialization.
+- [x] Keep migration idempotent for values already stored as seconds.
+- [x] Log the number of converted timestamp values as `converted_values`.
+- [x] Cover new writes, migration, idempotency, AP boundaries, session expiry, and OAuth expiry with tests.
+- [x] Align architecture, schema, and changelog documentation with the implementation.
 
 Acceptance criteria:
 
@@ -75,3 +75,5 @@ Acceptance criteria:
 - [x] [Major] Add REQ-001.11 verbatim to Task 1 acceptance criteria. The timestamp change modifies session decoding, but the current criteria never require a migrated valid session to return the user's application identity.
 
 ## Review Issues
+
+- [x] [Minor] Rename the migration log field from `converted_rows` to `converted_values` because the counter sums converted timestamp values across columns.
