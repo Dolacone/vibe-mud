@@ -466,7 +466,7 @@ func TestBuildingDurabilityDisablesThenDestroysAndReleasesSlot(t *testing.T) {
 	if len(state.Buildings) != 1 || state.Buildings[0].DurabilityStatus != "disabled" || state.Buildings[0].DurabilityRemainingSeconds != 0 {
 		t.Fatalf("disabled building = %+v, want retained disabled building", state.Buildings)
 	}
-	now = now.Add(3 * 24 * time.Hour)
+	now = now.Add(buildingDisabledRetention)
 	state, err = store.GetPlayerState(owner.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -2191,8 +2191,12 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?)`, table).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		if count != 3 {
-			t.Fatalf("%s columns = %d, want location, asset ID, and quantity only", table, count)
+		wantColumns := 3
+		if table == "ground_items" {
+			wantColumns = 5
+		}
+		if count != wantColumns {
+			t.Fatalf("%s columns = %d, want %d", table, count, wantColumns)
 		}
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name IN ('owner_id', 'capacity', 'max_capacity', 'reservation_id')`, table).Scan(&count); err != nil {
 			t.Fatal(err)
@@ -2421,6 +2425,117 @@ INSERT INTO player_resources VALUES (41, 'stone', 7);`, now, now, now); err != n
 	}
 	if itemQuantity != 3 {
 		t.Fatalf("idempotent migration changed item quantity to %d", itemQuantity)
+	}
+}
+
+func TestItemDurabilitySchemaUpgradePreservesLegacyHoldingsWithFullLifetime(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:item-durability-schema-upgrade?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createdAt := time.Date(2026, 8, 28, 11, 0, 0, 0, time.UTC).Unix()
+	if _, err := db.Exec(`
+CREATE TABLE identities (id INTEGER PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE player_ap (user_id INTEGER PRIMARY KEY, full_timestamp INTEGER NOT NULL);
+CREATE TABLE locations (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+CREATE TABLE player_locations (user_id INTEGER PRIMARY KEY, location_id TEXT NOT NULL);
+CREATE TABLE items (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, weight_units INTEGER NOT NULL);
+CREATE TABLE player_inventory (user_id INTEGER NOT NULL, item_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (user_id, item_id));
+CREATE TABLE ground_items (location_id TEXT NOT NULL, item_id TEXT NOT NULL, quantity INTEGER NOT NULL, PRIMARY KEY (location_id, item_id));
+INSERT INTO identities VALUES (41, 'https://accounts.google.com', 'legacy-item-durability', 'person@example.com', 'Person', ?, ?);
+INSERT INTO player_ap VALUES (41, ?);
+INSERT INTO locations VALUES ('camp', 'Camp');
+INSERT INTO player_locations VALUES (41, 'camp');
+INSERT INTO items VALUES ('wood', 'Wood', 100), ('wood_component', 'Wood Component', 10);
+INSERT INTO player_inventory VALUES (41, 'wood', 3);
+INSERT INTO ground_items VALUES ('camp', 'wood_component', 2);`, createdAt, createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Unix()
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var expiry int64
+	var quantity int
+	if err := db.QueryRow(`SELECT durability_status, status_expires_at, quantity FROM player_inventory WHERE user_id = 41 AND item_id = 'wood'`).Scan(&status, &expiry, &quantity); err != nil {
+		t.Fatal(err)
+	}
+	if status != "active" || quantity != 3 || expiry < before+int64(buildingDefaultDurability/time.Second)-2 || expiry > time.Now().UTC().Unix()+int64(buildingDefaultDurability/time.Second)+2 {
+		t.Fatalf("migrated player holding = status %q expiry %d quantity %d, want full lifetime from migration", status, expiry, quantity)
+	}
+	playerExpiry := expiry
+	if err := db.QueryRow(`SELECT durability_status, status_expires_at, quantity FROM ground_items WHERE location_id = 'camp' AND item_id = 'wood_component'`).Scan(&status, &expiry, &quantity); err != nil {
+		t.Fatal(err)
+	}
+	if status != "active" || quantity != 2 || expiry < before+int64(buildingDefaultDurability/time.Second)-2 || expiry > time.Now().UTC().Unix()+int64(buildingDefaultDurability/time.Second)+2 {
+		t.Fatalf("migrated ground holding = status %q expiry %d quantity %d, want full lifetime from migration", status, expiry, quantity)
+	}
+	state, err := store.GetPlayerState(41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].DurabilityStatus != "active" || state.Inventory[0].DurabilityRemainingSeconds == nil || *state.Inventory[0].DurabilityRemainingSeconds <= 0 {
+		t.Fatalf("migrated inventory state = %+v, want visible active holding with remaining durability", state.Inventory)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var secondExpiry int64
+	if err := db.QueryRow(`SELECT status_expires_at FROM player_inventory WHERE user_id = 41 AND item_id = 'wood'`).Scan(&secondExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if secondExpiry != playerExpiry {
+		t.Fatalf("idempotent durability migration changed expiry from %d to %d", playerExpiry, secondExpiry)
+	}
+}
+
+func TestItemDurabilityNormalizationRetainsExpiredWeightAndCleansFromActualExpiry(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-durability-lifecycle", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeExpiredAt := now.Add(-2 * time.Hour).Unix()
+	retainedUntil := now.Add(2 * time.Hour).Unix()
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 3), (?, 'wood', 'expired', ?, 2)`, identity.ID, activeExpiredAt, identity.ID, retainedUntil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 4), ('camp', 'wood', 'expired', ?, 1)`, activeExpiredAt, retainedUntil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].DurabilityStatus != "expired" || state.Inventory[0].Quantity != 5 || state.Inventory[0].RetentionRemainingSeconds == nil {
+		t.Fatalf("normalized inventory = %+v, want one merged retained expired stack", state.Inventory)
+	}
+	if len(state.GroundItems) != 1 || state.GroundItems[0].DurabilityStatus != "expired" || state.GroundItems[0].Quantity != 5 {
+		t.Fatalf("normalized ground items = %+v, want one merged retained expired stack", state.GroundItems)
+	}
+	if state.CarriedWeight != 500 {
+		t.Fatalf("retained expired carrying weight = %d, want 500", state.CarriedWeight)
+	}
+	var storedExpiry int64
+	if err := db.QueryRow(`SELECT status_expires_at FROM player_inventory WHERE user_id = ? AND item_id = 'wood' AND durability_status = 'expired'`, identity.ID).Scan(&storedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	expectedExpiry := activeExpiredAt + int64(itemExpiredRetention/time.Second)
+	if storedExpiry != expectedExpiry {
+		t.Fatalf("merged expiry = %d, want latest source deadline %d", storedExpiry, expectedExpiry)
+	}
+	now = time.Unix(expectedExpiry, 0).UTC()
+	state, err = store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 0 || len(state.GroundItems) != 0 || state.CarriedWeight != 0 {
+		t.Fatalf("expired cleanup state = %+v, want no retained item or weight after deadline", state)
 	}
 }
 

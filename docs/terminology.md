@@ -155,7 +155,7 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Building durability
 - 中文名稱：建築耐久度
-- 定義：完成 Building 依耐久期限與後端目前時間計算的剩餘可用時間。大於 0 時為 Active。到期後為 Disabled。Disabled 超過三天後永久消失。
+- 定義：完成 Building 依耐久期限與後端目前時間計算的剩餘可用時間。大於 0 時為 Active。到期後為 Disabled。Disabled 超過七天後永久消失。
 - 對應行為：[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
 - 與相似名詞的差異：Building durability 隨現實時間降低。Construction progress 只隨玩家投入 AP 增加。
 

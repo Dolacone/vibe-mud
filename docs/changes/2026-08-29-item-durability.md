@@ -9,6 +9,8 @@ source_paths:
   - docs/schemas.md
   - docs/terminology.md
   - docs/changes/2026-08-29-item-durability.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
   - requirements/BEHAVIOR.md
   - requirements/REQ-011.md
   - requirements/REQ-013.md
@@ -61,7 +63,7 @@ Task 1: durability schema and lifecycle [parallel: no]
             └── Task 5: durability interface [parallel: no]
 ```
 
-- [ ] Task 1 [parallel: no]: Add Item durability definitions, idempotent holding-table migration, Active-to-Expired normalization, Expired cleanup, carrying-weight integration, and seven-day Building retention in `internal/authapi/store.go`. Update store tests and keep planned documentation aligned.
+- [x] Task 1 [parallel: no]: Add Item durability definitions, idempotent holding-table migration, Active-to-Expired normalization, Expired cleanup, carrying-weight integration, and seven-day Building retention in `internal/authapi/store.go`. Update store tests and keep planned documentation aligned.
   - REQ-011.6: Disabled Building 必須保留 7 天，期間仍能維修。
   - REQ-011.7: Building 停用超過 7 天後必須永久消失。
   - REQ-011.8: 永久消失的 Building 不得再顯示或維修。

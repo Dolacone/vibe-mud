@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     weight_units INTEGER NOT NULL CHECK (weight_units > 0),
-    max_durability_seconds INTEGER NOT NULL CHECK (max_durability_seconds > 0)
+    max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)
 );
 ```
 
@@ -258,8 +258,8 @@ CREATE TABLE IF NOT EXISTS gathering_rules (
 CREATE TABLE IF NOT EXISTS player_inventory (
     user_id INTEGER NOT NULL REFERENCES identities(id),
     item_id TEXT NOT NULL REFERENCES items(id),
-    durability_status TEXT NOT NULL CHECK (durability_status IN ('active', 'expired')),
-    status_expires_at INTEGER NOT NULL,
+    durability_status TEXT NOT NULL DEFAULT 'active' CHECK (durability_status IN ('active', 'expired')),
+    status_expires_at INTEGER NOT NULL DEFAULT 0,
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     PRIMARY KEY (user_id, item_id, durability_status)
 );
@@ -270,7 +270,7 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 | `user_id` | 持有 item 的玩家。 |
 | `item_id` | 玩家持有的 item。 |
 | `durability_status` | 堆疊目前為 `active` 或 `expired`。 |
-| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。 |
+| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。預設值 `0` 會在交易 normalization 時補成完整耐久期限。 |
 | `quantity` | 玩家持有的正整數 quantity。 |
 
 索引與約束：複合 primary key 保證每位玩家的每種 item 最多各有一筆 Active 與 Expired 堆疊。Active 合併採用 quantity 加權剩餘秒數。Expired 合併採用較晚的 `status_expires_at`。
@@ -350,8 +350,8 @@ CREATE TABLE IF NOT EXISTS player_resources (
 CREATE TABLE IF NOT EXISTS ground_items (
     location_id TEXT NOT NULL REFERENCES locations(id),
     item_id TEXT NOT NULL REFERENCES items(id),
-    durability_status TEXT NOT NULL CHECK (durability_status IN ('active', 'expired')),
-    status_expires_at INTEGER NOT NULL,
+    durability_status TEXT NOT NULL DEFAULT 'active' CHECK (durability_status IN ('active', 'expired')),
+    status_expires_at INTEGER NOT NULL DEFAULT 0,
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     PRIMARY KEY (location_id, item_id, durability_status)
 );
@@ -362,7 +362,7 @@ CREATE TABLE IF NOT EXISTS ground_items (
 | `location_id` | Item 所在的公共地面 Location。 |
 | `item_id` | 地面 Item type。 |
 | `durability_status` | 堆疊目前為 `active` 或 `expired`。 |
-| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。 |
+| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。預設值 `0` 會在交易 normalization 時補成完整耐久期限。 |
 | `quantity` | 該 Location 的正整數 Item quantity。 |
 
 索引與約束：複合 primary key 讓同 Location 的同種 Item 最多各有一筆 Active 與 Expired 堆疊。Quantity 到 0 時刪除 row。Table 沒有 player、owner、capacity 或 reservation 欄位。
