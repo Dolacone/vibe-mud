@@ -38,23 +38,10 @@ type ProviderIdentity struct {
 }
 
 type currentUserResponse struct {
-	ID                      int64                     `json:"id"`
-	DisplayName             string                    `json:"display_name"`
-	Email                   string                    `json:"email"`
-	AP                      int                       `json:"ap"`
-	CarriedWeight           int                       `json:"carried_weight"`
-	MovementWeightThreshold int                       `json:"movement_weight_threshold"`
-	Location                locationResponse          `json:"location"`
-	Routes                  []routeResponse           `json:"routes"`
-	Inventory               []inventoryItemResponse   `json:"inventory"`
-	GroundItems             []groundItemResponse      `json:"ground_items"`
-	GroundResources         []groundResourceResponse  `json:"ground_resources"`
-	GatheringOption         *gatheringOptionResponse  `json:"gathering_option"`
-	ConversionOption        *conversionOptionResponse `json:"conversion_option"`
-	Resources               []resourceResponse        `json:"resources"`
-	CraftingRecipes         []craftingRecipeResponse  `json:"crafting_recipes"`
-	BuildingRecipes         []buildingRecipeResponse  `json:"building_recipes"`
-	Buildings               []buildingResponse        `json:"buildings"`
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+	playerStateResponse
 }
 
 type restResponse struct {
@@ -465,23 +452,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
 	response := currentUserResponse{
-		ID:                      identity.ID,
-		DisplayName:             identity.DisplayName,
-		Email:                   identity.Email,
-		AP:                      state.AP,
-		CarriedWeight:           state.CarriedWeight,
-		MovementWeightThreshold: state.MovementWeightThreshold,
-		Location:                locationResponseFromStore(state.Location),
-		Routes:                  routeResponsesFromStore(state.Routes),
-		Inventory:               inventoryResponsesFromStore(state.Inventory),
-		GroundItems:             groundItemResponsesFromStore(state.GroundItems),
-		GroundResources:         groundResourceResponsesFromStore(state.GroundResources),
-		GatheringOption:         gatheringOptionResponseFromStore(state.GatheringOption),
-		ConversionOption:        conversionOptionResponseFromStore(state.ConversionOption),
-		Resources:               resourceResponsesFromStore(state.Resources),
-		CraftingRecipes:         craftingRecipeResponsesFromStore(state.CraftingRecipes),
-		BuildingRecipes:         buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:               buildingResponsesFromStore(state.Buildings),
+		ID:                  identity.ID,
+		DisplayName:         identity.DisplayName,
+		Email:               identity.Email,
+		playerStateResponse: playerStateResponseFromStore(state),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
