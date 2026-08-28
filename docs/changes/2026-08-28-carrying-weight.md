@@ -9,7 +9,6 @@ source_paths:
   - docs/schemas.md
   - docs/terminology.md
   - docs/changes/2026-08-28-carrying-weight.md
-  - internal/authapi
   - internal/authapi/store.go
   - internal/authapi/store_test.go
   - internal/authapi/server.go
