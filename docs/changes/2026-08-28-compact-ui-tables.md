@@ -4,7 +4,11 @@ status: Ready-to-implement
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
-source_paths: []
+source_paths:
+  - web/src/App.tsx
+  - web/src/styles.css
+  - web/src/App.test.tsx
+  - web/vite.config.ts
 req_ref: REQ-012
 base_branch: main
 scope: "Tracks the compact table layout for the authenticated game interface."
@@ -44,7 +48,7 @@ Task 1 [parallel: no]
 └── Dependencies: none
 ```
 
-- [ ] Task 1 [parallel: no]: Replace the authenticated layout in `web/src/App.tsx` with semantic summary, Action, Resource, Inventory, Route, Gather, Convert, Craft, Building recipe, and Building tables. Give each table an accessible name. Use `scope="col"` headers for gameplay tables and `scope="row"` headers for the summary. Keep repeated controls distinguishable by entity-specific accessible names. Add compact responsive table styling in `web/src/styles.css` with the documented `.table-scroll`, table, and page width constraints. Update `web/src/App.test.tsx` to verify table names, header scopes, row contents, empty states, controls, preserved results, wrappers, and computed responsive styles. Run a 320 px browser check for page-level overflow and wrapper scrolling.
+- [x] Task 1 [parallel: no]: Replace the authenticated layout in `web/src/App.tsx` with semantic summary, Action, Resource, Inventory, Route, Gather, Convert, Craft, Building recipe, and Building tables. Give each table an accessible name. Use `scope="col"` headers for gameplay tables and `scope="row"` headers for the summary. Keep repeated controls distinguishable by entity-specific accessible names. Add compact responsive table styling in `web/src/styles.css` with the documented `.table-scroll`, table, and page width constraints. Update `web/src/App.test.tsx` to verify table names, header scopes, row contents, empty states, controls, preserved results, wrappers, and computed responsive styles. Run a 320 px browser check for page-level overflow and wrapper scrolling.
   - REQ-012.1: 已登入頁面必須在頂部表格顯示玩家身分、目前 AP 與目前 Location。
   - REQ-012.2: Resources 與 Inventory 必須各自使用緊湊表格顯示。
   - REQ-012.3: Available Routes、Gather、Convert 與 Craft 必須各自使用緊湊表格顯示。
@@ -56,6 +60,7 @@ Task 1 [parallel: no]
   - REQ-012.9: 沒有資料或可用 Action 時，對應區段必須保留明確的空狀態。
   - REQ-012.10: 窄螢幕顯示表格時，頁面不得產生水平方向溢出。
   - REQ-012.11: 本次變更不得改變 API contract 或遊戲規則。
+  - Evidence: `npm test -- --run` passed 86 tests in 2 files, `npm run build` passed, and the 320 px browser check measured document width 320 px, body width 320 px, 10 tables, 10 wrappers, and wrapper scroll widths up to 1386 px while the page remained within the viewport.
 
 ## Review Issues
 

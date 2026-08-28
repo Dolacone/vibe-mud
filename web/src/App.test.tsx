@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as auth from "./auth";
+import "./styles.css";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
@@ -107,6 +108,8 @@ const forestState = {
   buildings: [],
 };
 
+const apRow = (value: number) => within(screen.getByRole("table", { name: "Player summary" })).getByRole("row", { name: new RegExp(`AP.*${value}`) });
+
 describe("App", () => {
   beforeEach(() => {
     getCurrentUser.mockReset();
@@ -118,6 +121,60 @@ describe("App", () => {
     build.mockReset();
     contributeConstruction.mockReset();
     repairBuilding.mockReset();
+  });
+
+  it("renders the authenticated game state as named compact tables", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    expect(await screen.findByRole("table", { name: "Player summary" })).toBeInTheDocument();
+    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Inventory"]) {
+      expect(screen.getByRole("table", { name })).toBeInTheDocument();
+    }
+    expect(screen.getAllByRole("table")).toHaveLength(10);
+    expect(screen.getAllByRole("table").every((table) => table.parentElement?.classList.contains("table-scroll"))).toBe(true);
+    expect(screen.getByRole("table", { name: "Player summary" }).querySelectorAll('th[scope="row"]')).toHaveLength(5);
+    for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Inventory"]) {
+      const headers = screen.getByRole("table", { name }).querySelectorAll("thead th");
+      expect(headers.length).toBeGreaterThan(0);
+      expect([...headers].every((header) => header.getAttribute("scope") === "col")).toBe(true);
+    }
+    expect(screen.getByRole("table", { name: "Resources" }).querySelectorAll('thead th[scope="col"]')).toHaveLength(2);
+    expect(screen.getByRole("table", { name: "Craft" }).querySelectorAll("tbody > tr")).toHaveLength(1);
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood: 10");
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood Component: 1");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+    expect(screen.getByRole("table", { name: "Buildings" })).toHaveTextContent("No buildings at this location.");
+  });
+
+  it("keeps empty gameplay sections as explicit table rows", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, routes: [], gathering_option: null, conversion_option: null, crafting_recipes: [], building_recipes: [], buildings: [] } });
+    render(<App />);
+
+    expect(await screen.findByRole("table", { name: "Available routes" })).toHaveTextContent("No available routes.");
+    expect(screen.getByRole("table", { name: "Gather" })).toHaveTextContent("No gathering action available.");
+    expect(screen.getByRole("table", { name: "Convert" })).toHaveTextContent("No conversion action available.");
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("No crafting recipes available.");
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("No building recipes available.");
+    expect(screen.getByRole("table", { name: "Buildings" })).toHaveTextContent("No buildings at this location.");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+  });
+
+  it("keeps tables inside the page width and gives gameplay headers column scope", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    await screen.findByRole("table", { name: "Player summary" });
+    const main = document.querySelector("main")!;
+    const wrapper = document.querySelector(".table-scroll")!;
+    const table = screen.getByRole("table", { name: "Craft" });
+    expect(getComputedStyle(main).boxSizing).toBe("border-box");
+    expect(getComputedStyle(main).width).toBe("100%");
+    expect(getComputedStyle(wrapper).maxWidth).toBe("100%");
+    expect(getComputedStyle(wrapper).overflowX).toBe("auto");
+    expect(getComputedStyle(table).width).toBe("100%");
+    expect(getComputedStyle(table).minWidth).toBe("max-content");
+    expect(table.querySelectorAll('thead th[scope="col"]')).toHaveLength(6);
   });
 
   it("shows active Building durability and a repair action", async () => {
@@ -146,7 +203,7 @@ describe("App", () => {
     (await screen.findByRole("button", { name: "Repair building 1" })).click();
     await waitFor(() => expect(screen.getByText("Building repair succeeded.")).toBeInTheDocument());
     expect(repairBuilding).toHaveBeenCalledWith(1);
-    expect(screen.getByText("AP: 2990")).toBeInTheDocument();
+    expect(apRow(2990)).toBeInTheDocument();
     expect(screen.getByText("Remaining durability: 604800 seconds")).toBeInTheDocument();
   });
 
@@ -157,7 +214,7 @@ describe("App", () => {
 
     (await screen.findByRole("button", { name: "Repair building 1" })).click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 5")).toBeInTheDocument();
+    expect(apRow(5)).toBeInTheDocument();
     expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
     expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
   });
@@ -166,8 +223,8 @@ describe("App", () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [underConstruction] } });
     render(<App />);
 
-    expect((await screen.findAllByRole("heading", { name: "Building Lv1" })).length).toBe(2);
-    expect(screen.getByText("Required AP: 60")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Building recipes" })).toHaveTextContent("Building Lv1");
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("60");
     expect(screen.getByText("Wood Component: 1")).toBeInTheDocument();
     expect(screen.getByText("Owner: Ada")).toBeInTheDocument();
     expect(screen.getByText("Status: under_construction")).toBeInTheDocument();
@@ -245,7 +302,7 @@ describe("App", () => {
     fireEvent.change(input, { target: { value: "10" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 5")).toBeInTheDocument();
+    expect(apRow(5)).toBeInTheDocument();
     expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
   });
 
@@ -256,16 +313,16 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Ada")).toBeInTheDocument());
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
-    expect(screen.getByText("AP: 3000")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent(
-      "Food: 0Wood: 0Stone: 0Metal: 0Fiber: 0Hide: 0Medicinal: 0Arcane: 0",
-    );
+    expect(apRow(3000)).toBeInTheDocument();
+    const resourcesTable = screen.getByRole("table", { name: "Resources" });
+    expect(resourcesTable.querySelectorAll("tbody > tr")).toHaveLength(8);
+    expect(resourcesTable).toHaveTextContent("Wood: 0");
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
     expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
     expect(screen.getByText("To forest_edge (20 AP)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood Component");
     expect(screen.getByText("AP cost: 10")).toBeInTheDocument();
     expect(screen.getAllByText("Wood: 10")).toHaveLength(2);
     expect(screen.getByText("Output: Wood Component: 1")).toBeInTheDocument();
@@ -291,7 +348,7 @@ describe("App", () => {
     expect(screen.getByText("Yield: 1 Wood; Cost: 10 AP")).toBeInTheDocument();
     (await screen.findByRole("button", { name: "Gather" })).click();
     await waitFor(() => expect(screen.getByText("Gather succeeded.")).toBeInTheDocument());
-    expect(screen.getByText("AP: 2970")).toBeInTheDocument();
+    expect(apRow(2970)).toBeInTheDocument();
     expect(screen.getByText("Oak wood: 7")).toBeInTheDocument();
     expect(screen.getByText("Yield: 3 Oak wood; Cost: 12 AP")).toBeInTheDocument();
     expect(gather).toHaveBeenCalledTimes(1);
@@ -310,7 +367,7 @@ describe("App", () => {
 
     (await screen.findByRole("button", { name: "Gather" })).click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 0")).toBeInTheDocument();
+    expect(apRow(0)).toBeInTheDocument();
     expect(screen.getByText("Wood: 4")).toBeInTheDocument();
   });
 
@@ -344,10 +401,10 @@ describe("App", () => {
     const button = await screen.findByRole("button", { name: "Convert" });
     button.click();
     await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
-    expect(screen.getByText("AP: 2999")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 1");
+    expect(apRow(2999)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1");
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
-    expect(screen.queryByText("Wood: 1", { selector: "li" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
     expect(convert).toHaveBeenCalledTimes(1);
   });
 
@@ -364,8 +421,8 @@ describe("App", () => {
 
     (await screen.findByRole("button", { name: "Craft Wood Component" })).click();
     await waitFor(() => expect(screen.getByText("Craft succeeded.")).toBeInTheDocument());
-    expect(screen.getByText("AP: 2990")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 0");
+    expect(apRow(2990)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 0");
     expect(screen.getAllByText("Wood Component: 1").length).toBeGreaterThan(0);
     expect(craft).toHaveBeenCalledWith("wood_component");
   });
@@ -374,7 +431,7 @@ describe("App", () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...forestState } });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Craft" })).toHaveTextContent("Wood Component");
     expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument();
   });
 
@@ -385,8 +442,8 @@ describe("App", () => {
 
     (await screen.findByRole("button", { name: "Craft Wood Component" })).click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 5")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 2");
+    expect(apRow(5)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 2");
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
   });
 
@@ -421,8 +478,8 @@ describe("App", () => {
 
     (await screen.findByRole("button", { name: "Convert" })).click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 0")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 3");
+    expect(apRow(0)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 3");
     expect(screen.getByText("Wood: 2")).toBeInTheDocument();
   });
 
@@ -440,7 +497,7 @@ describe("App", () => {
     expect(convert).toHaveBeenCalledTimes(1);
 
     resolveConvert?.({ status: "success", ...campState, ap: 2999, resources: resourcesWithWood(1) });
-    await waitFor(() => expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 1"));
+    await waitFor(() => expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1"));
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
   });
 
@@ -463,7 +520,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Move succeeded. Current location: Forest edge")).toBeInTheDocument());
     expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument();
     expect(screen.getByText("To camp (20 AP)")).toBeInTheDocument();
-    expect(screen.getByText("AP: 2980")).toBeInTheDocument();
+    expect(apRow(2980)).toBeInTheDocument();
     expect(move).toHaveBeenCalledWith("forest_edge");
   });
 
@@ -481,7 +538,7 @@ describe("App", () => {
     button.click();
     await waitFor(() => expect(screen.getByText("Move failed: insufficient action points")).toBeInTheDocument());
     expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
-    expect(screen.getByText("AP: 10")).toBeInTheDocument();
+    expect(apRow(10)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
   });
 
@@ -520,7 +577,7 @@ describe("App", () => {
     const button = await screen.findByRole("button", { name: "Rest" });
     button.click();
     await waitFor(() => expect(screen.getByText("Rest succeeded. AP: 1")).toBeInTheDocument());
-    expect(screen.getByText("AP: 1")).toBeInTheDocument();
+    expect(apRow(1)).toBeInTheDocument();
     expect(rest).toHaveBeenCalledTimes(1);
   });
 
@@ -532,7 +589,7 @@ describe("App", () => {
     const button = await screen.findByRole("button", { name: "Rest" });
     button.click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 0")).toBeInTheDocument();
+    expect(apRow(0)).toBeInTheDocument();
   });
 
   it("updates stale AP from an insufficient rest response", async () => {
@@ -541,10 +598,10 @@ describe("App", () => {
     render(<App />);
 
     const button = await screen.findByRole("button", { name: "Rest" });
-    expect(screen.getByText("AP: 1")).toBeInTheDocument();
+    expect(apRow(1)).toBeInTheDocument();
     button.click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
-    expect(screen.getByText("AP: 0")).toBeInTheDocument();
+    expect(apRow(0)).toBeInTheDocument();
     expect(screen.queryByText("AP: 1")).not.toBeInTheDocument();
   });
 
@@ -562,7 +619,7 @@ describe("App", () => {
     expect(rest).toHaveBeenCalledTimes(1);
 
     resolveRest?.({ status: "success", ap: 1 });
-    await waitFor(() => expect(screen.getByText("AP: 1")).toBeInTheDocument());
+    await waitFor(() => expect(apRow(1)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
   });
 
@@ -574,7 +631,7 @@ describe("App", () => {
     const button = await screen.findByRole("button", { name: "Rest" });
     button.click();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("backend unavailable"));
-    expect(screen.getByText("AP: 2")).toBeInTheDocument();
+    expect(apRow(2)).toBeInTheDocument();
   });
 
   it("offers same-origin Google login when signed out", async () => {
