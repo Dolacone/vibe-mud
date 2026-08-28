@@ -4,7 +4,7 @@
 
 ## 2026-08-29
 
-- Added one-hour definition-backed durability for Wood and Wood Component stacks.
+- Added one-hour definition-backed durability for every Item type.
 - Added separate Active and Expired Item stacks with weighted durability merging.
 - Retained Expired Items for one day while counting them toward carrying weight.
 - Allowed Expired Item Drop while rejecting Expired Item Pickup and Action inputs.
