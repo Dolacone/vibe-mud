@@ -1,6 +1,6 @@
 ---
 title: "Building durability and repair"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
@@ -99,6 +99,10 @@ Task 1: persistence and game rules
   - REQ-011.22: 前端必須提供維修 Action，並在成功後顯示最新狀態。
 
 ## Review Issues
+
+- [ ] [Major] `getPlayerStateTx` 會計算每個完成 Building 的耐久狀態與剩餘秒數，但 `/api/me` 與其他回傳玩家狀態的路徑沒有記錄這些計算結果。這違反 repository 對所有 backend computation result 寫入 stdout 的規則。Log 必須包含穩定 user ID、Building ID、計算結果與 request ID，且測試必須覆蓋。
+- [ ] [Minor] `source_paths` 缺少本次已修改的 `docs/architecture.md` 與 `docs/terminology.md`，因此與 `git diff main...HEAD` 不一致。
+- [ ] [Minor] `docs/schemas.md` 將 Building recipe seed 記成明確寫入 `max_durability_seconds`，但 `NewStore` 的實際 seed 省略該欄位並依賴 default。文件必須與可執行初始化 SQL 一致。
 
 ## Plan Review Issues
 
