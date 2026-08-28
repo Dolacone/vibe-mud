@@ -13,6 +13,9 @@
 - Added responsive table regions that contain wide content on narrow screens.
 - Added unlimited public ground holdings for Item and Resource quantities at each Location.
 - Added AP-free Pickup and Drop Transfers with atomic quantity updates.
+- Added definition-backed Item and Resource weights with a derived player carrying total.
+- Blocked movement above the 1000-unit threshold without limiting asset collection or transfers.
+- Added authoritative carrying weight state, computation logs, and an overweight interface warning.
 
 ## 2026-08-27
 
