@@ -9,10 +9,22 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func sortedMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 type fakeProvider struct {
 	authorizationURL string
@@ -464,8 +476,16 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 11 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 13 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	buildingRecipes, ok := meBody["building_recipes"].([]any)
+	if !ok || len(buildingRecipes) != 1 {
+		t.Fatalf("GET /api/me building recipes = %#v", meBody["building_recipes"])
+	}
+	buildings, ok := meBody["buildings"].([]any)
+	if !ok || len(buildings) != 0 {
+		t.Fatalf("GET /api/me buildings = %#v", meBody["buildings"])
 	}
 	recipes, ok := meBody["crafting_recipes"].([]any)
 	if !ok || len(recipes) != 1 {
@@ -528,6 +548,554 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	handler.ServeHTTP(unauthenticatedResponse, unauthenticated)
 	if unauthenticatedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated rest status = %d", unauthenticatedResponse.Code)
+	}
+}
+
+func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "building-api", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, identity.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Routes()
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/build", strings.NewReader(`{"recipe_id":"building_lv1","required_ap":1}`))
+	request.Header.Set("X-Request-ID", "build-api")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	var logOutput string
+	logOutput = captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || strings.Contains(logOutput, `"recipe_id"`) {
+		t.Fatalf("build whitelist status/log = %d/%q", response.Code, logOutput)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/build", strings.NewReader(`{"recipe_id":"building_lv1"}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("build status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	buildings, ok := body["buildings"].([]any)
+	if !ok || len(buildings) != 1 {
+		t.Fatalf("buildings response = %#v", body["buildings"])
+	}
+	building := buildings[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "extension_slot_count", "id", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" {
+		t.Fatalf("building response = %#v", building)
+	}
+	recipe := building["recipe"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(recipe), []string{"display_name", "id"}) || recipe["id"] != "building_lv1" || recipe["display_name"] != "Building Lv1" {
+		t.Fatalf("building recipe response = %#v", recipe)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":10,"extra":true}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("contribution extra field status = %d", response.Code)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	buildings = body["buildings"].([]any)
+	if buildings[0].(map[string]any)["contributed_ap"] != float64(0) {
+		t.Fatalf("rejected contribution changed state = %#v", buildings[0])
+	}
+	for _, input := range []string{`{}`, `{"building_id":1,"ap":0}`, `{"building_id":1,"ap":-1}`} {
+		request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(input))
+		request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+		failure := httptest.NewRecorder()
+		handler.ServeHTTP(failure, request)
+		if failure.Code != http.StatusBadRequest {
+			t.Fatalf("malformed contribution %s status = %d", input, failure.Code)
+		}
+		var failureBody map[string]any
+		if err := json.Unmarshal(failure.Body.Bytes(), &failureBody); err != nil {
+			t.Fatal(err)
+		}
+		if failureBody["buildings"].([]any)[0].(map[string]any)["contributed_ap"] != float64(0) {
+			t.Fatalf("malformed contribution changed state = %#v", failureBody)
+		}
+	}
+	if _, err := store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-building-location', 'Remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'remote-building-location' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":1}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("remote contribution status = %d", response.Code)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'camp' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(time.Duration(maxAP)*time.Minute).UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":1}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("insufficient AP contribution status = %d", response.Code)
+	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":100}`))
+	request.Header.Set("X-Request-ID", "contribute-success")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response = httptest.NewRecorder()
+	logOutput = captureStdout(t, func() { handler.ServeHTTP(response, request) })
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, "user_id=1 action=contribute-construction outcome=success building_id=1 effective_ap=60 resulting_progress=60/60 completion=completed request_id=contribute-success") {
+		t.Fatalf("successful contribution status/log = %d/%q", response.Code, logOutput)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-60) || len(body["buildings"].([]any)) != 1 || body["buildings"].([]any)[0].(map[string]any)["status"] != "completed" {
+		t.Fatalf("successful contribution state = %#v", body)
+	}
+	for _, secret := range []string{"session-secret", "oauth-code-secret", "access-token", "refresh-token", "id-token"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("contribution log leaked %q: %q", secret, logOutput)
+		}
+	}
+	for _, rawInput := range []string{`{"building_id":1`, `"ap":100`} {
+		if strings.Contains(logOutput, rawInput) {
+			t.Fatalf("contribution log included raw input %q: %q", rawInput, logOutput)
+		}
+	}
+	for _, input := range []string{`{"building_id":999,"ap":1}`, `{"building_id":1,"ap":1}`} {
+		request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(input))
+		request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+		failure := httptest.NewRecorder()
+		handler.ServeHTTP(failure, request)
+		if failure.Code != http.StatusBadRequest && failure.Code != http.StatusConflict {
+			t.Fatalf("rejected contribution %s status = %d", input, failure.Code)
+		}
+		var failureBody map[string]any
+		if err := json.Unmarshal(failure.Body.Bytes(), &failureBody); err != nil {
+			t.Fatal(err)
+		}
+		if failureBody["ap"] != float64(maxAP-60) || failureBody["buildings"].([]any)[0].(map[string]any)["contributed_ap"] != float64(60) {
+			t.Fatalf("rejected contribution changed state = %#v", failureBody)
+		}
+	}
+}
+
+type buildingAPIFixture struct {
+	server   *Server
+	store    *Store
+	identity Identity
+	now      time.Time
+	cookie   *http.Cookie
+}
+
+func newBuildingAPIFixture(t *testing.T, subject string) buildingAPIFixture {
+	t.Helper()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", subject, "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionToken := subject + "-session-token"
+	if err := store.CreateSession(identity.ID, sessionToken, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	return buildingAPIFixture{server: server, store: store, identity: identity, now: now, cookie: &http.Cookie{Name: defaultSessionCookieName, Value: sessionToken}}
+}
+
+func (f buildingAPIFixture) request(method, path, body, requestID string) *http.Request {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", requestID)
+	request.AddCookie(f.cookie)
+	return request
+}
+
+func buildingFromResponse(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	buildings, ok := response["buildings"].([]any)
+	if !ok || len(buildings) != 1 {
+		t.Fatalf("building response = %#v", response["buildings"])
+	}
+	building, ok := buildings[0].(map[string]any)
+	if !ok {
+		t.Fatalf("building entry = %#v", buildings[0])
+	}
+	return building
+}
+
+func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
+	t.Helper()
+	wantKeys := []string{"building_level", "contributed_ap", "extension_slot_count", "id", "owner", "recipe", "required_ap", "status"}
+	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
+		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
+	}
+	if building["id"] != float64(1) || building["building_level"] != float64(1) || building["required_ap"] != float64(60) || building["contributed_ap"] != contributedAP || building["status"] != status || building["extension_slot_count"] != float64(1) {
+		t.Fatalf("building contract = %#v", building)
+	}
+	owner, ok := building["owner"].(map[string]any)
+	if !ok || !reflect.DeepEqual(sortedMapKeys(owner), []string{"display_name", "id"}) || owner["id"] != float64(1) || owner["display_name"] != "Person" {
+		t.Fatalf("building owner contract = %#v", building["owner"])
+	}
+	recipe, ok := building["recipe"].(map[string]any)
+	if !ok || !reflect.DeepEqual(sortedMapKeys(recipe), []string{"display_name", "id"}) || recipe["id"] != "building_lv1" || recipe["display_name"] != "Building Lv1" {
+		t.Fatalf("building recipe contract = %#v", building["recipe"])
+	}
+}
+
+func assertUnchangedBuildingState(t *testing.T, before PlayerState, after PlayerState) {
+	t.Helper()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("rejected action changed authoritative state: before=%+v after=%+v", before, after)
+	}
+}
+
+func prepareBuilding(t *testing.T, fixture buildingAPIFixture, status string, contributedAP int) {
+	t.Helper()
+	if _, err := fixture.store.db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, ?, ?, 1)`, fixture.identity.ID, contributedAP, status); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func preparedBuildingID(t *testing.T, fixture buildingAPIFixture) int64 {
+	t.Helper()
+	var buildingID int64
+	if err := fixture.store.db.QueryRow(`SELECT id FROM buildings WHERE owner_id = ?`, fixture.identity.ID).Scan(&buildingID); err != nil {
+		t.Fatal(err)
+	}
+	return buildingID
+}
+
+func TestBuildingAPIReturnsExactRecipeAndBuildingContracts(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "building-api-contract")
+	if _, err := fixture.store.db.Exec(`
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10);
+INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, fixture.identity.ID, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := fixture.request(http.MethodGet, "/api/me", "", "building-contract-me")
+	fixture.server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	recipes, ok := body["building_recipes"].([]any)
+	if !ok || len(recipes) != 1 {
+		t.Fatalf("building recipes = %#v", body["building_recipes"])
+	}
+	recipe := recipes[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(recipe), []string{"building_level", "display_name", "extension_slot_count", "id", "item_inputs", "required_ap", "resource_inputs"}) || recipe["id"] != "building_lv1" || recipe["display_name"] != "Building Lv1" || recipe["building_level"] != float64(1) || recipe["required_ap"] != float64(60) || recipe["extension_slot_count"] != float64(1) {
+		t.Fatalf("recipe contract = %#v", recipe)
+	}
+	resourceInputs, ok := recipe["resource_inputs"].([]any)
+	if !ok || len(resourceInputs) != 1 {
+		t.Fatalf("recipe resource inputs = %#v", recipe["resource_inputs"])
+	}
+	resourceInput := resourceInputs[0].(map[string]any)
+	resource := resourceInput["resource"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(resourceInput), []string{"quantity", "resource"}) || !reflect.DeepEqual(sortedMapKeys(resource), []string{"display_name", "id"}) || resource["id"] != "wood" || resource["display_name"] != "Wood" || resourceInput["quantity"] != float64(10) {
+		t.Fatalf("recipe resource input = %#v", resourceInput)
+	}
+	itemInputs, ok := recipe["item_inputs"].([]any)
+	if !ok || len(itemInputs) != 1 {
+		t.Fatalf("recipe item inputs = %#v", recipe["item_inputs"])
+	}
+	itemInput := itemInputs[0].(map[string]any)
+	item := itemInput["item"].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(itemInput), []string{"item", "quantity"}) || !reflect.DeepEqual(sortedMapKeys(item), []string{"display_name", "id"}) || item["id"] != "wood_component" || item["display_name"] != "Wood Component" || itemInput["quantity"] != float64(1) {
+		t.Fatalf("recipe item input = %#v", itemInput)
+	}
+
+	buildRequest := fixture.request(http.MethodPost, "/api/actions/build", `{"recipe_id":"building_lv1"}`, "building-contract-build")
+	buildResponse := httptest.NewRecorder()
+	buildLog := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(buildResponse, buildRequest) })
+	if buildResponse.Code != http.StatusOK || !strings.Contains(buildLog, "user_id="+strconv.FormatInt(fixture.identity.ID, 10)+" action=build outcome=success request_id=building-contract-build") {
+		t.Fatalf("build status/log = %d/%q", buildResponse.Code, buildLog)
+	}
+	assertBuildingResponseContract(t, buildingFromResponse(t, buildResponse.Body.Bytes()), 0, "under_construction")
+}
+
+func TestBuildAPIRejectsEveryInvalidRequestWithoutStateChangesOrLogLeak(t *testing.T) {
+	tests := []struct {
+		name, body, reason string
+		status             int
+	}{
+		{"invalid JSON", `{`, buildReasonInvalidJSON, http.StatusBadRequest},
+		{"unknown field", `{"unexpected":"value"}`, buildReasonUnknownField, http.StatusBadRequest},
+		{"duplicate recipe", `{"recipe_id":"building_lv1","recipe_id":"building_lv1"}`, buildReasonDuplicate, http.StatusBadRequest},
+		{"extra JSON value", `{"recipe_id":"building_lv1"}{}`, buildReasonExtraValue, http.StatusBadRequest},
+		{"missing recipe", `{}`, buildReasonMissingRecipe, http.StatusBadRequest},
+		{"blank recipe", `{"recipe_id":"  "}`, buildReasonInvalidRecipe, http.StatusBadRequest},
+		{"invalid recipe type", `{"recipe_id":1}`, buildReasonInvalidRecipe, http.StatusBadRequest},
+		{"unknown recipe", `{"recipe_id":"unknown"}`, buildReasonUnknownRecipe, http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "building-api-reject-"+strings.ReplaceAll(test.name, " ", "-"))
+			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "build-reject-" + strings.ReplaceAll(test.name, " ", "-")
+			request := fixture.request(http.MethodPost, "/api/actions/build", test.body, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != test.status || !strings.Contains(logOutput, "user_id=1 action=build outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
+	}
+
+	for _, test := range []struct {
+		name, reason string
+		prepare      func(buildingAPIFixture)
+	}{
+		{"insufficient resource", buildReasonInsufficientResource, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"insufficient item", buildReasonInsufficientItem, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"occupied owner slot", buildReasonOccupied, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_component', 1)`, f.identity.ID, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			prepareBuilding(t, f, "under_construction", 0)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "building-api-reject-"+strings.ReplaceAll(test.name, " ", "-"))
+			test.prepare(fixture)
+			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "build-reject-" + strings.ReplaceAll(test.name, " ", "-")
+			request := fixture.request(http.MethodPost, "/api/actions/build", `{"recipe_id":"building_lv1"}`, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusConflict || !strings.Contains(logOutput, "user_id=1 action=build outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			if test.name == "insufficient resource" {
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["error"] != ErrInsufficientResource.Error() {
+					t.Fatalf("insufficient resource error = %#v, want %q", body["error"], ErrInsufficientResource.Error())
+				}
+			}
+			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
+	}
+
+	fixture := newBuildingAPIFixture(t, "building-api-sensitive-rejection")
+	before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensitiveBody := `{"credentials":"credential-sentinel","session":"session-sentinel","oauth":"oauth-sentinel","raw_input":"raw-input-sentinel"}`
+	request := fixture.request(http.MethodPost, "/api/actions/build", sensitiveBody, "build-sensitive-rejection")
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || !strings.Contains(logOutput, "user_id=1 action=build outcome=error reason=unknown_field request_id=build-sensitive-rejection") {
+		t.Fatalf("sensitive rejection status/log = %d/%q", response.Code, logOutput)
+	}
+	for _, sentinel := range []string{"credential-sentinel", "session-sentinel", "oauth-sentinel", "raw-input-sentinel"} {
+		if strings.Contains(logOutput, sentinel) {
+			t.Fatalf("rejection log leaked %q: %q", sentinel, logOutput)
+		}
+	}
+	after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnchangedBuildingState(t, before, after)
+}
+
+func TestContributeConstructionAPIValidatesRequestsAndPreservesState(t *testing.T) {
+	tests := []struct {
+		name, body, reason string
+	}{
+		{"invalid JSON", `{`, contributeReasonInvalidJSON},
+		{"unknown field", `{"unexpected":1}`, contributeReasonUnknownField},
+		{"duplicate building", `{"building_id":1,"building_id":1,"ap":1}`, contributeReasonDuplicate},
+		{"duplicate AP", `{"building_id":1,"ap":1,"ap":1}`, contributeReasonDuplicate},
+		{"extra JSON value", `{"building_id":1,"ap":1}{}`, contributeReasonExtraValue},
+		{"missing building", `{"ap":1}`, contributeReasonMissingBuilding},
+		{"building string", `{"building_id":"1","ap":1}`, contributeReasonInvalidBuilding},
+		{"building zero", `{"building_id":0,"ap":1}`, contributeReasonInvalidBuilding},
+		{"building negative", `{"building_id":-1,"ap":1}`, contributeReasonInvalidBuilding},
+		{"missing AP", `{"building_id":1}`, contributeReasonMissingAP},
+		{"AP string", `{"building_id":1,"ap":"1"}`, contributeReasonInvalidAP},
+		{"AP zero", `{"building_id":1,"ap":0}`, contributeReasonInvalidAP},
+		{"AP negative", `{"building_id":1,"ap":-1}`, contributeReasonInvalidAP},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "contribution-api-decode-"+strings.ReplaceAll(test.name, " ", "-"))
+			prepareBuilding(t, fixture, "under_construction", 0)
+			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "contribution-decode-" + strings.ReplaceAll(test.name, " ", "-")
+			request := fixture.request(http.MethodPost, "/api/actions/contribute-construction", test.body, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest || !strings.Contains(logOutput, "user_id=1 action=contribute-construction outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
+	}
+
+	fixture := newBuildingAPIFixture(t, "contribution-api-sensitive-rejection")
+	prepareBuilding(t, fixture, "under_construction", 0)
+	before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensitiveBody := `{"credentials":"credential-sentinel","session":"session-sentinel","oauth":"oauth-sentinel","raw_input":"raw-input-sentinel"}`
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-construction", sensitiveBody, "contribution-sensitive-rejection")
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || !strings.Contains(logOutput, "user_id="+strconv.FormatInt(fixture.identity.ID, 10)+" action=contribute-construction outcome=error reason=unknown_field request_id=contribution-sensitive-rejection") {
+		t.Fatalf("sensitive rejection status/log = %d/%q", response.Code, logOutput)
+	}
+	for _, sentinel := range []string{"credential-sentinel", "session-sentinel", "oauth-sentinel", "raw-input-sentinel"} {
+		if strings.Contains(logOutput, sentinel) {
+			t.Fatalf("rejection log leaked %q: %q", sentinel, logOutput)
+		}
+	}
+	after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnchangedBuildingState(t, before, after)
+}
+
+func TestContributeConstructionAPIReturnsExactSuccessAndRejectsDomainFailures(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "contribution-api-success")
+	prepareBuilding(t, fixture, "under_construction", 0)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-construction", `{"building_id":1,"ap":60}`, "contribution-success-contract")
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, "user_id="+strconv.FormatInt(fixture.identity.ID, 10)+" action=contribute-construction outcome=success request_id=contribution-success-contract") {
+		t.Fatalf("successful contribution status/log = %d/%q", response.Code, logOutput)
+	}
+	building := buildingFromResponse(t, response.Body.Bytes())
+	assertBuildingResponseContract(t, building, 60, "completed")
+}
+
+func TestContributeConstructionAPIRejectsDomainFailuresWithoutStateChangesOrLogLeak(t *testing.T) {
+	for _, test := range []struct {
+		name, body, reason string
+		status             int
+		prepare            func(buildingAPIFixture)
+	}{
+		{"unknown target", `{"building_id":999,"ap":1}`, contributeReasonUnknownBuilding, http.StatusBadRequest, nil},
+		{"remote Location", `{"building_id":1,"ap":1}`, contributeReasonRemote, http.StatusConflict, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-building-location', 'Remote')`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.db.Exec(`UPDATE player_locations SET location_id = 'remote-building-location' WHERE user_id = ?`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"completed Building", `{"building_id":1,"ap":1}`, contributeReasonCompleted, http.StatusConflict, nil},
+		{"insufficient AP", `{"building_id":1,"ap":1}`, contributeReasonInsufficientAP, http.StatusConflict, func(f buildingAPIFixture) {
+			if _, err := f.store.db.Exec(`UPDATE buildings SET status = 'under_construction', contributed_ap = 0`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, f.now.Add(maxAP*time.Minute).UnixNano(), f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caseFixture := newBuildingAPIFixture(t, "contribution-api-domain-"+strings.ReplaceAll(test.name, " ", "-"))
+			prepareBuilding(t, caseFixture, "under_construction", 0)
+			buildingID := preparedBuildingID(t, caseFixture)
+			if test.name == "completed Building" {
+				if _, err := caseFixture.store.db.Exec(`UPDATE buildings SET status = 'completed', contributed_ap = 60`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.prepare != nil {
+				test.prepare(caseFixture)
+			}
+			before, err := caseFixture.store.GetPlayerState(caseFixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "contribution-domain-" + strings.ReplaceAll(test.name, " ", "-")
+			body := strings.ReplaceAll(test.body, `"building_id":1`, `"building_id":`+strconv.FormatInt(buildingID, 10))
+			request := caseFixture.request(http.MethodPost, "/api/actions/contribute-construction", body, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { caseFixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != test.status || !strings.Contains(logOutput, "user_id="+strconv.FormatInt(caseFixture.identity.ID, 10)+" action=contribute-construction outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			if test.name == "unknown target" {
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["error"] != ErrBuildingNotFound.Error() {
+					t.Fatalf("unknown building error = %#v, want %q", body["error"], ErrBuildingNotFound.Error())
+				}
+			}
+			after, err := caseFixture.store.GetPlayerState(caseFixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
 	}
 }
 

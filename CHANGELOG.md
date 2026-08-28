@@ -8,6 +8,8 @@
 - Updated conversion to produce Wood Resource while preserving existing Action behavior.
 - Added backend-owned crafting recipes with Resource inputs, optional Item inputs, and explicit Item outputs.
 - Added Wood Component crafting at every Location with atomic AP, Resource, and Inventory updates.
+- Added Building Lv1 construction with Wood Component and Wood Resource inputs.
+- Added shared AP contributions, persistent progress, and completed Building state.
 
 ## 2026-08-26
 

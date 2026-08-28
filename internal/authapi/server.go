@@ -49,6 +49,8 @@ type currentUserResponse struct {
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
 	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
+	BuildingRecipes  []buildingRecipeResponse  `json:"building_recipes"`
+	Buildings        []buildingResponse        `json:"buildings"`
 }
 
 type restResponse struct {
@@ -80,6 +82,8 @@ type playerStateResponse struct {
 	ConversionOption *conversionOptionResponse `json:"conversion_option"`
 	Resources        []resourceResponse        `json:"resources"`
 	CraftingRecipes  []craftingRecipeResponse  `json:"crafting_recipes"`
+	BuildingRecipes  []buildingRecipeResponse  `json:"building_recipes"`
+	Buildings        []buildingResponse        `json:"buildings"`
 }
 
 type moveResponse struct {
@@ -118,6 +122,16 @@ type convertResponse struct {
 }
 
 type craftResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
+type buildResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
+type contributeConstructionResponse struct {
 	Error string `json:"error,omitempty"`
 	playerStateResponse
 }
@@ -176,6 +190,30 @@ const (
 	craftReasonInsufficientResource = "insufficient_resource"
 	craftReasonInsufficientItem     = "insufficient_item"
 	craftReasonUnknownRecipe        = "unknown_recipe"
+	buildAction                     = "build"
+	buildReasonInvalidJSON          = "invalid_json"
+	buildReasonUnknownField         = "unknown_field"
+	buildReasonDuplicate            = "duplicate_field"
+	buildReasonExtraValue           = "extra_json_value"
+	buildReasonMissingRecipe        = "missing_recipe_id"
+	buildReasonInvalidRecipe        = "invalid_recipe_id"
+	buildReasonUnknownRecipe        = "unknown_recipe"
+	buildReasonInsufficientResource = "insufficient_resource"
+	buildReasonInsufficientItem     = "insufficient_item"
+	buildReasonOccupied             = "building_occupied"
+	contributeConstructionAction    = "contribute-construction"
+	contributeReasonInvalidJSON     = "invalid_json"
+	contributeReasonUnknownField    = "unknown_field"
+	contributeReasonDuplicate       = "duplicate_field"
+	contributeReasonExtraValue      = "extra_json_value"
+	contributeReasonMissingBuilding = "missing_building_id"
+	contributeReasonMissingAP       = "missing_ap"
+	contributeReasonInvalidBuilding = "invalid_building_id"
+	contributeReasonInvalidAP       = "invalid_ap"
+	contributeReasonUnknownBuilding = "unknown_building"
+	contributeReasonRemote          = "remote_building"
+	contributeReasonCompleted       = "completed_building"
+	contributeReasonInsufficientAP  = "insufficient_ap"
 )
 
 type Config struct {
@@ -243,6 +281,8 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Post("/api/actions/gather", s.gather)
 	r.Post("/api/actions/convert", s.convert)
 	r.Post("/api/actions/craft", s.craft)
+	r.Post("/api/actions/build", s.build)
+	r.Post("/api/actions/contribute-construction", s.contributeConstruction)
 	return r
 }
 
@@ -377,6 +417,8 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
 		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
+		BuildingRecipes:  buildingRecipeResponsesFromStore(state.BuildingRecipes),
+		Buildings:        buildingResponsesFromStore(state.Buildings),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -488,6 +530,109 @@ func (s *Server) writeCraftState(w http.ResponseWriter, r *http.Request, userID 
 		return
 	}
 	s.writeJSON(w, status, craftResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+}
+
+type buildRequest struct {
+	RecipeID string
+}
+
+func (s *Server) build(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeBuildRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, buildAction, reason)
+		s.writeBuildingState(w, r, session.UserID, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, err := s.store.Build(session.UserID, request.RecipeID)
+	if errors.Is(err, ErrBuildingNotFound) {
+		s.logRejection(r, session.UserID, buildAction, buildReasonUnknownRecipe)
+		s.writeBuildingState(w, r, session.UserID, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBuildingOccupied) {
+		s.logRejection(r, session.UserID, buildAction, buildReasonOccupied)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientResource) {
+		s.logRejection(r, session.UserID, buildAction, buildReasonInsufficientResource)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientItem) {
+		s.logRejection(r, session.UserID, buildAction, buildReasonInsufficientItem)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logAction(r, session.UserID, buildAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+}
+
+func (s *Server) writeBuildingState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
+	state, err := s.store.GetPlayerState(userID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.writeJSON(w, status, buildResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+}
+
+type contributeConstructionRequest struct {
+	BuildingID int64
+	AP         int
+}
+
+func (s *Server) contributeConstruction(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeContributeConstructionRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, contributeConstructionAction, reason)
+		s.writeBuildingState(w, r, session.UserID, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, err := s.store.ContributeConstruction(session.UserID, request.BuildingID, request.AP)
+	if errors.Is(err, ErrBuildingNotFound) {
+		s.logRejection(r, session.UserID, contributeConstructionAction, contributeReasonUnknownBuilding)
+		s.writeBuildingState(w, r, session.UserID, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBuildingRemote) {
+		s.logRejection(r, session.UserID, contributeConstructionAction, contributeReasonRemote)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBuildingCompleted) {
+		s.logRejection(r, session.UserID, contributeConstructionAction, contributeReasonCompleted)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientAP) {
+		s.logRejection(r, session.UserID, contributeConstructionAction, contributeReasonInsufficientAP)
+		s.writeBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	if computation := state.ConstructionComputation; computation != nil {
+		s.logConstructionComputation(r, session.UserID, computation)
+	}
+	s.logAction(r, session.UserID, contributeConstructionAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
 }
 
 func currentAP(state PlayerState, store *Store, userID int64) int {
@@ -777,6 +922,122 @@ type craftRequest struct {
 	RecipeID string
 }
 
+func decodeBuildRequest(body io.Reader) (buildRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return buildRequest{}, buildReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return buildRequest{}, buildReasonInvalidJSON
+	}
+	var request buildRequest
+	seen := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return buildRequest{}, buildReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return buildRequest{}, buildReasonInvalidJSON
+		}
+		if field != "recipe_id" {
+			return buildRequest{}, buildReasonUnknownField
+		}
+		if seen {
+			return buildRequest{}, buildReasonDuplicate
+		}
+		seen = true
+		if err := decoder.Decode(&request.RecipeID); err != nil {
+			return buildRequest{}, buildReasonInvalidRecipe
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return buildRequest{}, buildReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return buildRequest{}, buildReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return buildRequest{}, buildReasonExtraValue
+	}
+	if !seen {
+		return buildRequest{}, buildReasonMissingRecipe
+	}
+	if strings.TrimSpace(request.RecipeID) == "" {
+		return buildRequest{}, buildReasonInvalidRecipe
+	}
+	return request, ""
+}
+
+func decodeContributeConstructionRequest(body io.Reader) (contributeConstructionRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return contributeConstructionRequest{}, contributeReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return contributeConstructionRequest{}, contributeReasonInvalidJSON
+	}
+	var request contributeConstructionRequest
+	seenBuilding, seenAP := false, false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return contributeConstructionRequest{}, contributeReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return contributeConstructionRequest{}, contributeReasonInvalidJSON
+		}
+		switch field {
+		case "building_id":
+			if seenBuilding {
+				return contributeConstructionRequest{}, contributeReasonDuplicate
+			}
+			seenBuilding = true
+			if err := decoder.Decode(&request.BuildingID); err != nil {
+				return contributeConstructionRequest{}, contributeReasonInvalidBuilding
+			}
+		case "ap":
+			if seenAP {
+				return contributeConstructionRequest{}, contributeReasonDuplicate
+			}
+			seenAP = true
+			if err := decoder.Decode(&request.AP); err != nil {
+				return contributeConstructionRequest{}, contributeReasonInvalidAP
+			}
+		default:
+			return contributeConstructionRequest{}, contributeReasonUnknownField
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return contributeConstructionRequest{}, contributeReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return contributeConstructionRequest{}, contributeReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return contributeConstructionRequest{}, contributeReasonExtraValue
+	}
+	if !seenBuilding {
+		return contributeConstructionRequest{}, contributeReasonMissingBuilding
+	}
+	if !seenAP {
+		return contributeConstructionRequest{}, contributeReasonMissingAP
+	}
+	if request.BuildingID <= 0 {
+		return contributeConstructionRequest{}, contributeReasonInvalidBuilding
+	}
+	if request.AP <= 0 {
+		return contributeConstructionRequest{}, contributeReasonInvalidAP
+	}
+	return request, ""
+}
+
 func decodeCraftRequest(body io.Reader) (craftRequest, string) {
 	decoder := json.NewDecoder(body)
 	token, err := decoder.Token()
@@ -849,6 +1110,110 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 		ConversionOption: conversionOptionResponseFromStore(state.ConversionOption),
 		Resources:        resourceResponsesFromStore(state.Resources),
 		CraftingRecipes:  craftingRecipeResponsesFromStore(state.CraftingRecipes),
+		BuildingRecipes:  buildingRecipeResponsesFromStore(state.BuildingRecipes),
+		Buildings:        buildingResponsesFromStore(state.Buildings),
+	}
+}
+
+type buildingResourceInputResponse struct {
+	Resource itemResponse `json:"resource"`
+	Quantity int          `json:"quantity"`
+}
+
+type buildingItemInputResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
+}
+
+type buildingRecipeResponse struct {
+	ID                 string                          `json:"id"`
+	DisplayName        string                          `json:"display_name"`
+	BuildingLevel      int                             `json:"building_level"`
+	RequiredAP         int                             `json:"required_ap"`
+	ExtensionSlotCount int                             `json:"extension_slot_count"`
+	ResourceInputs     []buildingResourceInputResponse `json:"resource_inputs"`
+	ItemInputs         []buildingItemInputResponse     `json:"item_inputs"`
+}
+
+type buildingResponse struct {
+	ID                 int64                          `json:"id"`
+	Owner              buildingOwnerResponse          `json:"owner"`
+	Recipe             buildingRecipeIdentityResponse `json:"recipe"`
+	BuildingLevel      int                            `json:"building_level"`
+	RequiredAP         int                            `json:"required_ap"`
+	ContributedAP      int                            `json:"contributed_ap"`
+	Status             string                         `json:"status"`
+	ExtensionSlotCount int                            `json:"extension_slot_count"`
+}
+
+type buildingOwnerResponse struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+type buildingRecipeIdentityResponse struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+func buildingRecipeResponsesFromStore(recipes []BuildingRecipe) []buildingRecipeResponse {
+	responses := make([]buildingRecipeResponse, 0, len(recipes))
+	for _, recipe := range recipes {
+		responses = append(responses, buildingRecipeResponseFromStore(recipe))
+	}
+	return responses
+}
+
+func buildingRecipeResponseFromStore(recipe BuildingRecipe) buildingRecipeResponse {
+	resourceInputs := make([]buildingResourceInputResponse, 0, len(recipe.ResourceInputs))
+	for _, input := range recipe.ResourceInputs {
+		resourceInputs = append(resourceInputs, buildingResourceInputResponse{
+			Resource: itemResponse{ID: input.Resource.ID, DisplayName: input.Resource.DisplayName},
+			Quantity: input.Quantity,
+		})
+	}
+	itemInputs := make([]buildingItemInputResponse, 0, len(recipe.ItemInputs))
+	for _, input := range recipe.ItemInputs {
+		itemInputs = append(itemInputs, buildingItemInputResponse{
+			Item:     itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName},
+			Quantity: input.Quantity,
+		})
+	}
+	return buildingRecipeResponse{
+		ID:                 recipe.ID,
+		DisplayName:        recipe.DisplayName,
+		BuildingLevel:      recipe.BuildingLevel,
+		RequiredAP:         recipe.RequiredAP,
+		ExtensionSlotCount: recipe.ExtensionSlotCount,
+		ResourceInputs:     resourceInputs,
+		ItemInputs:         itemInputs,
+	}
+}
+
+func buildingResponsesFromStore(buildings []Building) []buildingResponse {
+	responses := make([]buildingResponse, 0, len(buildings))
+	for _, building := range buildings {
+		responses = append(responses, buildingResponseFromStore(building))
+	}
+	return responses
+}
+
+func buildingResponseFromStore(building Building) buildingResponse {
+	return buildingResponse{
+		ID: building.ID,
+		Owner: buildingOwnerResponse{
+			ID:          building.Owner.ID,
+			DisplayName: building.Owner.DisplayName,
+		},
+		Recipe: buildingRecipeIdentityResponse{
+			ID:          building.Recipe.ID,
+			DisplayName: building.Recipe.DisplayName,
+		},
+		BuildingLevel:      building.BuildingLevel,
+		RequiredAP:         building.RequiredAP,
+		ContributedAP:      building.ContributedAP,
+		Status:             building.Status,
+		ExtensionSlotCount: building.ExtensionSlotCount,
 	}
 }
 
@@ -1007,6 +1372,10 @@ func accessLogAction(r *http.Request) string {
 			return "convert"
 		case "/api/actions/craft":
 			return "craft"
+		case "/api/actions/build":
+			return "build"
+		case "/api/actions/contribute-construction":
+			return "contribute-construction"
 		default:
 			return "unknown"
 		}
@@ -1073,6 +1442,10 @@ func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
 
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
+}
+
+func (s *Server) logConstructionComputation(r *http.Request, userID int64, computation *ConstructionComputation) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=success building_id=%d effective_ap=%d resulting_progress=%d/%d completion=%s request_id=%s\n", userID, contributeConstructionAction, computation.BuildingID, computation.EffectiveAP, computation.ResultingProgress, computation.RequiredAP, computation.CompletionOutcome, requestID(r))
 }
 
 func canonicalOrigin(frontend *url.URL) (string, error) {

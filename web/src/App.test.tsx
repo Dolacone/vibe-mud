@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as auth from "./auth";
 
 vi.mock("./auth", async () => {
   const actual = await vi.importActual<typeof import("./auth")>("./auth");
-  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn() };
+  return { ...actual, getCurrentUser: vi.fn(), rest: vi.fn(), move: vi.fn(), gather: vi.fn(), convert: vi.fn(), craft: vi.fn(), build: vi.fn(), contributeConstruction: vi.fn() };
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
@@ -14,6 +14,8 @@ const move = vi.mocked(auth.move);
 const gather = vi.mocked(auth.gather);
 const convert = vi.mocked(auth.convert);
 const craft = vi.mocked(auth.craft);
+const build = vi.mocked(auth.build);
+const contributeConstruction = vi.mocked(auth.contributeConstruction);
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -34,6 +36,27 @@ const woodComponentRecipe = {
   output_quantity: 1,
 };
 
+const buildingRecipe = {
+  id: "building_lv1",
+  display_name: "Building Lv1",
+  building_level: 1,
+  required_ap: 60,
+  extension_slot_count: 1,
+  resource_inputs: [{ resource: { id: "wood", display_name: "Wood" }, quantity: 10 }],
+  item_inputs: [{ item: { id: "wood_component", display_name: "Wood Component" }, quantity: 1 }],
+};
+
+const underConstruction = {
+  id: 1,
+  owner: { id: 1, display_name: "Ada" },
+  recipe: { id: "building_lv1", display_name: "Building Lv1" },
+  building_level: 1,
+  required_ap: 60,
+  contributed_ap: 0,
+  status: "under_construction" as const,
+  extension_slot_count: 1,
+};
+
 const campState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
@@ -49,6 +72,8 @@ const campState = {
   },
   resources,
   crafting_recipes: [woodComponentRecipe],
+  building_recipes: [buildingRecipe],
+  buildings: [],
 };
 
 const forestState = {
@@ -60,6 +85,8 @@ const forestState = {
   conversion_option: null,
   resources,
   crafting_recipes: [woodComponentRecipe],
+  building_recipes: [buildingRecipe],
+  buildings: [],
 };
 
 describe("App", () => {
@@ -70,6 +97,95 @@ describe("App", () => {
     gather.mockReset();
     convert.mockReset();
     craft.mockReset();
+    build.mockReset();
+    contributeConstruction.mockReset();
+  });
+
+  it("displays the backend building recipe and current-location construction state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [underConstruction] } });
+    render(<App />);
+
+    expect((await screen.findAllByRole("heading", { name: "Building Lv1" })).length).toBe(2);
+    expect(screen.getByText("Required AP: 60")).toBeInTheDocument();
+    expect(screen.getByText("Wood Component: 1")).toBeInTheDocument();
+    expect(screen.getByText("Owner: Ada")).toBeInTheDocument();
+    expect(screen.getByText("Status: under_construction")).toBeInTheDocument();
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+    expect(screen.getByText("Empty extension slots: 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Build Building Lv1" })).toBeEnabled();
+  });
+
+  it("starts construction with only the backend recipe identifier and applies authoritative state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    build.mockResolvedValue({ status: "success", ...campState, ap: 3000, inventory: [], buildings: [underConstruction] });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Build Building Lv1" })).click();
+    await waitFor(() => expect(screen.getByText("Building construction started.")).toBeInTheDocument());
+    expect(build).toHaveBeenCalledWith("building_lv1");
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("restores the persisted building after a page reload", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [underConstruction] } });
+    const view = render(<App />);
+    expect(await screen.findByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+    view.unmount();
+    render(<App />);
+    expect(await screen.findByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("shows an occupied-slot failure with authoritative state", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [underConstruction] } });
+    build.mockResolvedValue({ status: "invalid", error: "building already exists", ...campState, buildings: [underConstruction] });
+    render(<App />);
+
+    (await screen.findByRole("button", { name: "Build Building Lv1" })).click();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("building already exists"));
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("allows same-location contribution and caps oversized AP at completion", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 100, buildings: [underConstruction] } });
+    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [{ ...underConstruction, contributed_ap: 60, status: "completed" as const }] });
+    render(<App />);
+
+    const input = await screen.findByRole("spinbutton", { name: "Contribution AP for building 1" });
+    fireEvent.change(input, { target: { value: "100" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Construction contribution succeeded.")).toBeInTheDocument());
+    expect(contributeConstruction).toHaveBeenCalledWith(1, 100);
+    expect(screen.getByText("Status: completed")).toBeInTheDocument();
+    expect(screen.getByText("Progress: 60/60 AP (100%)")).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Contribution AP for building 1" })).not.toBeInTheDocument();
+  });
+
+  it("prevents duplicate building actions while a request is pending", async () => {
+    let resolveBuild: ((value: auth.BuildResult) => void) | undefined;
+    build.mockReturnValue(new Promise((resolve) => { resolveBuild = resolve; }));
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Build Building Lv1" });
+    button.click();
+    await waitFor(() => expect(button).toBeDisabled());
+    button.click();
+    expect(build).toHaveBeenCalledTimes(1);
+    resolveBuild?.({ status: "success", ...campState, buildings: [underConstruction] });
+    await waitFor(() => expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument());
+  });
+
+  it("keeps authoritative AP and progress after a failed contribution", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 5, buildings: [underConstruction] } });
+    contributeConstruction.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...campState, ap: 5, buildings: [underConstruction] });
+    render(<App />);
+
+    const input = await screen.findByRole("spinbutton", { name: "Contribution AP for building 1" });
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByText("AP: 5")).toBeInTheDocument();
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
   });
 
   it("loads and displays only the backend-confirmed identity", async () => {
@@ -90,7 +206,7 @@ describe("App", () => {
     expect(screen.getByText("Inventory is empty.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Wood Component" })).toBeInTheDocument();
     expect(screen.getByText("AP cost: 10")).toBeInTheDocument();
-    expect(screen.getByText("Wood: 10")).toBeInTheDocument();
+    expect(screen.getAllByText("Wood: 10")).toHaveLength(2);
     expect(screen.getByText("Output: Wood Component: 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();
@@ -189,7 +305,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Craft succeeded.")).toBeInTheDocument());
     expect(screen.getByText("AP: 2990")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Resources" })).toHaveTextContent("Wood: 0");
-    expect(screen.getByText("Wood Component: 1")).toBeInTheDocument();
+    expect(screen.getAllByText("Wood Component: 1").length).toBeGreaterThan(0);
     expect(craft).toHaveBeenCalledWith("wood_component");
   });
 

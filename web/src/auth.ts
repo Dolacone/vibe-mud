@@ -58,6 +58,37 @@ export type CraftingRecipe = {
   output_quantity: number;
 };
 
+export type BuildingResourceInput = {
+  resource: Item;
+  quantity: number;
+};
+
+export type BuildingItemInput = {
+  item: Item;
+  quantity: number;
+};
+
+export type BuildingRecipe = {
+  id: string;
+  display_name: string;
+  building_level: number;
+  required_ap: number;
+  extension_slot_count: number;
+  resource_inputs: BuildingResourceInput[];
+  item_inputs: BuildingItemInput[];
+};
+
+export type Building = {
+  id: number;
+  owner: { id: number; display_name: string };
+  recipe: { id: string; display_name: string };
+  building_level: number;
+  required_ap: number;
+  contributed_ap: number;
+  status: "under_construction" | "completed";
+  extension_slot_count: number;
+};
+
 export type PlayerState = {
   location: Location;
   routes: Route[];
@@ -67,6 +98,8 @@ export type PlayerState = {
   conversion_option: ConversionOption | null;
   resources: Resource[];
   crafting_recipes?: CraftingRecipe[];
+  building_recipes?: BuildingRecipe[];
+  buildings?: Building[];
 };
 
 export type CurrentUser = PlayerState & {
@@ -113,6 +146,15 @@ export type CraftResult =
   | ({ status: "invalid"; error: string; state?: PlayerState })
   | { status: "unauthenticated" }
   | { status: "error"; error: Error };
+
+export type BuildResult =
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "insufficient"; error: string } & PlayerState)
+  | ({ status: "invalid"; error: string } & PlayerState)
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type ContributeConstructionResult = BuildResult;
 
 const maxAP = 3000;
 
@@ -195,6 +237,79 @@ function isCraftingRecipes(value: unknown): value is CraftingRecipe[] {
   return new Set(ids).size === ids.length;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isBuildingResourceInput(value: unknown): value is BuildingResourceInput {
+  if (typeof value !== "object" || value === null) return false;
+  const input = value as Record<string, unknown>;
+  return isItem(input.resource) && isQuantity(input.quantity);
+}
+
+function isBuildingItemInput(value: unknown): value is BuildingItemInput {
+  if (typeof value !== "object" || value === null) return false;
+  const input = value as Record<string, unknown>;
+  return isItem(input.item) && isQuantity(input.quantity);
+}
+
+function isBuildingRecipe(value: unknown): value is BuildingRecipe {
+  if (typeof value !== "object" || value === null) return false;
+  const recipe = value as Record<string, unknown>;
+  return (
+    isString(recipe.id) &&
+    isString(recipe.display_name) &&
+    isPositiveInteger(recipe.building_level) &&
+    isPositiveInteger(recipe.required_ap) &&
+    typeof recipe.extension_slot_count === "number" &&
+    Number.isInteger(recipe.extension_slot_count) &&
+    recipe.extension_slot_count >= 0 &&
+    Array.isArray(recipe.resource_inputs) &&
+    recipe.resource_inputs.every(isBuildingResourceInput) &&
+    Array.isArray(recipe.item_inputs) &&
+    recipe.item_inputs.every(isBuildingItemInput) &&
+    (recipe.resource_inputs.length > 0 || recipe.item_inputs.length > 0)
+  );
+}
+
+function isBuildingRecipes(value: unknown): value is BuildingRecipe[] {
+  if (!Array.isArray(value) || !value.every(isBuildingRecipe)) return false;
+  const ids = value.map((recipe) => recipe.id);
+  return new Set(ids).size === ids.length;
+}
+
+function isBuilding(value: unknown): value is Building {
+  if (typeof value !== "object" || value === null) return false;
+  const building = value as Record<string, unknown>;
+  const owner = building.owner;
+  const recipe = building.recipe;
+  return (
+    isPositiveInteger(building.id) &&
+    typeof owner === "object" && owner !== null &&
+    isPositiveInteger((owner as Record<string, unknown>).id) &&
+    isString((owner as Record<string, unknown>).display_name) &&
+    typeof recipe === "object" && recipe !== null &&
+    isString((recipe as Record<string, unknown>).id) &&
+    isString((recipe as Record<string, unknown>).display_name) &&
+    isPositiveInteger(building.building_level) &&
+    isPositiveInteger(building.required_ap) &&
+    typeof building.contributed_ap === "number" &&
+    Number.isInteger(building.contributed_ap) &&
+    building.contributed_ap >= 0 &&
+    building.contributed_ap <= building.required_ap &&
+    (building.status === "under_construction" || building.status === "completed") &&
+    typeof building.extension_slot_count === "number" &&
+    Number.isInteger(building.extension_slot_count) &&
+    building.extension_slot_count >= 0
+  );
+}
+
+function isBuildings(value: unknown): value is Building[] {
+  if (!Array.isArray(value) || !value.every(isBuilding)) return false;
+  const ids = value.map((building) => building.id);
+  return new Set(ids).size === ids.length;
+}
+
 const resourceIDs = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"];
 
 function isResources(value: unknown): value is Resource[] {
@@ -251,7 +366,9 @@ function isPlayerState(value: unknown): value is PlayerState {
     (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
     (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
     isResources(state.resources) &&
-    isCraftingRecipes(state.crafting_recipes)
+    isCraftingRecipes(state.crafting_recipes) &&
+    isBuildingRecipes(state.building_recipes) &&
+    isBuildings(state.buildings)
   );
 }
 
@@ -340,6 +457,8 @@ export async function getCurrentUser(
         conversion_option: body.conversion_option,
         resources: body.resources,
         crafting_recipes: body.crafting_recipes,
+        building_recipes: body.building_recipes,
+        buildings: body.buildings,
       },
     };
   } catch (error) {
@@ -607,4 +726,60 @@ export async function craft(recipeID: string, fetcher: typeof fetch = fetch): Pr
       error: error instanceof Error ? error : new Error("craft request failed"),
     };
   }
+}
+
+async function buildingAction(
+  path: string,
+  payload: Record<string, number | string>,
+  action: string,
+  fetcher: typeof fetch,
+): Promise<BuildResult> {
+  try {
+    const response = await fetcher(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 409 || response.status === 400) {
+      const body: unknown = await response.json();
+      if (typeof body !== "object" || body === null || typeof (body as Record<string, unknown>).error !== "string") {
+        return { status: "error", error: new Error(`${action} response is invalid`) };
+      }
+      const { error, ...state } = body as Record<string, unknown>;
+      if (!isPlayerState(state)) {
+        return { status: "error", error: new Error(`${action} response is invalid`) };
+      }
+      return { status: response.status === 409 ? "insufficient" : "invalid", error: error as string, ...state };
+    }
+
+    if (response.status !== 200) {
+      return { status: "error", error: new Error(`${action} request failed with status ${response.status}`) };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body)) {
+      return { status: "error", error: new Error(`${action} response is invalid`) };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error(`${action} request failed`),
+    };
+  }
+}
+
+export function build(recipeID: string, fetcher: typeof fetch = fetch): Promise<BuildResult> {
+  if (!isString(recipeID)) return Promise.resolve({ status: "invalid", error: "invalid recipe identifier" } as BuildResult);
+  return buildingAction("/api/actions/build", { recipe_id: recipeID }, "build", fetcher);
+}
+
+export function contributeConstruction(buildingID: number, ap: number, fetcher: typeof fetch = fetch): Promise<ContributeConstructionResult> {
+  if (!isPositiveInteger(buildingID)) return Promise.resolve({ status: "invalid", error: "invalid building identifier" } as BuildResult);
+  if (!isPositiveInteger(ap)) return Promise.resolve({ status: "invalid", error: "invalid AP" } as BuildResult);
+  return buildingAction("/api/actions/contribute-construction", { building_id: buildingID, ap }, "contribute-construction", fetcher);
 }

@@ -27,6 +27,10 @@ var (
 	ErrInsufficientItem     = errors.New("insufficient item")
 	ErrCraftingNotFound     = errors.New("crafting recipe not found")
 	ErrInsufficientResource = errors.New("insufficient resource")
+	ErrBuildingNotFound     = errors.New("building not found")
+	ErrBuildingOccupied     = errors.New("building location already occupied")
+	ErrBuildingRemote       = errors.New("building is at another location")
+	ErrBuildingCompleted    = errors.New("building is already completed")
 )
 
 type Store struct {
@@ -120,15 +124,52 @@ type CraftingRecipe struct {
 	OutputQuantity int
 }
 
+type BuildingRecipe struct {
+	ID                 string
+	DisplayName        string
+	BuildingLevel      int
+	RequiredAP         int
+	ExtensionSlotCount int
+	ResourceInputs     []CraftingResourceInput
+	ItemInputs         []CraftingItemInput
+}
+
+type BuildingOwner struct {
+	ID          int64
+	DisplayName string
+}
+
+type Building struct {
+	ID                 int64
+	Owner              BuildingOwner
+	Recipe             BuildingRecipe
+	BuildingLevel      int
+	RequiredAP         int
+	ContributedAP      int
+	Status             string
+	ExtensionSlotCount int
+}
+
+type ConstructionComputation struct {
+	BuildingID        int64
+	EffectiveAP       int
+	ResultingProgress int
+	RequiredAP        int
+	CompletionOutcome string
+}
+
 type PlayerState struct {
-	Location         Location
-	Routes           []Route
-	AP               int
-	Inventory        []InventoryItem
-	GatheringOption  *GatheringOption
-	ConversionOption *ConversionOption
-	Resources        []PlayerResource
-	CraftingRecipes  []CraftingRecipe
+	Location                Location
+	Routes                  []Route
+	AP                      int
+	Inventory               []InventoryItem
+	GatheringOption         *GatheringOption
+	ConversionOption        *ConversionOption
+	Resources               []PlayerResource
+	CraftingRecipes         []CraftingRecipe
+	BuildingRecipes         []BuildingRecipe
+	Buildings               []Building
+	ConstructionComputation *ConstructionComputation
 }
 
 const (
@@ -244,9 +285,45 @@ CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
 	item_id TEXT NOT NULL REFERENCES items(id),
 	quantity INTEGER NOT NULL CHECK (quantity > 0),
 	PRIMARY KEY (recipe_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS building_recipes (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL,
+	building_level INTEGER NOT NULL CHECK (building_level > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0)
+);
+CREATE TABLE IF NOT EXISTS building_recipe_resource_inputs (
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (recipe_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS buildings (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner_id INTEGER NOT NULL REFERENCES identities(id),
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+	display_name TEXT NOT NULL DEFAULT '',
+	building_level INTEGER NOT NULL CHECK (building_level > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+	status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+	UNIQUE (owner_id, location_id)
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if err := ensureBuildingSchema(tx); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("upgrade building schema: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
@@ -285,6 +362,16 @@ INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, q
 	('wood_component', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES
+	('building_lv1', 'Building Lv1', 1, 60, 1);
+INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity) VALUES
+	('building_lv1', 'wood_component', 1);
+INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES
+	('building_lv1', 'wood', 10);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed building state: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
@@ -352,6 +439,26 @@ FROM conversion_rules_legacy`); err != nil {
 		if _, err := tx.Exec(`DROP TABLE conversion_rules_legacy`); err != nil {
 			return fmt.Errorf("drop legacy conversion rules: %w", err)
 		}
+	}
+	return nil
+}
+
+func ensureBuildingSchema(tx *sql.Tx) error {
+	columns, err := tableColumns(tx, "buildings")
+	if err != nil {
+		return err
+	}
+	if columns["display_name"] {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE buildings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add building display name: %w", err)
+	}
+	if _, err := tx.Exec(`
+UPDATE buildings
+SET display_name = (SELECT display_name FROM building_recipes WHERE building_recipes.id = buildings.recipe_id)
+WHERE display_name = ''`); err != nil {
+		return fmt.Errorf("backfill building display name: %w", err)
 	}
 	return nil
 }
@@ -508,7 +615,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0)}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -615,6 +722,51 @@ ORDER BY cr.id`)
 	if err := recipeRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read crafting recipes: %w", err)
 	}
+	buildingRecipeRows, err := tx.Query(`
+SELECT br.id, br.display_name, br.building_level, br.required_ap, br.extension_slot_count
+FROM building_recipes br
+WHERE EXISTS (SELECT 1 FROM building_recipe_resource_inputs ri WHERE ri.recipe_id = br.id)
+   OR EXISTS (SELECT 1 FROM building_recipe_item_inputs ii WHERE ii.recipe_id = br.id)
+ORDER BY br.id`)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get building recipes: %w", err)
+	}
+	defer buildingRecipeRows.Close()
+	for buildingRecipeRows.Next() {
+		var recipe BuildingRecipe
+		if err := buildingRecipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount); err != nil {
+			return PlayerState{}, fmt.Errorf("scan building recipe: %w", err)
+		}
+		if err := loadBuildingInputsTx(tx, &recipe); err != nil {
+			return PlayerState{}, err
+		}
+		state.BuildingRecipes = append(state.BuildingRecipes, recipe)
+	}
+	if err := buildingRecipeRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read building recipes: %w", err)
+	}
+	buildingRows, err := tx.Query(`
+SELECT b.id, i.id, i.display_name, br.id, b.display_name,
+       b.building_level, b.required_ap, b.contributed_ap, b.status, b.extension_slot_count
+FROM buildings b
+JOIN identities i ON i.id = b.owner_id
+JOIN building_recipes br ON br.id = b.recipe_id
+WHERE b.location_id = ?
+ORDER BY b.id`, state.Location.ID)
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("get buildings: %w", err)
+	}
+	defer buildingRows.Close()
+	for buildingRows.Next() {
+		var building Building
+		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount); err != nil {
+			return PlayerState{}, fmt.Errorf("scan building: %w", err)
+		}
+		state.Buildings = append(state.Buildings, building)
+	}
+	if err := buildingRows.Err(); err != nil {
+		return PlayerState{}, fmt.Errorf("read buildings: %w", err)
+	}
 	rows, err := tx.Query(`
 SELECT origin_id, destination_id, ap_cost
 FROM routes
@@ -639,6 +791,56 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func loadBuildingInputsTx(tx *sql.Tx, recipe *BuildingRecipe) error {
+	resourceRows, err := tx.Query(`
+SELECT rt.id, rt.display_name, ri.quantity
+FROM building_recipe_resource_inputs ri
+JOIN resource_types rt ON rt.id = ri.resource_id
+WHERE ri.recipe_id = ? ORDER BY ri.resource_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get building resource inputs: %w", err)
+	}
+	for resourceRows.Next() {
+		var input CraftingResourceInput
+		if err := resourceRows.Scan(&input.Resource.ID, &input.Resource.DisplayName, &input.Quantity); err != nil {
+			_ = resourceRows.Close()
+			return fmt.Errorf("scan building resource input: %w", err)
+		}
+		recipe.ResourceInputs = append(recipe.ResourceInputs, input)
+	}
+	if err := resourceRows.Err(); err != nil {
+		_ = resourceRows.Close()
+		return fmt.Errorf("read building resource inputs: %w", err)
+	}
+	if err := resourceRows.Close(); err != nil {
+		return fmt.Errorf("close building resource inputs: %w", err)
+	}
+	itemRows, err := tx.Query(`
+SELECT i.id, i.display_name, ii.quantity
+FROM building_recipe_item_inputs ii
+JOIN items i ON i.id = ii.item_id
+WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
+	if err != nil {
+		return fmt.Errorf("get building item inputs: %w", err)
+	}
+	for itemRows.Next() {
+		var input CraftingItemInput
+		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Quantity); err != nil {
+			_ = itemRows.Close()
+			return fmt.Errorf("scan building item input: %w", err)
+		}
+		recipe.ItemInputs = append(recipe.ItemInputs, input)
+	}
+	if err := itemRows.Err(); err != nil {
+		_ = itemRows.Close()
+		return fmt.Errorf("read building item inputs: %w", err)
+	}
+	if err := itemRows.Close(); err != nil {
+		return fmt.Errorf("close building item inputs: %w", err)
+	}
+	return nil
 }
 
 func loadCraftingInputsTx(tx *sql.Tx, recipe *CraftingRecipe) error {
@@ -1138,6 +1340,258 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("commit craft: %w", err)
 	}
 	return state, nil
+}
+
+func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
+	if userID <= 0 || strings.TrimSpace(recipeID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: user ID and recipe ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin building: %w", err)
+	}
+	recipe, err := buildingRecipeForID(tx, recipeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get building recipe: %w", err)
+	}
+	var locationID string
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get building location: %w", err)
+	}
+	var occupied int
+	err = tx.QueryRow(`SELECT 1 FROM buildings WHERE owner_id = ? AND location_id = ?`, userID, locationID).Scan(&occupied)
+	if err == nil {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingOccupied
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check building location: %w", err)
+	}
+	for _, input := range recipe.ResourceInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_resources WHERE user_id = ? AND resource_id = ?`, userID, input.Resource.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientResource
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get building resource: %w", err)
+		}
+	}
+	itemQuantities := make(map[string]int, len(recipe.ItemInputs))
+	for _, input := range recipe.ItemInputs {
+		var quantity int
+		err := tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID).Scan(&quantity)
+		if errors.Is(err, sql.ErrNoRows) || quantity < input.Quantity {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrInsufficientItem
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get building item: %w", err)
+		}
+		itemQuantities[input.Item.ID] = quantity
+	}
+	for _, input := range recipe.ResourceInputs {
+		result, err := tx.Exec(`UPDATE player_resources SET quantity = quantity - ? WHERE user_id = ? AND resource_id = ?`, input.Quantity, userID, input.Resource.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building resource: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check building resource: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientResource
+		}
+	}
+	for _, input := range recipe.ItemInputs {
+		var result sql.Result
+		if itemQuantities[input.Item.ID] == input.Quantity {
+			result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ?`, userID, input.Item.ID)
+		} else {
+			result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ?`, input.Quantity, userID, input.Item.ID)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building item: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			_ = tx.Rollback()
+			if err != nil {
+				return PlayerState{}, fmt.Errorf("check building item: %w", err)
+			}
+			return PlayerState{}, ErrInsufficientItem
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM player_resources WHERE user_id = ? AND quantity = 0`, userID); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("delete empty building resources: %w", err)
+	}
+	if _, err := tx.Exec(`
+	INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count)
+	VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.ID, recipe.DisplayName, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount); err != nil {
+		_ = tx.Rollback()
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: buildings.owner_id, buildings.location_id") {
+			return PlayerState{}, ErrBuildingOccupied
+		}
+		return PlayerState{}, fmt.Errorf("create building: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit building: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int) (PlayerState, error) {
+	if userID <= 0 || buildingID <= 0 || requestedAP <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID, building ID, and AP are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin construction contribution: %w", err)
+	}
+	var contributorLocation, buildingLocation, status string
+	var contributedAP, requiredAP int
+	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get contributor location: %w", err)
+	}
+	err = tx.QueryRow(`
+SELECT location_id, contributed_ap, required_ap, status
+FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP, &requiredAP, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get construction target: %w", err)
+	}
+	if contributorLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if status == "completed" || contributedAP >= requiredAP {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingCompleted
+	}
+
+	var fullTimestamp int64
+	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get contributor AP: %w", err)
+	}
+	now := s.now().UTC()
+	availableAP := calculateAP(unixNano(fullTimestamp), now)
+	remainingAP := requiredAP - contributedAP
+	actualAP := requestedAP
+	if actualAP > remainingAP {
+		actualAP = remainingAP
+	}
+	if availableAP < actualAP {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixNano(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).UnixNano(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume construction AP: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return PlayerState{}, fmt.Errorf("check construction AP: %w", err)
+		}
+		return PlayerState{}, ErrInsufficientAP
+	}
+	newProgress := contributedAP + actualAP
+	newStatus := "under_construction"
+	if newProgress == requiredAP {
+		newStatus = "completed"
+	}
+	result, err = tx.Exec(`
+UPDATE buildings SET contributed_ap = ?, status = ?
+WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, buildingID, contributedAP)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("update construction progress: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return PlayerState{}, fmt.Errorf("check construction progress: %w", err)
+		}
+		return PlayerState{}, ErrBuildingCompleted
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit construction contribution: %w", err)
+	}
+	state.ConstructionComputation = &ConstructionComputation{
+		BuildingID:        buildingID,
+		EffectiveAP:       actualAP,
+		ResultingProgress: newProgress,
+		RequiredAP:        requiredAP,
+		CompletionOutcome: newStatus,
+	}
+	return state, nil
+}
+
+func buildingRecipeForID(tx *sql.Tx, recipeID string) (BuildingRecipe, error) {
+	var recipe BuildingRecipe
+	err := tx.QueryRow(`
+SELECT id, display_name, building_level, required_ap, extension_slot_count
+FROM building_recipes WHERE id = ?`, recipeID).Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount)
+	if err != nil {
+		return BuildingRecipe{}, err
+	}
+	if err := loadBuildingInputsTx(tx, &recipe); err != nil {
+		return BuildingRecipe{}, err
+	}
+	if len(recipe.ResourceInputs) == 0 && len(recipe.ItemInputs) == 0 {
+		return BuildingRecipe{}, sql.ErrNoRows
+	}
+	return recipe, nil
 }
 
 func calculateAP(fullTimestamp, now time.Time) int {

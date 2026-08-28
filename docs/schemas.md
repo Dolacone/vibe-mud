@@ -45,6 +45,10 @@ source_paths:
 | `crafting_recipes` | 保存後端允許的 recipe、基本 AP 成本與明確 output。 | Store 初始化時建立固定 seed。 | 它定義 recipe header，不保存 inputs 或玩家執行紀錄。 |
 | `crafting_recipe_resource_inputs` | 保存每個 recipe 消耗的 Resource inputs。 | Recipe seed 建立時加入。 | 它保存 Resource 成本，不保存玩家 Resource quantity。 |
 | `crafting_recipe_item_inputs` | 保存每個 recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存 Item 成本，不保存玩家 Inventory quantity。 |
+| `building_recipes` | 保存後端允許的 Building recipe 與完成結果。 | Store 初始化時建立固定 seed。 | 它定義 Building，不保存玩家施工狀態。 |
+| `building_recipe_resource_inputs` | 保存 Building recipe 消耗的 Resource inputs。 | Recipe 需要 Resource 時加入。 | 它保存成本，不保存玩家 Resource quantity。 |
+| `building_recipe_item_inputs` | 保存 Building recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存成本，不保存玩家 Inventory quantity。 |
+| `buildings` | 保存玩家在 Location 建立的 Building 與施工進度。 | 開始施工時建立，完成時更新。 | 它保存世界狀態，不定義 recipe。 |
 
 ## identities
 
@@ -392,6 +396,107 @@ CREATE TABLE IF NOT EXISTS crafting_recipe_item_inputs (
 
 索引與約束：複合 primary key 防止同一 recipe 重複定義同一 Item。
 
+## building_recipes
+
+用途：定義後端允許的 Building recipe。MVP recipe 產生 Building Lv1，消耗 1 Wood Component 與 10 Wood Resource，施工需要 60 AP，完成後具有一個 extension slot。
+
+```sql
+CREATE TABLE IF NOT EXISTS building_recipes (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    building_level INTEGER NOT NULL CHECK (building_level > 0),
+    required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | API 與 Building 使用的穩定 recipe identifier。 |
+| `display_name` | 前端顯示的 recipe 與 Building 名稱。 |
+| `building_level` | Recipe 建立的 Building level。 |
+| `required_ap` | 完成施工所需的 AP。 |
+| `extension_slot_count` | 完成後可用的 extension slot 數量。 |
+
+索引與約束：Primary key 為 `id`。Recipe 不限制 Location。後端只回傳至少有一筆 Resource 或 Item input 的 recipe。
+
+## building_recipe_resource_inputs
+
+用途：定義 Building recipe 消耗的零種以上 Resource inputs。
+
+```sql
+CREATE TABLE IF NOT EXISTS building_recipe_resource_inputs (
+    recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+    resource_id TEXT NOT NULL REFERENCES resource_types(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (recipe_id, resource_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `recipe_id` | 消耗 Resource 的 Building recipe。 |
+| `resource_id` | 被消耗的 Resource type。 |
+| `quantity` | 開始施工時扣除的 Resource quantity。 |
+
+索引與約束：複合 primary key 防止同一 recipe 重複定義同一 Resource。
+
+## building_recipe_item_inputs
+
+用途：定義 Building recipe 消耗的零種以上 Inventory Item inputs。
+
+```sql
+CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
+    recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (recipe_id, item_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `recipe_id` | 消耗 Item 的 Building recipe。 |
+| `item_id` | 被消耗的 Inventory Item。 |
+| `quantity` | 開始施工時扣除的 Item quantity。 |
+
+索引與約束：複合 primary key 防止同一 recipe 重複定義同一 Item。
+
+## buildings
+
+用途：保存玩家擁有的 Building、建立 Location、名稱快照與目前進度。
+
+```sql
+CREATE TABLE IF NOT EXISTS buildings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER NOT NULL REFERENCES identities(id),
+    location_id TEXT NOT NULL REFERENCES locations(id),
+    recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
+    display_name TEXT NOT NULL DEFAULT '',
+    building_level INTEGER NOT NULL CHECK (building_level > 0),
+    required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+    contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+    status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+    extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+    UNIQUE (owner_id, location_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | Contribution target 使用的穩定 Building identifier。 |
+| `owner_id` | 開始施工並擁有 Building 的玩家。 |
+| `location_id` | Building 所在 Location。 |
+| `recipe_id` | 建立 Building 的 recipe。 |
+| `display_name` | 建立時從 recipe 複製的 Building 名稱快照。Recipe 改名不會改變既有 Building。 |
+| `building_level` | 建立時保存的 Building level。 |
+| `required_ap` | 建立時保存的施工 AP 需求。 |
+| `contributed_ap` | 所有玩家累計投入的 AP。 |
+| `status` | `under_construction` 或 `completed`。 |
+| `extension_slot_count` | 建立時保存的 extension slot 數量。 |
+
+索引與約束：`UNIQUE (owner_id, location_id)` 讓施工中與完成的 Building 都占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。
+
 ## 關聯與約束
 
 ```text
@@ -400,30 +505,39 @@ identities.id
 ├── player_ap.user_id   一筆 AP 狀態對一位使用者
 ├── player_locations.user_id  一個目前位置對一位使用者
 ├── player_inventory.user_id  玩家持有的 item quantity
-└── player_resources.user_id  玩家持有的 typed Resource quantity
+├── player_resources.user_id  玩家持有的 typed Resource quantity
+└── buildings.owner_id   Building 持有者
 
 locations.id
 ├── routes.origin_id             Route 起點
 ├── routes.destination_id        Route 終點
 ├── player_locations.location_id 玩家目前位置
 ├── gathering_rules.location_id  Gathering 所在位置
-└── conversion_rules.location_id Conversion 所在位置
+├── conversion_rules.location_id Conversion 所在位置
+└── buildings.location_id        Building 所在位置
 
 items.id
 ├── gathering_rules.item_id       Gathering 產出的 item
 ├── conversion_rules.input_item_id Conversion 消耗的 item
 ├── player_inventory.item_id      玩家持有的 item
 ├── crafting_recipes.output_item_id Crafting 產出的 item
-└── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
+├── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
+└── building_recipe_item_inputs.item_id Building recipe 消耗的 item
 
 resource_types.id
 ├── conversion_rules.output_resource_id Conversion 產出的 Resource type
 ├── player_resources.resource_id         玩家持有的 Resource type
-└── crafting_recipe_resource_inputs.resource_id Crafting 消耗的 Resource type
+├── crafting_recipe_resource_inputs.resource_id Crafting 消耗的 Resource type
+└── building_recipe_resource_inputs.resource_id Building recipe 消耗的 Resource type
 
 crafting_recipes.id
 ├── crafting_recipe_resource_inputs.recipe_id Resource inputs
 └── crafting_recipe_item_inputs.recipe_id     Item inputs
+
+building_recipes.id
+├── building_recipe_resource_inputs.recipe_id Resource inputs
+├── building_recipe_item_inputs.recipe_id     Item inputs
+└── buildings.recipe_id                       Player Building origin
 
 oauth_attempts          OAuth 完成前的獨立暫存狀態
 ```
@@ -467,9 +581,20 @@ VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
 
 INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
 VALUES ('wood_component', 'wood', 10);
+
+INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count)
+VALUES ('building_lv1', 'Building Lv1', 1, 60, 1);
+
+INSERT OR IGNORE INTO building_recipe_item_inputs (recipe_id, item_id, quantity)
+VALUES ('building_lv1', 'wood_component', 1);
+
+INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, quantity)
+VALUES ('building_lv1', 'wood', 10);
 ```
 
 Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
+
+Existing databases gain the four Building tables and seeds during Store initialization. Existing player state remains unchanged.
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
@@ -482,6 +607,10 @@ Existing databases gain the three crafting tables and seeds during Store initial
 `convert` transaction 會依玩家目前位置查找 conversion rule。Rule 不存在、Wood 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除 Wood item，並以 upsert 累加 Wood Resource quantity。Wood item quantity 歸零時，系統刪除該 Inventory row。三項更新必須在同一 transaction commit。
 
 `craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
+
+開始施工 transaction 會依 submitted recipe identifier 查找 Location-independent recipe 與 inputs，再查找玩家目前 Location 的既有 Building。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP 與 extension slot count 快照。
+
+施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`。
 
 ## 已知限制
 
