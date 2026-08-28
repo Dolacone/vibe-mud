@@ -89,6 +89,8 @@ INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood_compo
 
 func TestBuildSupportsItemOnlyRecipeAndEnforcesLocationUniqueness(t *testing.T) {
 	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
 	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-build-unique", "owner@example.com", "Owner")
 	if err != nil {
 		t.Fatal(err)
