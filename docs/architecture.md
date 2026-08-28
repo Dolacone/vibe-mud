@@ -33,13 +33,13 @@ Google login starts at `GET /auth/google/login` and returns through `GET /auth/g
 
 ## Game State and API
 
-`GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, all eight typed Resource quantities, and nonzero public ground holdings. Game actions use dedicated endpoints under `/api/actions/*`.
+`GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, all eight typed Resource quantities, nonzero public ground holdings, derived carrying weight, and the movement weight threshold. Game actions use dedicated endpoints under `/api/actions/*`.
 
 Pickup and Drop are AP-free Transfers under `/api/transfers/*`, not Actions. The browser submits an asset type, asset identifier, and positive quantity without a Location. The backend derives the player's current Location and atomically moves Item or Resource quantity between player holdings and public ground holdings. Ground capacity is unlimited and has no owner, access control, reservation, or history.
 
 AP persistence stores only the timestamp when the player will reach full AP. The backend derives current AP from its clock, caps it at 3000, and advances the timestamp when an action spends AP. No scheduler updates AP values.
 
-Movement starts at `camp`. The backend resolves a submitted target against directed Routes stored in SQLite. A successful move updates AP and location in one transaction. Invalid Action, target, or JSON input leaves state unchanged and produces a sanitized error outcome log.
+Movement starts at `camp`. The backend resolves a submitted target against directed Routes stored in SQLite. Players can hold more than the 1000-unit movement weight threshold, but cannot move until their derived carrying weight returns to 1000 or less. A successful move updates AP and location in one transaction. Invalid Action, target, JSON input, or overweight state leaves AP and location unchanged and produces a sanitized error outcome log.
 
 Gathering is available only when the current Location has a backend-owned gathering rule. The frontend submits `{}` and cannot submit an item, quantity, cost, or location. A successful gather updates AP and Inventory quantity in one transaction.
 

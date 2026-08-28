@@ -36,10 +36,10 @@ source_paths:
 | `locations` | 保存後端允許的位置。 | Store 初始化時建立固定 seed。 | 它定義位置，不保存玩家狀態。 |
 | `routes` | 保存後端允許的有向 Route 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義兩個位置間的通行規則，不保存玩家移動紀錄。 |
 | `player_locations` | 保存每位玩家的目前位置。 | 身分建立時建立，移動成功時更新。 | 它只保存目前狀態，不保存歷史軌跡。 |
-| `items` | 保存後端允許的 item 定義。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
+| `items` | 保存後端允許的 item 定義與單位重量。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
 | `gathering_rules` | 保存 Location 可產出的 item、quantity 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義取得規則，不保存玩家執行紀錄。 |
 | `player_inventory` | 保存每位玩家持有的 item quantity。 | 首次取得 item 時建立，後續取得時累加。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
-| `resource_types` | 保存後端允許的 Resource type。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
+| `resource_types` | 保存後端允許的 Resource type 與單位重量。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
 | `conversion_rules` | 保存 Location 可轉換的 item、typed Resource 產量與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義轉換規則，不保存玩家執行紀錄。 |
 | `player_resources` | 保存每位玩家每種 Resource 的 quantity。 | 首次取得該 Resource 時建立，後續取得時累加。 | 它保存 typed quantity，不是 Inventory item quantity。 |
 | `ground_items` | 保存每個 Location 的公共 Item quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它沒有玩家 owner，也不是玩家 Inventory。 |
@@ -208,12 +208,13 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 ## items
 
-用途：定義後端允許的 item。MVP 固定建立 `wood`。
+用途：定義後端允許的 item 與正整數單位重量。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`。
 
 ```sql
 CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL
+    display_name TEXT NOT NULL,
+    weight_units INTEGER NOT NULL CHECK (weight_units > 0)
 );
 ```
 
@@ -221,6 +222,7 @@ CREATE TABLE IF NOT EXISTS items (
 |---|---|
 | `id` | API、gathering rule 與 Inventory 使用的穩定 item identifier。 |
 | `display_name` | 前端顯示的 item 名稱。 |
+| `weight_units` | 每單位 item 計入玩家目前攜帶重量的正整數重量。 |
 
 索引與約束：primary key 為 `id`。前端不能建立 item 或自行提交顯示名稱。
 
@@ -269,12 +271,13 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 
 ## resource_types
 
-用途：定義後端允許的 Resource type。MVP 固定建立 Food、Wood、Stone、Metal、Fiber、Hide、Medicinal 與 Arcane。
+用途：定義後端允許的 Resource type 與正整數單位重量。MVP 固定建立 Food、Wood、Stone、Metal、Fiber、Hide、Medicinal 與 Arcane，每單位都重 1。
 
 ```sql
 CREATE TABLE IF NOT EXISTS resource_types (
     id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL
+    display_name TEXT NOT NULL,
+    weight_units INTEGER NOT NULL CHECK (weight_units > 0)
 );
 ```
 
@@ -282,6 +285,7 @@ CREATE TABLE IF NOT EXISTS resource_types (
 |---|---|
 | `id` | API、conversion rule 與 player quantity 使用的穩定 Resource identifier。 |
 | `display_name` | 前端顯示的 Resource 名稱。 |
+| `weight_units` | 每單位 Resource 計入玩家目前攜帶重量的正整數重量。 |
 
 索引與約束：primary key 為 `id`。前端不能建立 Resource type。
 
@@ -611,26 +615,26 @@ SELECT id, ? FROM identities;
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities;
 
-INSERT OR IGNORE INTO items (id, display_name) VALUES ('wood', 'Wood');
+INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES ('wood', 'Wood', 100);
 
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost)
 VALUES ('forest_edge', 'wood', 1, 10);
 
-INSERT OR IGNORE INTO resource_types (id, display_name) VALUES
-('food', 'Food'),
-('wood', 'Wood'),
-('stone', 'Stone'),
-('metal', 'Metal'),
-('fiber', 'Fiber'),
-('hide', 'Hide'),
-('medicinal', 'Medicinal'),
-('arcane', 'Arcane');
+INSERT OR IGNORE INTO resource_types (id, display_name, weight_units) VALUES
+('food', 'Food', 1),
+('wood', 'Wood', 1),
+('stone', 'Stone', 1),
+('metal', 'Metal', 1),
+('fiber', 'Fiber', 1),
+('hide', 'Hide', 1),
+('medicinal', 'Medicinal', 1),
+('arcane', 'Arcane', 1);
 
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
 VALUES ('camp', 'wood', 1, 'wood', 1, 1);
 
-INSERT OR IGNORE INTO items (id, display_name)
-VALUES ('wood_component', 'Wood Component');
+INSERT OR IGNORE INTO items (id, display_name, weight_units)
+VALUES ('wood_component', 'Wood Component', 10);
 
 INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
 VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
@@ -654,13 +658,15 @@ Existing Building recipes and rows gain a seven-day maximum durability snapshot.
 
 Existing databases gain empty `ground_items` and `ground_resources` tables through idempotent Store initialization. Existing player Inventory and Resource quantities remain unchanged.
 
+既有資料庫若缺少 `weight_units`，Store 會在 `items` 與 `resource_types` 加入正整數欄位。既有 Item 與 Resource quantity 保持不變。Wood Item 設為 100，Wood Component 設為 10，所有 Resource type 設為 1。
+
 既有資料庫若缺少 durability columns，`ensureBuildingSchema` 依序執行 `ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)`、`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)` 與 `ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`。接著以 migration 當下的 UTC Unix seconds `migration_now` 執行 `UPDATE buildings SET durability_expires_at = migration_now + max_durability_seconds WHERE status = 'completed' AND durability_expires_at IS NULL`。施工中的 Building 不會被 backfill expiry。
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
 升級 legacy schema 時，系統捨棄單一 generic Resource balance，重建 typed `player_resources` 與 `conversion_rules`。升級不保留舊 balance。
 
-`move` transaction 會依玩家目前位置查找 target Route。Route 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
+`move` transaction 會依玩家目前位置查找 target Route，並從 Item 與 Resource definition 的 `weight_units` 乘以玩家 quantity，推導目前攜帶重量。重量超過 1000、Route 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
 
 `gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並以 upsert 累加 `player_inventory.quantity`。兩項更新必須在同一 transaction commit。
 
