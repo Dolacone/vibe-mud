@@ -1,6 +1,6 @@
 ---
 title: "Compact table interface"
-status: Reviewed
+status: Refactored
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
@@ -67,7 +67,7 @@ Task 1 [parallel: no]
 
 ## Review Issues
 
-- [ ] [Minor] Add `docs/architecture.md` to `source_paths`; `main...HEAD` modifies this implementation document, but the metadata omits it.
+- [x] [Minor] Add `docs/architecture.md` to `source_paths`; `main...HEAD` modifies this implementation document, but the metadata omits it.
 - [ ] [Minor] Add a test with multiple routes, recipes, or Buildings that asserts distinct accessible control names; the resolved plan issue requires coverage when multiple rows expose the same Action, while current tests only exercise one row per Action type.
 
 ## Plan Review Issues
