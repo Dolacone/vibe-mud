@@ -1,6 +1,6 @@
 ---
 title: "Item durability and expired retention"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -163,6 +163,8 @@ Task 1: durability schema and lifecycle [parallel: no]
 - [x] Task 6 does not migrate existing Expired Item deletion deadlines from the former seven-day retention to one day. Resolved because the production migration source has no Expired Item rows. The seven-day Item retention existed only in unreleased intermediate commits.
 
 ## Review Issues
+
+Re-review on 2026-08-29 verified every checked issue against the `main` diff. The fixed-clock regression test passed 100 uncached consecutive runs. The unchecked parser invariant remains Minor.
 
 - [x] [Major] `isGroundItems` rejects a valid Active and Expired pair because it requires unique Item IDs instead of unique `(item_id, durability_status)` keys. Any backend state with both ground stacks makes `getCurrentUser` and Transfer response parsing fail.
 - [x] [Major] Successful Pickup, Move, Convert, Craft, Build, construction contribution, and repair operations discard cleanup metadata from normalization. Expiry and deletion results triggered by those operations never reach `logItemDurability`, which violates the stdout computation-log contract.
