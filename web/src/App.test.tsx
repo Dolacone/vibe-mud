@@ -82,6 +82,8 @@ const campState = {
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
+  carried_weight: 0,
+  movement_weight_threshold: 1000,
   inventory: [],
   ground_items: [],
   ground_resources: [],
@@ -103,6 +105,8 @@ const forestState = {
   location: { id: "forest_edge", display_name: "Forest edge" },
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
+  carried_weight: 0,
+  movement_weight_threshold: 1000,
   inventory: [],
   ground_items: [],
   ground_resources: [],
@@ -149,7 +153,10 @@ describe("App", () => {
     }
     expect(screen.getAllByRole("table")).toHaveLength(12);
     expect(screen.getAllByRole("table").every((table) => table.parentElement?.classList.contains("table-scroll"))).toBe(true);
-    expect(screen.getByRole("table", { name: "Player summary" }).querySelectorAll('th[scope="row"]')).toHaveLength(5);
+    expect(screen.getByRole("table", { name: "Player summary" }).querySelectorAll('th[scope="row"]')).toHaveLength(7);
+    const summary = screen.getByRole("table", { name: "Player summary" });
+    expect(within(summary).getByRole("row", { name: /Carrying weight\s*0/ })).toBeInTheDocument();
+    expect(within(summary).getByRole("row", { name: /Movement weight threshold\s*1000/ })).toBeInTheDocument();
     for (const name of ["Actions", "Resources", "Available routes", "Gather", "Convert", "Craft", "Building recipes", "Buildings", "Ground Items", "Ground Resources", "Inventory"]) {
       const headers = screen.getByRole("table", { name }).querySelectorAll("thead th");
       expect(headers.length).toBeGreaterThan(0);
@@ -176,6 +183,26 @@ describe("App", () => {
     expect(screen.getByRole("table", { name: "Ground Items" })).toHaveTextContent("Ground items are empty.");
     expect(screen.getByRole("table", { name: "Ground Resources" })).toHaveTextContent("Ground resources are empty.");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+  });
+
+  it("shows carrying weight and threshold so players can judge movement availability", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1000 } });
+    render(<App />);
+
+    const summary = await screen.findByRole("table", { name: "Player summary" });
+    expect(within(summary).getByRole("row", { name: /Carrying weight\s*1000/ })).toBeInTheDocument();
+    expect(within(summary).getByRole("row", { name: /Movement weight threshold\s*1000/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
+    expect(screen.queryByRole("alert", { name: "Cannot move while overweight." })).not.toBeInTheDocument();
+  });
+
+  it("blocks route controls while overweight so players cannot start a move the backend must reject", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1001 } });
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Cannot move while overweight.");
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeDisabled();
+    expect(move).not.toHaveBeenCalled();
   });
 
   it("renders public ground items and resources with pickup controls", async () => {
@@ -618,6 +645,8 @@ describe("App", () => {
       location: { id: "forest_edge", display_name: "Forest edge" },
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
+      carried_weight: 0,
+      movement_weight_threshold: 1000,
       inventory: [],
       ground_items: [],
       ground_resources: [],
@@ -672,6 +701,8 @@ describe("App", () => {
       location: { id: "forest_edge", display_name: "Forest edge" },
       routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
+      carried_weight: 0,
+      movement_weight_threshold: 1000,
       inventory: [],
       ground_items: [],
       ground_resources: [],

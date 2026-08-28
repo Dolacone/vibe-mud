@@ -101,6 +101,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   };
 
   const actionPendingNow = action.status === "pending";
+  const isOverweight = currentUser.carried_weight > currentUser.movement_weight_threshold;
 
   return (
     <>
@@ -114,6 +115,8 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
               <tr><th scope="row">Display name</th><td>{currentUser.display_name}</td></tr>
               <tr><th scope="row">Email</th><td>{currentUser.email}</td></tr>
               <tr><th scope="row">AP</th><td>{currentUser.ap}</td></tr>
+              <tr><th scope="row">Carrying weight</th><td>{currentUser.carried_weight}</td></tr>
+              <tr><th scope="row">Movement weight threshold</th><td>{currentUser.movement_weight_threshold}</td></tr>
               <tr><th scope="row">Current location</th><td>{currentUser.location.display_name}</td></tr>
             </tbody>
           </table>
@@ -150,9 +153,10 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <TableScroll>
           <table aria-label="Available routes">
             <thead><tr><th scope="col">Destination</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.routes.length === 0 ? <EmptyRow colSpan={3}>No available routes.</EmptyRow> : currentUser.routes.map((route) => <tr key={`${route.origin_id}-${route.destination_id}`}><th scope="row">To {route.destination_id} ({route.ap_cost} AP)</th><td>{route.ap_cost} AP</td><td><button type="button" onClick={() => void handleMove(route.destination_id)} disabled={actionPendingNow}>{actionPendingNow && actionKind === "move" ? "Moving..." : `Move to ${route.destination_id}`}</button></td></tr>)}</tbody>
+            <tbody>{currentUser.routes.length === 0 ? <EmptyRow colSpan={3}>No available routes.</EmptyRow> : currentUser.routes.map((route) => <tr key={`${route.origin_id}-${route.destination_id}`}><th scope="row">To {route.destination_id} ({route.ap_cost} AP)</th><td>{route.ap_cost} AP</td><td><button type="button" onClick={() => void handleMove(route.destination_id)} disabled={actionPendingNow || isOverweight}>{actionPendingNow && actionKind === "move" ? "Moving..." : `Move to ${route.destination_id}`}</button></td></tr>)}</tbody>
           </table>
         </TableScroll>
+        {isOverweight && <p role="alert">Cannot move while overweight.</p>}
         {action.status === "success" && actionKind === "move" && (
           <p role="status">Move succeeded. Current location: {currentUser.location.display_name}</p>
         )}
