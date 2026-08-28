@@ -131,6 +131,11 @@ type buildResponse struct {
 	playerStateResponse
 }
 
+type repairBuildingResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
 type contributeConstructionResponse struct {
 	Error string `json:"error,omitempty"`
 	playerStateResponse
@@ -157,63 +162,75 @@ type craftingRecipeResponse struct {
 }
 
 const (
-	moveAction                      = "move"
-	moveReasonInvalidJSON           = "invalid_json"
-	moveReasonUnknownField          = "unknown_field"
-	moveReasonDuplicate             = "duplicate_field"
-	moveReasonExtraValue            = "extra_json_value"
-	moveReasonMissingTarget         = "missing_target"
-	moveReasonInvalidTarget         = "invalid_target"
-	moveReasonUnsupported           = "unsupported_action"
-	gatherAction                    = "gather"
-	gatherReasonInvalidJSON         = "invalid_json"
-	gatherReasonUnknownField        = "unknown_field"
-	gatherReasonDuplicate           = "duplicate_field"
-	gatherReasonExtraValue          = "extra_json_value"
-	gatherReasonInvalidLocation     = "invalid_location"
-	convertAction                   = "convert"
-	convertReasonInvalidJSON        = "invalid_json"
-	convertReasonUnknownField       = "unknown_field"
-	convertReasonDuplicate          = "duplicate_field"
-	convertReasonExtraValue         = "extra_json_value"
-	convertReasonInsufficientAP     = "insufficient_ap"
-	convertReasonInvalidLocation    = "invalid_location"
-	convertReasonInsufficientItem   = "insufficient_item"
-	craftAction                     = "craft"
-	craftReasonInvalidJSON          = "invalid_json"
-	craftReasonUnknownField         = "unknown_field"
-	craftReasonDuplicate            = "duplicate_field"
-	craftReasonExtraValue           = "extra_json_value"
-	craftReasonMissingRecipe        = "missing_recipe_id"
-	craftReasonInvalidRecipe        = "invalid_recipe_id"
-	craftReasonInsufficientAP       = "insufficient_ap"
-	craftReasonInsufficientResource = "insufficient_resource"
-	craftReasonInsufficientItem     = "insufficient_item"
-	craftReasonUnknownRecipe        = "unknown_recipe"
-	buildAction                     = "build"
-	buildReasonInvalidJSON          = "invalid_json"
-	buildReasonUnknownField         = "unknown_field"
-	buildReasonDuplicate            = "duplicate_field"
-	buildReasonExtraValue           = "extra_json_value"
-	buildReasonMissingRecipe        = "missing_recipe_id"
-	buildReasonInvalidRecipe        = "invalid_recipe_id"
-	buildReasonUnknownRecipe        = "unknown_recipe"
-	buildReasonInsufficientResource = "insufficient_resource"
-	buildReasonInsufficientItem     = "insufficient_item"
-	buildReasonOccupied             = "building_occupied"
-	contributeConstructionAction    = "contribute-construction"
-	contributeReasonInvalidJSON     = "invalid_json"
-	contributeReasonUnknownField    = "unknown_field"
-	contributeReasonDuplicate       = "duplicate_field"
-	contributeReasonExtraValue      = "extra_json_value"
-	contributeReasonMissingBuilding = "missing_building_id"
-	contributeReasonMissingAP       = "missing_ap"
-	contributeReasonInvalidBuilding = "invalid_building_id"
-	contributeReasonInvalidAP       = "invalid_ap"
-	contributeReasonUnknownBuilding = "unknown_building"
-	contributeReasonRemote          = "remote_building"
-	contributeReasonCompleted       = "completed_building"
-	contributeReasonInsufficientAP  = "insufficient_ap"
+	moveAction                       = "move"
+	moveReasonInvalidJSON            = "invalid_json"
+	moveReasonUnknownField           = "unknown_field"
+	moveReasonDuplicate              = "duplicate_field"
+	moveReasonExtraValue             = "extra_json_value"
+	moveReasonMissingTarget          = "missing_target"
+	moveReasonInvalidTarget          = "invalid_target"
+	moveReasonUnsupported            = "unsupported_action"
+	gatherAction                     = "gather"
+	gatherReasonInvalidJSON          = "invalid_json"
+	gatherReasonUnknownField         = "unknown_field"
+	gatherReasonDuplicate            = "duplicate_field"
+	gatherReasonExtraValue           = "extra_json_value"
+	gatherReasonInvalidLocation      = "invalid_location"
+	convertAction                    = "convert"
+	convertReasonInvalidJSON         = "invalid_json"
+	convertReasonUnknownField        = "unknown_field"
+	convertReasonDuplicate           = "duplicate_field"
+	convertReasonExtraValue          = "extra_json_value"
+	convertReasonInsufficientAP      = "insufficient_ap"
+	convertReasonInvalidLocation     = "invalid_location"
+	convertReasonInsufficientItem    = "insufficient_item"
+	craftAction                      = "craft"
+	craftReasonInvalidJSON           = "invalid_json"
+	craftReasonUnknownField          = "unknown_field"
+	craftReasonDuplicate             = "duplicate_field"
+	craftReasonExtraValue            = "extra_json_value"
+	craftReasonMissingRecipe         = "missing_recipe_id"
+	craftReasonInvalidRecipe         = "invalid_recipe_id"
+	craftReasonInsufficientAP        = "insufficient_ap"
+	craftReasonInsufficientResource  = "insufficient_resource"
+	craftReasonInsufficientItem      = "insufficient_item"
+	craftReasonUnknownRecipe         = "unknown_recipe"
+	buildAction                      = "build"
+	buildReasonInvalidJSON           = "invalid_json"
+	buildReasonUnknownField          = "unknown_field"
+	buildReasonDuplicate             = "duplicate_field"
+	buildReasonExtraValue            = "extra_json_value"
+	buildReasonMissingRecipe         = "missing_recipe_id"
+	buildReasonInvalidRecipe         = "invalid_recipe_id"
+	buildReasonUnknownRecipe         = "unknown_recipe"
+	buildReasonInsufficientResource  = "insufficient_resource"
+	buildReasonInsufficientItem      = "insufficient_item"
+	buildReasonOccupied              = "building_occupied"
+	contributeConstructionAction     = "contribute-construction"
+	contributeReasonInvalidJSON      = "invalid_json"
+	contributeReasonUnknownField     = "unknown_field"
+	contributeReasonDuplicate        = "duplicate_field"
+	contributeReasonExtraValue       = "extra_json_value"
+	contributeReasonMissingBuilding  = "missing_building_id"
+	contributeReasonMissingAP        = "missing_ap"
+	contributeReasonInvalidBuilding  = "invalid_building_id"
+	contributeReasonInvalidAP        = "invalid_ap"
+	contributeReasonUnknownBuilding  = "unknown_building"
+	contributeReasonRemote           = "remote_building"
+	contributeReasonCompleted        = "completed_building"
+	contributeReasonInsufficientAP   = "insufficient_ap"
+	repairBuildingAction             = "repair-building"
+	repairReasonInvalidJSON          = "invalid_json"
+	repairReasonUnknownField         = "unknown_field"
+	repairReasonDuplicate            = "duplicate_field"
+	repairReasonExtraValue           = "extra_json_value"
+	repairReasonMissingBuilding      = "missing_building_id"
+	repairReasonInvalidBuilding      = "invalid_building_id"
+	repairReasonUnknownBuilding      = "unknown_building"
+	repairReasonRemote               = "remote_building"
+	repairReasonUnderConstruction    = "under_construction"
+	repairReasonInsufficientAP       = "insufficient_ap"
+	repairReasonInsufficientResource = "insufficient_resource"
 )
 
 type Config struct {
@@ -283,6 +300,7 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Post("/api/actions/craft", s.craft)
 	r.Post("/api/actions/build", s.build)
 	r.Post("/api/actions/contribute-construction", s.contributeConstruction)
+	r.Post("/api/actions/repair-building", s.repairBuilding)
 	return r
 }
 
@@ -584,6 +602,68 @@ func (s *Server) writeBuildingState(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	s.writeJSON(w, status, buildResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
+}
+
+type repairBuildingRequest struct {
+	BuildingID int64
+}
+
+func (s *Server) repairBuilding(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodeRepairBuildingRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, repairBuildingAction, reason)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, err := s.store.RepairBuilding(session.UserID, request.BuildingID)
+	if errors.Is(err, ErrBuildingNotFound) {
+		s.logRejection(r, session.UserID, repairBuildingAction, repairReasonUnknownBuilding)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBuildingRemote) {
+		s.logRejection(r, session.UserID, repairBuildingAction, repairReasonRemote)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBuildingUnderConstruction) {
+		s.logRejection(r, session.UserID, repairBuildingAction, repairReasonUnderConstruction)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientAP) {
+		s.logRejection(r, session.UserID, repairBuildingAction, repairReasonInsufficientAP)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInsufficientResource) {
+		s.logRejection(r, session.UserID, repairBuildingAction, repairReasonInsufficientResource)
+		s.writeRepairBuildingState(w, r, session.UserID, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	if computation := state.RepairComputation; computation != nil {
+		s.logRepairComputation(r, session.UserID, computation)
+	}
+	s.logAction(r, session.UserID, repairBuildingAction, "success")
+	s.writeJSON(w, http.StatusOK, playerStateResponseFromStore(state))
+}
+
+func (s *Server) writeRepairBuildingState(w http.ResponseWriter, r *http.Request, userID int64, status int, message string) {
+	state, err := s.store.GetPlayerState(userID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.writeJSON(w, status, repairBuildingResponse{Error: message, playerStateResponse: playerStateResponseFromStore(state)})
 }
 
 type contributeConstructionRequest struct {
@@ -1038,6 +1118,56 @@ func decodeContributeConstructionRequest(body io.Reader) (contributeConstruction
 	return request, ""
 }
 
+func decodeRepairBuildingRequest(body io.Reader) (repairBuildingRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return repairBuildingRequest{}, repairReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return repairBuildingRequest{}, repairReasonInvalidJSON
+	}
+	var request repairBuildingRequest
+	seenBuilding := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return repairBuildingRequest{}, repairReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return repairBuildingRequest{}, repairReasonInvalidJSON
+		}
+		if field != "building_id" {
+			return repairBuildingRequest{}, repairReasonUnknownField
+		}
+		if seenBuilding {
+			return repairBuildingRequest{}, repairReasonDuplicate
+		}
+		seenBuilding = true
+		if err := decoder.Decode(&request.BuildingID); err != nil {
+			return repairBuildingRequest{}, repairReasonInvalidBuilding
+		}
+	}
+	if token, err = decoder.Token(); err != nil {
+		return repairBuildingRequest{}, repairReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return repairBuildingRequest{}, repairReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return repairBuildingRequest{}, repairReasonExtraValue
+	}
+	if !seenBuilding {
+		return repairBuildingRequest{}, repairReasonMissingBuilding
+	}
+	if request.BuildingID <= 0 {
+		return repairBuildingRequest{}, repairReasonInvalidBuilding
+	}
+	return request, ""
+}
+
 func decodeCraftRequest(body io.Reader) (craftRequest, string) {
 	decoder := json.NewDecoder(body)
 	token, err := decoder.Token()
@@ -1136,14 +1266,17 @@ type buildingRecipeResponse struct {
 }
 
 type buildingResponse struct {
-	ID                 int64                          `json:"id"`
-	Owner              buildingOwnerResponse          `json:"owner"`
-	Recipe             buildingRecipeIdentityResponse `json:"recipe"`
-	BuildingLevel      int                            `json:"building_level"`
-	RequiredAP         int                            `json:"required_ap"`
-	ContributedAP      int                            `json:"contributed_ap"`
-	Status             string                         `json:"status"`
-	ExtensionSlotCount int                            `json:"extension_slot_count"`
+	ID                         int64                          `json:"id"`
+	Owner                      buildingOwnerResponse          `json:"owner"`
+	Recipe                     buildingRecipeIdentityResponse `json:"recipe"`
+	BuildingLevel              int                            `json:"building_level"`
+	RequiredAP                 int                            `json:"required_ap"`
+	ContributedAP              int                            `json:"contributed_ap"`
+	Status                     string                         `json:"status"`
+	ExtensionSlotCount         int                            `json:"extension_slot_count"`
+	MaxDurabilitySeconds       int                            `json:"max_durability_seconds"`
+	DurabilityStatus           *string                        `json:"durability_status"`
+	DurabilityRemainingSeconds *int                           `json:"durability_remaining_seconds"`
 }
 
 type buildingOwnerResponse struct {
@@ -1199,7 +1332,7 @@ func buildingResponsesFromStore(buildings []Building) []buildingResponse {
 }
 
 func buildingResponseFromStore(building Building) buildingResponse {
-	return buildingResponse{
+	response := buildingResponse{
 		ID: building.ID,
 		Owner: buildingOwnerResponse{
 			ID:          building.Owner.ID,
@@ -1209,12 +1342,20 @@ func buildingResponseFromStore(building Building) buildingResponse {
 			ID:          building.Recipe.ID,
 			DisplayName: building.Recipe.DisplayName,
 		},
-		BuildingLevel:      building.BuildingLevel,
-		RequiredAP:         building.RequiredAP,
-		ContributedAP:      building.ContributedAP,
-		Status:             building.Status,
-		ExtensionSlotCount: building.ExtensionSlotCount,
+		BuildingLevel:        building.BuildingLevel,
+		RequiredAP:           building.RequiredAP,
+		ContributedAP:        building.ContributedAP,
+		Status:               building.Status,
+		ExtensionSlotCount:   building.ExtensionSlotCount,
+		MaxDurabilitySeconds: building.MaxDurabilitySeconds,
 	}
+	if building.DurabilityStatus != "" {
+		status := building.DurabilityStatus
+		remaining := building.DurabilityRemainingSeconds
+		response.DurabilityStatus = &status
+		response.DurabilityRemainingSeconds = &remaining
+	}
+	return response
 }
 
 func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipeResponse {
@@ -1376,6 +1517,8 @@ func accessLogAction(r *http.Request) string {
 			return "build"
 		case "/api/actions/contribute-construction":
 			return "contribute-construction"
+		case "/api/actions/repair-building":
+			return "repair-building"
 		default:
 			return "unknown"
 		}
@@ -1446,6 +1589,10 @@ func (s *Server) logComputation(r *http.Request, userID int64, action, outcome s
 
 func (s *Server) logConstructionComputation(r *http.Request, userID int64, computation *ConstructionComputation) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=success building_id=%d effective_ap=%d resulting_progress=%d/%d completion=%s request_id=%s\n", userID, contributeConstructionAction, computation.BuildingID, computation.EffectiveAP, computation.ResultingProgress, computation.RequiredAP, computation.CompletionOutcome, requestID(r))
+}
+
+func (s *Server) logRepairComputation(r *http.Request, userID int64, computation *RepairComputation) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=success building_id=%d prior_durability_status=%s added_seconds=%d resulting_remaining_seconds=%d ap_cost=%d wood_cost=%d request_id=%s\n", userID, repairBuildingAction, computation.BuildingID, computation.PriorDurabilityStatus, computation.AddedSeconds, computation.ResultingRemainingSeconds, computation.APCost, computation.WoodCost, requestID(r))
 }
 
 func canonicalOrigin(frontend *url.URL) (string, error) {

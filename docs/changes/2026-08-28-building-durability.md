@@ -7,6 +7,8 @@ last_reviewed: 2026-08-28
 source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
   - docs/schemas.md
 req_ref: REQ-011
 base_branch: main
@@ -75,7 +77,7 @@ Task 1: persistence and game rules
   - REQ-011.19: AP 或 Wood Resource 不足時，維修必須失敗。
   - REQ-011.20: 維修成功時，AP、Wood Resource 與 Building 耐久時間必須原子更新。
   - REQ-011.21: 維修失敗時，AP、Wood Resource 與 Building 耐久時間必須保持不變。
-- [ ] Task 2: Expose durability and repair through `internal/authapi/server.go`. Accept only `POST /api/actions/repair-building` with `{"building_id": <positive integer>}`. Return `max_durability_seconds` for every Building. Return nullable durability fields for construction, derived Active or Disabled fields for completed Buildings, and omit destroyed Buildings. Return HTTP 200 for success, HTTP 400 for invalid or missing targets, and HTTP 409 for remote, under-construction, or insufficient-cost failures. Every failure returns an error and authoritative player state. Add strict request validation and server tests. Log repair access with stable user ID, `action=repair-building`, outcome, and request ID. Log successful computation with Building ID, prior durability state, added seconds, resulting remaining seconds, AP cost, and Wood Resource cost. Never log request bodies or sensitive values. This task depends on Task 1 and blocks Task 3.
+- [x] Task 2: Expose durability and repair through `internal/authapi/server.go`. Accept only `POST /api/actions/repair-building` with `{"building_id": <positive integer>}`. Return `max_durability_seconds` for every Building. Return nullable durability fields for construction, derived Active or Disabled fields for completed Buildings, and omit destroyed Buildings. Return HTTP 200 for success, HTTP 400 for invalid or missing targets, and HTTP 409 for remote, under-construction, or insufficient-cost failures. Every failure returns an error and authoritative player state. Add strict request validation and server tests. Log repair access with stable user ID, `action=repair-building`, outcome, and request ID. Log successful computation with Building ID, prior durability state, added seconds, resulting remaining seconds, AP cost, and Wood Resource cost. Never log request bodies or sensitive values. This task depends on Task 1 and blocks Task 3.
   - REQ-011.3: 剩餘耐久時間大於 0 時，Building 必須顯示為 Active。
   - REQ-011.4: 玩家必須能看到 Building 的耐久狀態與剩餘耐久時間。
   - REQ-011.5: 剩餘耐久時間到達 0 時，Building 必須顯示為 Disabled。
