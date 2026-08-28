@@ -106,6 +106,8 @@ export type PlayerState = {
   location: Location;
   routes: Route[];
   ap: number;
+  carried_weight: number;
+  movement_weight_threshold: number;
   inventory: InventoryItem[];
   ground_items: GroundItem[];
   ground_resources: GroundResource[];
@@ -285,6 +287,10 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function isBuildingResourceInput(value: unknown): value is BuildingResourceInput {
   if (typeof value !== "object" || value === null) return false;
   const input = value as Record<string, unknown>;
@@ -444,6 +450,8 @@ function isPlayerState(value: unknown): value is PlayerState {
     routes.every(isRoute) &&
     routes.every((route) => route.origin_id === location.id) &&
     isAP(state.ap) &&
+    isNonNegativeInteger(state.carried_weight) &&
+    isPositiveInteger(state.movement_weight_threshold) &&
     Array.isArray(state.inventory) &&
     state.inventory.every(isInventoryItem) &&
     isGroundItems(state.ground_items) &&
@@ -565,6 +573,8 @@ export async function getCurrentUser(
         display_name: body.display_name,
         email: body.email,
         ap: body.ap,
+        carried_weight: body.carried_weight,
+        movement_weight_threshold: body.movement_weight_threshold,
         location: body.location,
         routes: body.routes,
         inventory: body.inventory,

@@ -13,6 +13,8 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
   - requirements/BEHAVIOR.md
   - requirements/REQ-014.md
 req_ref: REQ-014
@@ -70,7 +72,7 @@ Task 1: definition weights and movement rule [parallel: no]
   - REQ-014.4: 前端顯示後端回傳的目前攜帶重量與移動負重門檻。超重時必須顯示不能移動。
   - REQ-014.8: 如果玩家的目前重量大於 1000，Move 必須原子失敗。玩家的位置與 AP 都維持不變。
   - REQ-014.9: 後端必須將重量計算與 Move 拒絕結果寫入標準輸出。紀錄必須包含玩家 ID、操作、結果、request ID 與計算值。
-- [ ] Task 3 [parallel: no]: Parse and preserve authoritative `carried_weight` and `movement_weight_threshold` fields in `web/src/auth.ts`. Accept the planned overweight HTTP 409 response through the existing Move conflict path. Update client tests.
+- [x] Task 3 [parallel: no]: Parse and preserve authoritative `carried_weight` and `movement_weight_threshold` fields in `web/src/auth.ts`. Accept the planned overweight HTTP 409 response through the existing Move conflict path. Update client tests.
   - REQ-014.4: 前端顯示後端回傳的目前攜帶重量與移動負重門檻。超重時必須顯示不能移動。
 - [ ] Task 4 [parallel: no]: Display carrying weight and the movement threshold in the compact player summary in `web/src/App.tsx`. Show an overweight movement warning and disable route controls while overweight. Update interface tests.
   - REQ-014.4: 前端顯示後端回傳的目前攜帶重量與移動負重門檻。超重時必須顯示不能移動。
