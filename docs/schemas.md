@@ -466,7 +466,7 @@ CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
 
 ## buildings
 
-用途：保存玩家擁有的 Building、建立 Location、名稱快照與目前進度。
+用途：保存玩家擁有的 Building、建立 Location、名稱快照、施工進度與耐久期限。
 
 ```sql
 CREATE TABLE IF NOT EXISTS buildings (
