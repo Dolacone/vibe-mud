@@ -548,7 +548,7 @@ oauth_attempts          OAuth 完成前的獨立暫存狀態
 
 `NewStore` 在同一 transaction 內建立 table，加入 location 與 Route seed，再 backfill 玩家資料。任何步驟失敗時，transaction 會 rollback。
 
-Store 初始化會將既有 Unix nanoseconds 時間除以 `1000000000`。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session 與 player AP 時間。
+Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `1000000000` 轉為 Unix seconds。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session 與 player AP 時間。
 
 ```sql
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
