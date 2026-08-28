@@ -11,6 +11,8 @@ source_paths:
   - docs/changes/2026-08-29-item-durability.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
   - requirements/BEHAVIOR.md
   - requirements/REQ-011.md
   - requirements/REQ-013.md
@@ -106,7 +108,7 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.18: 相同持有位置的同種 Expired Item 可以合併為一個堆疊。
   - REQ-015.19: Expired 堆疊合併時，結果刪除時間必須採用所有來源中最晚的刪除時間。
   - REQ-015.20: Active Item 永遠不得與 Expired Item 合併。
-- [ ] Task 3 [parallel: no]: Expose durability stack fields, validate `item_status`, return authoritative expired-Pickup conflicts, and emit safe durability calculation and cleanup logs in `internal/authapi/server.go`. Update server tests.
+- [x] Task 3 [parallel: no]: Expose durability stack fields, validate `item_status`, return authoritative expired-Pickup conflicts, and emit safe durability calculation and cleanup logs in `internal/authapi/server.go`. Update server tests.
   - REQ-013.14: 玩家持有量或地面持有量不足，或玩家嘗試 Pickup 失效 Item 時，Transfer 必須失敗，且所有狀態保持不變。
   - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource。有效 Item 與 Resource 必須提供 Pickup。玩家持有的有效或失效 Item 與 Resource 必須提供 Drop。
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。

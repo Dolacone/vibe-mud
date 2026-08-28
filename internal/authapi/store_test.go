@@ -2152,13 +2152,13 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	if len(before.GroundItems) != 0 || len(before.GroundResources) != 0 {
 		t.Fatalf("initial ground holdings = %+v, want empty", before)
 	}
-	if _, err := store.Drop(identity.ID, "item", "wood", 3); err != nil {
+	if _, err := store.Drop(identity.ID, "item", "wood", 3, "active"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Drop(identity.ID, "resource", "wood", 4); err != nil {
+	if _, err := store.Drop(identity.ID, "resource", "wood", 4, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Drop(identity.ID, "item", "wood", 1); err != nil {
+	if _, err := store.Drop(identity.ID, "item", "wood", 1, "active"); err != nil {
 		t.Fatal(err)
 	}
 	afterDrop, err := store.GetPlayerState(identity.ID)
@@ -2218,14 +2218,14 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'camp' WHERE user_id = ?`, identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	picked, err := store.Pickup(identity.ID, "item", "wood", 4)
+	picked, err := store.Pickup(identity.ID, "item", "wood", 4, "active")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if picked.AP != before.AP || groundItemQuantity(picked, "wood") != 0 || inventoryQuantity(picked, "wood") != 5 {
 		t.Fatalf("pickup item state = %+v, want complete transfer without AP change", picked)
 	}
-	picked, err = store.Pickup(identity.ID, "resource", "wood", 4)
+	picked, err = store.Pickup(identity.ID, "resource", "wood", 4, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2279,9 +2279,17 @@ func TestGroundTransferRejectsInvalidOrInsufficientSourcesWithoutMutation(t *tes
 			var state PlayerState
 			var err error
 			if test.pickup {
-				state, err = store.Pickup(identity.ID, test.assetType, test.assetID, test.quantity)
+				status := ""
+				if test.assetType == "item" {
+					status = "active"
+				}
+				state, err = store.Pickup(identity.ID, test.assetType, test.assetID, test.quantity, status)
 			} else {
-				state, err = store.Drop(identity.ID, test.assetType, test.assetID, test.quantity)
+				status := ""
+				if test.assetType == "item" {
+					status = "active"
+				}
+				state, err = store.Drop(identity.ID, test.assetType, test.assetID, test.quantity, status)
 			}
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("transfer error = %v, want %v", err, test.wantErr)
@@ -2485,7 +2493,7 @@ func TestConcurrentGroundPickupCannotOverdraw(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			_, err := store.Pickup(identity.ID, "item", "wood", 1)
+			_, err := store.Pickup(identity.ID, "item", "wood", 1, "active")
 			results <- err
 		}()
 	}
@@ -2737,7 +2745,7 @@ func TestMoveRejectsOverweightAtomicallyAndDropCanRestoreMovement(t *testing.T) 
 	if after.Location.ID != "camp" || after.AP != maxAP || after.CarriedWeight != 1100 {
 		t.Fatalf("rejected overweight move state = %+v, want unchanged camp, AP, and weight", after)
 	}
-	if _, err := store.Drop(identity.ID, "item", "wood", 1); err != nil {
+	if _, err := store.Drop(identity.ID, "item", "wood", 1, "active"); err != nil {
 		t.Fatal(err)
 	}
 	ready, err := store.GetPlayerState(identity.ID)

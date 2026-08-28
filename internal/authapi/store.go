@@ -126,6 +126,24 @@ type GroundResource struct {
 	Quantity int
 }
 
+type ItemDurabilityComputation struct {
+	Holding                    string
+	ItemID                     string
+	Quantity                   int
+	DurabilityStatus           string
+	DurabilityRemainingSeconds *int
+	RetentionRemainingSeconds  *int
+}
+
+type ItemDurabilityCleanup struct {
+	Holding            string
+	ItemID             string
+	Quantity           int
+	Action             string
+	ExpiredAt          int64
+	RetentionExpiresAt int64
+}
+
 type CraftingResourceInput struct {
 	Resource ResourceType
 	Quantity int
@@ -194,22 +212,24 @@ type RepairComputation struct {
 }
 
 type PlayerState struct {
-	Location                Location
-	Routes                  []Route
-	AP                      int
-	Inventory               []InventoryItem
-	GroundItems             []GroundItem
-	GroundResources         []GroundResource
-	GatheringOption         *GatheringOption
-	ConversionOption        *ConversionOption
-	Resources               []PlayerResource
-	CraftingRecipes         []CraftingRecipe
-	BuildingRecipes         []BuildingRecipe
-	Buildings               []Building
-	ConstructionComputation *ConstructionComputation
-	RepairComputation       *RepairComputation
-	CarriedWeight           int
-	MovementWeightThreshold int
+	Location                   Location
+	Routes                     []Route
+	AP                         int
+	Inventory                  []InventoryItem
+	GroundItems                []GroundItem
+	GroundResources            []GroundResource
+	GatheringOption            *GatheringOption
+	ConversionOption           *ConversionOption
+	Resources                  []PlayerResource
+	CraftingRecipes            []CraftingRecipe
+	BuildingRecipes            []BuildingRecipe
+	Buildings                  []Building
+	ConstructionComputation    *ConstructionComputation
+	RepairComputation          *RepairComputation
+	CarriedWeight              int
+	MovementWeightThreshold    int
+	ItemDurabilityComputations []ItemDurabilityComputation `json:"-"`
+	ItemDurabilityCleanups     []ItemDurabilityCleanup     `json:"-"`
 }
 
 const (
@@ -858,14 +878,16 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0), MovementWeightThreshold: movementWeightThreshold}
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0), ItemDurabilityComputations: make([]ItemDurabilityComputation, 0), ItemDurabilityCleanups: make([]ItemDurabilityCleanup, 0), MovementWeightThreshold: movementWeightThreshold}
+	cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = cleanups
 	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
 		return PlayerState{}, err
 	}
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
 JOIN locations l ON l.id = pl.location_id
@@ -917,6 +939,7 @@ ORDER BY pi.item_id, pi.durability_status`, userID)
 		}
 		setItemDurability(&inventoryItem.DurabilityStatus, &inventoryItem.DurabilityRemainingSeconds, &inventoryItem.RetentionRemainingSeconds, expiresAt, now)
 		state.Inventory = append(state.Inventory, inventoryItem)
+		state.ItemDurabilityComputations = append(state.ItemDurabilityComputations, ItemDurabilityComputation{Holding: "inventory", ItemID: inventoryItem.Item.ID, Quantity: inventoryItem.Quantity, DurabilityStatus: inventoryItem.DurabilityStatus, DurabilityRemainingSeconds: inventoryItem.DurabilityRemainingSeconds, RetentionRemainingSeconds: inventoryItem.RetentionRemainingSeconds})
 	}
 	if err := inventoryRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read player inventory: %w", err)
@@ -968,6 +991,7 @@ ORDER BY gi.item_id, gi.durability_status`, state.Location.ID)
 		}
 		setItemDurability(&groundItem.DurabilityStatus, &groundItem.DurabilityRemainingSeconds, &groundItem.RetentionRemainingSeconds, expiresAt, now)
 		state.GroundItems = append(state.GroundItems, groundItem)
+		state.ItemDurabilityComputations = append(state.ItemDurabilityComputations, ItemDurabilityComputation{Holding: "ground", ItemID: groundItem.Item.ID, Quantity: groundItem.Quantity, DurabilityStatus: groundItem.DurabilityStatus, DurabilityRemainingSeconds: groundItem.DurabilityRemainingSeconds, RetentionRemainingSeconds: groundItem.RetentionRemainingSeconds})
 	}
 	if err := groundItemRows.Err(); err != nil {
 		return PlayerState{}, fmt.Errorf("read ground items: %w", err)
@@ -1112,32 +1136,44 @@ SELECT COALESCE((SELECT SUM(pi.quantity * i.weight_units)
 }
 
 func normalizeItemHoldingsTx(tx *sql.Tx, now time.Time) error {
+	_, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	return err
+}
+
+func normalizeItemHoldingsWithMetadataTx(tx *sql.Tx, now time.Time) ([]ItemDurabilityCleanup, error) {
 	if _, err := tx.Exec(`
 UPDATE player_inventory
 SET status_expires_at = (SELECT ? + i.max_durability_seconds FROM items i WHERE i.id = player_inventory.item_id)
 WHERE durability_status = 'active' AND status_expires_at = 0`, now.Unix()); err != nil {
-		return fmt.Errorf("initialize inventory item durability: %w", err)
+		return nil, fmt.Errorf("initialize inventory item durability: %w", err)
 	}
 	if _, err := tx.Exec(`
 UPDATE ground_items
 SET status_expires_at = (SELECT ? + i.max_durability_seconds FROM items i WHERE i.id = ground_items.item_id)
 WHERE durability_status = 'active' AND status_expires_at = 0`, now.Unix()); err != nil {
-		return fmt.Errorf("initialize ground item durability: %w", err)
+		return nil, fmt.Errorf("initialize ground item durability: %w", err)
 	}
-	if err := expireItemHoldingTableTx(tx, "player_inventory", "user_id", now); err != nil {
-		return err
+	cleanups := make([]ItemDurabilityCleanup, 0)
+	for _, holding := range []struct {
+		table, scope, name string
+	}{
+		{table: "player_inventory", scope: "user_id", name: "inventory"},
+		{table: "ground_items", scope: "location_id", name: "ground"},
+	} {
+		events, err := expireItemHoldingTableWithMetadataTx(tx, holding.table, holding.scope, holding.name, now)
+		if err != nil {
+			return nil, err
+		}
+		cleanups = append(cleanups, events...)
 	}
-	if err := expireItemHoldingTableTx(tx, "ground_items", "location_id", now); err != nil {
-		return err
-	}
-	return nil
+	return cleanups, nil
 }
 
-func expireItemHoldingTableTx(tx *sql.Tx, table, scopeColumn string, now time.Time) error {
+func expireItemHoldingTableWithMetadataTx(tx *sql.Tx, table, scopeColumn, holdingName string, now time.Time) ([]ItemDurabilityCleanup, error) {
 	query := fmt.Sprintf(`SELECT %s, item_id, quantity, status_expires_at FROM %s WHERE durability_status = 'active' AND status_expires_at <= ?`, scopeColumn, table)
 	rows, err := tx.Query(query, now.Unix())
 	if err != nil {
-		return fmt.Errorf("find expired %s: %w", table, err)
+		return nil, fmt.Errorf("find expired %s: %w", table, err)
 	}
 	type expiredHolding struct {
 		scope, itemID string
@@ -1149,17 +1185,18 @@ func expireItemHoldingTableTx(tx *sql.Tx, table, scopeColumn string, now time.Ti
 		var holding expiredHolding
 		if err := rows.Scan(&holding.scope, &holding.itemID, &holding.quantity, &holding.expiresAt); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("scan expired %s: %w", table, err)
+			return nil, fmt.Errorf("scan expired %s: %w", table, err)
 		}
 		holdings = append(holdings, holding)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("read expired %s: %w", table, err)
+		return nil, fmt.Errorf("read expired %s: %w", table, err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close expired %s: %w", table, err)
+		return nil, fmt.Errorf("close expired %s: %w", table, err)
 	}
+	cleanups := make([]ItemDurabilityCleanup, 0, len(holdings))
 	for _, holding := range holdings {
 		insertQuery := fmt.Sprintf(`
 INSERT INTO %s (%s, item_id, durability_status, status_expires_at, quantity)
@@ -1168,18 +1205,51 @@ ON CONFLICT (%s, item_id, durability_status) DO UPDATE SET
 quantity = %s.quantity + excluded.quantity,
 status_expires_at = MAX(%s.status_expires_at, excluded.status_expires_at)`, table, scopeColumn, scopeColumn, table, table)
 		if _, err := tx.Exec(insertQuery, holding.scope, holding.itemID, holding.expiresAt+int64(itemExpiredRetention/time.Second), holding.quantity); err != nil {
-			return fmt.Errorf("merge expired %s: %w", table, err)
+			return nil, fmt.Errorf("merge expired %s: %w", table, err)
 		}
 		deleteQuery := fmt.Sprintf(`DELETE FROM %s WHERE %s = ? AND item_id = ? AND durability_status = 'active'`, table, scopeColumn)
 		if _, err := tx.Exec(deleteQuery, holding.scope, holding.itemID); err != nil {
-			return fmt.Errorf("remove active %s: %w", table, err)
+			return nil, fmt.Errorf("remove active %s: %w", table, err)
 		}
+		if holdingName != "" {
+			cleanups = append(cleanups, ItemDurabilityCleanup{Holding: holdingName, ItemID: holding.itemID, Quantity: holding.quantity, Action: "expired", ExpiredAt: holding.expiresAt, RetentionExpiresAt: holding.expiresAt + int64(itemExpiredRetention/time.Second)})
+		}
+	}
+	cleanupRows, err := tx.Query(fmt.Sprintf(`SELECT item_id, quantity, status_expires_at FROM %s WHERE durability_status = 'expired' AND status_expires_at <= ?`, table), now.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("find retained %s: %w", table, err)
+	}
+	type retainedHolding struct {
+		itemID    string
+		quantity  int
+		expiresAt int64
+	}
+	retained := make([]retainedHolding, 0)
+	for cleanupRows.Next() {
+		var holding retainedHolding
+		if err := cleanupRows.Scan(&holding.itemID, &holding.quantity, &holding.expiresAt); err != nil {
+			_ = cleanupRows.Close()
+			return nil, fmt.Errorf("scan retained %s: %w", table, err)
+		}
+		retained = append(retained, holding)
+	}
+	if err := cleanupRows.Err(); err != nil {
+		_ = cleanupRows.Close()
+		return nil, fmt.Errorf("read retained %s: %w", table, err)
+	}
+	if err := cleanupRows.Close(); err != nil {
+		return nil, fmt.Errorf("close retained %s: %w", table, err)
 	}
 	cleanupQuery := fmt.Sprintf(`DELETE FROM %s WHERE durability_status = 'expired' AND status_expires_at <= ?`, table)
 	if _, err := tx.Exec(cleanupQuery, now.Unix()); err != nil {
-		return fmt.Errorf("delete retained %s: %w", table, err)
+		return nil, fmt.Errorf("delete retained %s: %w", table, err)
 	}
-	return nil
+	if holdingName != "" {
+		for _, holding := range retained {
+			cleanups = append(cleanups, ItemDurabilityCleanup{Holding: holdingName, ItemID: holding.itemID, Quantity: holding.quantity, Action: "deleted", RetentionExpiresAt: holding.expiresAt})
+		}
+	}
+	return cleanups, nil
 }
 
 func setItemDurability(status *string, durabilityRemaining, retentionRemaining **int, expiresAt int64, now time.Time) {
@@ -1362,7 +1432,8 @@ func (s *Store) Gather(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin gather: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -1436,13 +1507,14 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit gather: %w", err)
 	}
 	return state, nil
 }
 
-func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, itemStatus ...string) (PlayerState, error) {
+func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, itemStatus string) (PlayerState, error) {
 	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
 		return PlayerState{}, err
 	}
@@ -1455,7 +1527,8 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 		return PlayerState{}, fmt.Errorf("begin drop: %w", err)
 	}
 	now := s.now().UTC()
-	if err := normalizeItemHoldingsTx(tx, now); err != nil {
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
@@ -1508,13 +1581,14 @@ ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	state.ItemDurabilityCleanups = append(cleanupEvents, state.ItemDurabilityCleanups...)
 	if err := tx.Commit(); err != nil {
 		return PlayerState{}, fmt.Errorf("commit drop: %w", err)
 	}
 	return state, nil
 }
 
-func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int, itemStatus ...string) (PlayerState, error) {
+func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int, itemStatus string) (PlayerState, error) {
 	if err := validateTransfer(userID, assetType, assetID, quantity); err != nil {
 		return PlayerState{}, err
 	}
@@ -1589,20 +1663,14 @@ ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.qua
 	return state, nil
 }
 
-func transferItemStatus(assetType string, itemStatus []string) (string, error) {
+func transferItemStatus(assetType, itemStatus string) (string, error) {
 	if assetType == "resource" {
-		if len(itemStatus) > 0 {
+		if itemStatus != "" {
 			return "", fmt.Errorf("%w: resources do not accept item status", ErrInvalidArgument)
 		}
 		return "", nil
 	}
-	if len(itemStatus) > 1 {
-		return "", fmt.Errorf("%w: one item status is required", ErrInvalidArgument)
-	}
-	status := "active"
-	if len(itemStatus) == 1 {
-		status = itemStatus[0]
-	}
+	status := itemStatus
 	if status != "active" && status != "expired" {
 		return "", fmt.Errorf("%w: item status must be active or expired", ErrInvalidArgument)
 	}

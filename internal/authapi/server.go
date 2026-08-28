@@ -96,13 +96,19 @@ type itemResponse struct {
 }
 
 type inventoryItemResponse struct {
-	Item     itemResponse `json:"item"`
-	Quantity int          `json:"quantity"`
+	Item                       itemResponse `json:"item"`
+	Quantity                   int          `json:"quantity"`
+	DurabilityStatus           string       `json:"durability_status"`
+	DurabilityRemainingSeconds *int         `json:"durability_remaining_seconds"`
+	RetentionRemainingSeconds  *int         `json:"retention_remaining_seconds"`
 }
 
 type groundItemResponse struct {
-	Item     itemResponse `json:"item"`
-	Quantity int          `json:"quantity"`
+	Item                       itemResponse `json:"item"`
+	Quantity                   int          `json:"quantity"`
+	DurabilityStatus           string       `json:"durability_status"`
+	DurabilityRemainingSeconds *int         `json:"durability_remaining_seconds"`
+	RetentionRemainingSeconds  *int         `json:"retention_remaining_seconds"`
 }
 
 type groundResourceResponse struct {
@@ -172,18 +178,22 @@ type craftingRecipeResponse struct {
 }
 
 const (
-	transferDropOperation          = "drop"
-	transferPickupOperation        = "pickup"
-	transferReasonInvalidJSON      = "invalid_json"
-	transferReasonUnknownField     = "unknown_field"
-	transferReasonDuplicate        = "duplicate_field"
-	transferReasonExtraValue       = "extra_json_value"
-	transferReasonMissingAssetType = "missing_asset_type"
-	transferReasonInvalidAssetType = "invalid_asset_type"
-	transferReasonMissingAssetID   = "missing_asset_id"
-	transferReasonInvalidAssetID   = "invalid_asset_id"
-	transferReasonMissingQuantity  = "missing_quantity"
-	transferReasonInvalidQuantity  = "invalid_quantity"
+	transferDropOperation            = "drop"
+	transferPickupOperation          = "pickup"
+	transferReasonInvalidJSON        = "invalid_json"
+	transferReasonUnknownField       = "unknown_field"
+	transferReasonDuplicate          = "duplicate_field"
+	transferReasonExtraValue         = "extra_json_value"
+	transferReasonMissingAssetType   = "missing_asset_type"
+	transferReasonInvalidAssetType   = "invalid_asset_type"
+	transferReasonMissingAssetID     = "missing_asset_id"
+	transferReasonInvalidAssetID     = "invalid_asset_id"
+	transferReasonMissingQuantity    = "missing_quantity"
+	transferReasonInvalidQuantity    = "invalid_quantity"
+	transferReasonMissingItemStatus  = "missing_item_status"
+	transferReasonInvalidItemStatus  = "invalid_item_status"
+	transferReasonResourceItemStatus = "resource_item_status_not_allowed"
+	transferReasonExpiredItem        = "expired_item"
 
 	moveAction                       = "move"
 	moveReasonInvalidJSON            = "invalid_json"
@@ -451,6 +461,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
 	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
+	s.logItemDurability(r, fmt.Sprintf("%d", identity.ID), state)
 	response := currentUserResponse{
 		ID:                  identity.ID,
 		DisplayName:         identity.DisplayName,
@@ -677,9 +688,10 @@ func (s *Server) repairBuilding(w http.ResponseWriter, r *http.Request) {
 }
 
 type transferRequest struct {
-	AssetType string
-	AssetID   string
-	Quantity  int
+	AssetType  string
+	AssetID    string
+	Quantity   int
+	ItemStatus string
 }
 
 func (s *Server) drop(w http.ResponseWriter, r *http.Request) {
@@ -704,12 +716,20 @@ func (s *Server) transfer(w http.ResponseWriter, r *http.Request, operation stri
 
 	var state PlayerState
 	if pickup {
-		state, err = s.store.Pickup(session.UserID, request.AssetType, request.AssetID, request.Quantity)
+		if request.AssetType == "item" {
+			state, err = s.store.Pickup(session.UserID, request.AssetType, request.AssetID, request.Quantity, request.ItemStatus)
+		} else {
+			state, err = s.store.Pickup(session.UserID, request.AssetType, request.AssetID, request.Quantity, "")
+		}
 	} else {
-		state, err = s.store.Drop(session.UserID, request.AssetType, request.AssetID, request.Quantity)
+		if request.AssetType == "item" {
+			state, err = s.store.Drop(session.UserID, request.AssetType, request.AssetID, request.Quantity, request.ItemStatus)
+		} else {
+			state, err = s.store.Drop(session.UserID, request.AssetType, request.AssetID, request.Quantity, "")
+		}
 	}
 	if err == nil {
-		s.logTransfer(r, session.UserID, operation, state.Location.ID, request.AssetType, request.AssetID, request.Quantity, "success", "")
+		s.logTransfer(r, session.UserID, operation, state.Location.ID, request.AssetType, request.AssetID, request.Quantity, "success", "", request.ItemStatus)
 		s.writeJSON(w, http.StatusOK, transferResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
@@ -722,10 +742,14 @@ func (s *Server) transfer(w http.ResponseWriter, r *http.Request, operation stri
 		return
 	}
 	if errors.Is(err, ErrInsufficientTransferAsset) {
-		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusConflict, err.Error(), "insufficient_source")
+		reason := "insufficient_source"
+		if pickup && request.AssetType == "item" && request.ItemStatus == "expired" {
+			reason = transferReasonExpiredItem
+		}
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusConflict, err.Error(), reason)
 		return
 	}
-	s.logTransfer(r, session.UserID, operation, "unknown", request.AssetType, "unknown", request.Quantity, "error", "internal_error")
+	s.logTransfer(r, session.UserID, operation, "unknown", request.AssetType, "unknown", request.Quantity, "error", "internal_error", request.ItemStatus)
 	s.writeError(w, http.StatusInternalServerError, "transfer unavailable")
 }
 
@@ -736,10 +760,10 @@ func (s *Server) writeTransferState(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	assetID := request.AssetID
-	if reason == "unknown_asset" || reason == "invalid_argument" || strings.HasPrefix(reason, "invalid_") || strings.HasSuffix(reason, "_field") || reason == "extra_json_value" {
+	if reason == "unknown_asset" || reason == "invalid_argument" || strings.HasPrefix(reason, "invalid_") || strings.HasSuffix(reason, "_field") || reason == "extra_json_value" || reason == transferReasonMissingItemStatus || reason == transferReasonResourceItemStatus {
 		assetID = "unknown"
 	}
-	s.logTransfer(r, userID, operation, state.Location.ID, request.AssetType, assetID, request.Quantity, "error", reason)
+	s.logTransfer(r, userID, operation, state.Location.ID, request.AssetType, assetID, request.Quantity, "error", reason, request.ItemStatus)
 	s.writeJSON(w, status, transferResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
 }
 
@@ -1015,7 +1039,7 @@ func decodeTransferRequest(body io.Reader) (transferRequest, string) {
 		return transferRequest{}, transferReasonInvalidJSON
 	}
 	var request transferRequest
-	seenType, seenID, seenQuantity := false, false, false
+	seenType, seenID, seenQuantity, seenStatus := false, false, false, false
 	for decoder.More() {
 		key, err := decoder.Token()
 		if err != nil {
@@ -1049,6 +1073,14 @@ func decodeTransferRequest(body io.Reader) (transferRequest, string) {
 			seenQuantity = true
 			if err := decoder.Decode(&request.Quantity); err != nil {
 				return transferRequest{}, transferReasonInvalidQuantity
+			}
+		case "item_status":
+			if seenStatus {
+				return transferRequest{}, transferReasonDuplicate
+			}
+			seenStatus = true
+			if err := decoder.Decode(&request.ItemStatus); err != nil {
+				return transferRequest{}, transferReasonInvalidItemStatus
 			}
 		default:
 			var ignored json.RawMessage
@@ -1084,6 +1116,18 @@ func decodeTransferRequest(body io.Reader) (transferRequest, string) {
 	}
 	if request.Quantity <= 0 {
 		return transferRequest{}, transferReasonInvalidQuantity
+	}
+	if request.AssetType == "resource" {
+		if seenStatus {
+			return transferRequest{}, transferReasonResourceItemStatus
+		}
+	} else {
+		if !seenStatus {
+			return transferRequest{}, transferReasonMissingItemStatus
+		}
+		if request.ItemStatus != "active" && request.ItemStatus != "expired" {
+			return transferRequest{}, transferReasonInvalidItemStatus
+		}
 	}
 	return request, ""
 }
@@ -1432,16 +1476,14 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
 	s.logCarryingWeightComputation(r, userID, state)
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
+	s.logItemDurability(r, fmt.Sprintf("%d", userID), state)
 	return playerStateResponseFromStore(state)
 }
 
 func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
 	responses := make([]groundItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, groundItemResponse{
-			Item:     itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName},
-			Quantity: item.Quantity,
-		})
+		responses = append(responses, groundItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityRemainingSeconds: item.DurabilityRemainingSeconds, RetentionRemainingSeconds: item.RetentionRemainingSeconds})
 	}
 	return responses
 }
@@ -1600,7 +1642,7 @@ func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipe
 func inventoryResponsesFromStore(items []InventoryItem) []inventoryItemResponse {
 	responses := make([]inventoryItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity})
+		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityRemainingSeconds: item.DurabilityRemainingSeconds, RetentionRemainingSeconds: item.RetentionRemainingSeconds})
 	}
 	return responses
 }
@@ -1813,7 +1855,7 @@ func (s *Server) logWeightRejection(r *http.Request, userID int64, action, reaso
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=error reason=%s carried_weight=%d movement_weight_threshold=%d request_id=%s\n", userID, action, reason, state.CarriedWeight, state.MovementWeightThreshold, requestID(r))
 }
 
-func (s *Server) logTransfer(r *http.Request, userID int64, operation, locationID, assetType, assetID string, quantity int, outcome, reason string) {
+func (s *Server) logTransfer(r *http.Request, userID int64, operation, locationID, assetType, assetID string, quantity int, outcome, reason string, itemStatus ...string) {
 	assetID = sanitizeLogValue(assetID)
 	if locationID == "" {
 		locationID = "unknown"
@@ -1823,6 +1865,10 @@ func (s *Server) logTransfer(r *http.Request, userID int64, operation, locationI
 	}
 	if reason == "" {
 		reason = "none"
+	}
+	if assetType == "item" && len(itemStatus) == 1 {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=transfer-%s location_id=%s asset_type=%s asset_id=%s quantity=%d outcome=%s reason=%s request_id=%s item_status=%s\n", userID, operation, sanitizeLogValue(locationID), assetType, assetID, quantity, outcome, reason, requestID(r), sanitizeLogValue(itemStatus[0]))
+		return
 	}
 	fmt.Fprintf(os.Stdout, "user_id=%d action=transfer-%s location_id=%s asset_type=%s asset_id=%s quantity=%d outcome=%s reason=%s request_id=%s\n", userID, operation, sanitizeLogValue(locationID), assetType, assetID, quantity, outcome, reason, requestID(r))
 }
@@ -1854,6 +1900,23 @@ func (s *Server) logBuildingDurabilityComputation(r *http.Request, userID int64,
 			continue
 		}
 		fmt.Fprintf(os.Stdout, "user_id=%d action=building_durability_calculation outcome=success building_id=%d durability_status=%s remaining_seconds=%d request_id=%s\n", userID, building.ID, building.DurabilityStatus, building.DurabilityRemainingSeconds, requestID(r))
+	}
+}
+
+func (s *Server) logItemDurability(r *http.Request, userID string, state PlayerState) {
+	for _, computation := range state.ItemDurabilityComputations {
+		durabilityRemaining := "null"
+		if computation.DurabilityRemainingSeconds != nil {
+			durabilityRemaining = fmt.Sprintf("%d", *computation.DurabilityRemainingSeconds)
+		}
+		retentionRemaining := "null"
+		if computation.RetentionRemainingSeconds != nil {
+			retentionRemaining = fmt.Sprintf("%d", *computation.RetentionRemainingSeconds)
+		}
+		fmt.Fprintf(os.Stdout, "user_id=%s action=item_durability_calculation outcome=success holding=%s item_id=%s quantity=%d durability_status=%s durability_remaining_seconds=%s retention_remaining_seconds=%s request_id=%s\n", userID, sanitizeLogValue(computation.Holding), sanitizeLogValue(computation.ItemID), computation.Quantity, sanitizeLogValue(computation.DurabilityStatus), durabilityRemaining, retentionRemaining, requestID(r))
+	}
+	for _, cleanup := range state.ItemDurabilityCleanups {
+		fmt.Fprintf(os.Stdout, "user_id=%s action=item_durability_cleanup outcome=success holding=%s item_id=%s quantity=%d cleanup_action=%s expired_at=%d retention_expires_at=%d request_id=%s\n", userID, sanitizeLogValue(cleanup.Holding), sanitizeLogValue(cleanup.ItemID), cleanup.Quantity, sanitizeLogValue(cleanup.Action), cleanup.ExpiredAt, cleanup.RetentionExpiresAt, requestID(r))
 	}
 }
 
