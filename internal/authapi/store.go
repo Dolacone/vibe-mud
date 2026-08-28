@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -173,8 +174,10 @@ type PlayerState struct {
 }
 
 const (
-	maxAP          = 3000
-	apRecoveryTime = time.Minute
+	maxAP                    = 3000
+	apRecoveryTime           = time.Minute
+	unixNanosecondsThreshold = int64(1_000_000_000_000_000)
+	nanosecondsPerSecond     = int64(time.Second)
 )
 
 func NewStore(db *sql.DB) (*Store, error) {
@@ -321,6 +324,11 @@ CREATE TABLE IF NOT EXISTS buildings (
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
 	}
+	migratedTimestampValues, err := migrateTimestampsToUnixSeconds(tx)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("migrate timestamps to Unix seconds: %w", err)
+	}
 	if err := ensureBuildingSchema(tx); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("upgrade building schema: %w", err)
@@ -375,7 +383,7 @@ INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, q
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
-SELECT id, ? FROM identities`, time.Now().UTC().UnixNano()); err != nil {
+SELECT id, ? FROM identities`, time.Now().UTC().Unix()); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player AP: %w", err)
 	}
@@ -388,7 +396,44 @@ SELECT id, 'camp' FROM identities`); err != nil {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
+	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
 	return &Store{db: db, now: time.Now}, nil
+}
+
+func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
+	timestampColumns := []struct {
+		table  string
+		column string
+	}{
+		{table: "identities", column: "created_at"},
+		{table: "identities", column: "updated_at"},
+		{table: "oauth_attempts", column: "expires_at"},
+		{table: "oauth_attempts", column: "consumed_at"},
+		{table: "sessions", column: "expires_at"},
+		{table: "sessions", column: "created_at"},
+		{table: "player_ap", column: "full_timestamp"},
+	}
+	var convertedValues int64
+	for _, timestampColumn := range timestampColumns {
+		query := fmt.Sprintf(
+			"UPDATE %s SET %s = %s / ? WHERE %s >= ? OR %s <= -?",
+			timestampColumn.table,
+			timestampColumn.column,
+			timestampColumn.column,
+			timestampColumn.column,
+			timestampColumn.column,
+		)
+		result, err := tx.Exec(query, nanosecondsPerSecond, unixNanosecondsThreshold, unixNanosecondsThreshold)
+		if err != nil {
+			return 0, fmt.Errorf("convert %s.%s: %w", timestampColumn.table, timestampColumn.column, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("count converted %s.%s: %w", timestampColumn.table, timestampColumn.column, err)
+		}
+		convertedValues += rows
+	}
+	return convertedValues, nil
 }
 
 func ensureTypedResourceSchema(tx *sql.Tx) error {
@@ -489,7 +534,7 @@ func (s *Store) UpsertIdentity(issuer, subject, email, displayName string) (Iden
 	if strings.TrimSpace(issuer) == "" || strings.TrimSpace(subject) == "" {
 		return Identity{}, fmt.Errorf("%w: issuer and subject are required", ErrInvalidArgument)
 	}
-	now := s.now().UTC().UnixNano()
+	now := s.now().UTC().Unix()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Identity{}, fmt.Errorf("begin upsert identity: %w", err)
@@ -525,8 +570,8 @@ ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
 	}
-	identity.CreatedAt = unixNano(createdAt)
-	identity.UpdatedAt = unixNano(updatedAt)
+	identity.CreatedAt = unixSeconds(createdAt)
+	identity.UpdatedAt = unixSeconds(updatedAt)
 	return identity, nil
 }
 
@@ -542,7 +587,7 @@ func (s *Store) GetAP(userID int64) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("get player AP: %w", err)
 	}
-	return calculateAP(unixNano(fullTimestamp), s.now().UTC()), nil
+	return calculateAP(unixSeconds(fullTimestamp), s.now().UTC()), nil
 }
 
 func (s *Store) Rest(userID int64) (int, error) {
@@ -564,15 +609,15 @@ func (s *Store) Rest(userID int64) (int, error) {
 		return 0, fmt.Errorf("get player AP for rest: %w", err)
 	}
 	now := s.now().UTC()
-	if calculateAP(unixNano(fullTimestamp), now) == 0 {
+	if calculateAP(unixSeconds(fullTimestamp), now) == 0 {
 		_ = tx.Rollback()
 		return 0, ErrInsufficientAP
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(apRecoveryTime).UnixNano()
+	nextFullTimestamp := fullAt.Add(apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -592,7 +637,7 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit rest player: %w", err)
 	}
-	return calculateAP(unixNano(nextFullTimestamp), now), nil
+	return calculateAP(unixSeconds(nextFullTimestamp), now), nil
 }
 
 func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
@@ -678,7 +723,7 @@ ORDER BY pi.item_id`, userID)
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
 	}
-	state.AP = calculateAP(unixNano(fullTimestamp), now)
+	state.AP = calculateAP(unixSeconds(fullTimestamp), now)
 	resourceRows, err := tx.Query(`
 SELECT rt.id, rt.display_name, COALESCE(pr.quantity, 0)
 FROM resource_types rt
@@ -969,15 +1014,15 @@ WHERE gr.location_id = ?`, locationID).Scan(
 		return PlayerState{}, fmt.Errorf("get player AP for gather: %w", err)
 	}
 	now := s.now().UTC()
-	if calculateAP(unixNano(fullTimestamp), now) < option.APCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < option.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).UnixNano()
+	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -1058,15 +1103,15 @@ WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.Ori
 		return PlayerState{}, fmt.Errorf("get player AP for move: %w", err)
 	}
 	now := s.now().UTC()
-	if calculateAP(unixNano(fullTimestamp), now) < route.APCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < route.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(time.Duration(route.APCost) * apRecoveryTime).UnixNano()
+	nextFullTimestamp := fullAt.Add(time.Duration(route.APCost) * apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -1158,15 +1203,15 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("get conversion item: %w", err)
 	}
 	now := s.now().UTC()
-	if calculateAP(unixNano(fullTimestamp), now) < option.APCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < option.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).UnixNano()
+	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -1239,7 +1284,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("get player AP for craft: %w", err)
 	}
 	now := s.now().UTC()
-	if calculateAP(unixNano(fullTimestamp), now) < recipe.BaseAPCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < recipe.BaseAPCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
@@ -1269,11 +1314,11 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		}
 		itemQuantities[input.Item.ID] = quantity
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(recipe.BaseAPCost)*apRecoveryTime).UnixNano(), userID, fullTimestamp)
+	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(recipe.BaseAPCost)*apRecoveryTime).Unix(), userID, fullTimestamp)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("consume AP for craft: %w", err)
@@ -1512,7 +1557,7 @@ FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP
 		return PlayerState{}, fmt.Errorf("get contributor AP: %w", err)
 	}
 	now := s.now().UTC()
-	availableAP := calculateAP(unixNano(fullTimestamp), now)
+	availableAP := calculateAP(unixSeconds(fullTimestamp), now)
 	remainingAP := requiredAP - contributedAP
 	actualAP := requestedAP
 	if actualAP > remainingAP {
@@ -1522,13 +1567,13 @@ FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	fullAt := unixNano(fullTimestamp)
+	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
 		fullAt = now
 	}
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
-WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).UnixNano(), userID, fullTimestamp)
+WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("consume construction AP: %w", err)
@@ -1624,8 +1669,8 @@ FROM identities WHERE id = ?`, id).Scan(
 	if err != nil {
 		return Identity{}, fmt.Errorf("get identity: %w", err)
 	}
-	identity.CreatedAt = unixNano(createdAt)
-	identity.UpdatedAt = unixNano(updatedAt)
+	identity.CreatedAt = unixSeconds(createdAt)
+	identity.UpdatedAt = unixSeconds(updatedAt)
 	return identity, nil
 }
 
@@ -1639,7 +1684,7 @@ func (s *Store) CreateOAuthAttempt(state, nonce, verifier string, expiresAt time
 	}
 	_, err := s.db.Exec(`
 INSERT INTO oauth_attempts (state_hash, browser_token_hash, nonce, verifier, expires_at)
-VALUES (?, ?, ?, ?, ?)`, hashSecret(state), browserHash, nonce, verifier, expiresAt.UTC().UnixNano())
+VALUES (?, ?, ?, ?, ?)`, hashSecret(state), browserHash, nonce, verifier, expiresAt.UTC().Unix())
 	if err != nil {
 		return fmt.Errorf("create oauth attempt: %w", err)
 	}
@@ -1651,7 +1696,7 @@ func (s *Store) ConsumeOAuthAttempt(state string, browserToken ...string) (OAuth
 		return OAuthAttempt{}, fmt.Errorf("%w: state is required", ErrInvalidArgument)
 	}
 	now := s.now().UTC()
-	nowNanos := now.UnixNano()
+	nowSeconds := now.Unix()
 	var browserHash any
 	bound := len(browserToken) > 0
 	boundFlag := 0
@@ -1668,7 +1713,7 @@ func (s *Store) ConsumeOAuthAttempt(state string, browserToken ...string) (OAuth
 	err = tx.QueryRow(`
 	SELECT nonce, verifier, expires_at FROM oauth_attempts
 	WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-		AND (? = 0 OR browser_token_hash = ?)`, hashSecret(state), nowNanos, boundFlag, browserHash).Scan(
+		AND (? = 0 OR browser_token_hash = ?)`, hashSecret(state), nowSeconds, boundFlag, browserHash).Scan(
 		&attempt.Nonce, &attempt.Verifier, &expiresAt,
 	)
 	if err == nil {
@@ -1676,7 +1721,7 @@ func (s *Store) ConsumeOAuthAttempt(state string, browserToken ...string) (OAuth
 UPDATE oauth_attempts
 SET nonce = '', verifier = '', consumed_at = ?
 WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-			AND (? = 0 OR browser_token_hash = ?)`, nowNanos, hashSecret(state), nowNanos, boundFlag, browserHash)
+			AND (? = 0 OR browser_token_hash = ?)`, nowSeconds, hashSecret(state), nowSeconds, boundFlag, browserHash)
 		if updateErr != nil {
 			_ = tx.Rollback()
 			return OAuthAttempt{}, fmt.Errorf("consume oauth attempt: %w", updateErr)
@@ -1693,7 +1738,7 @@ WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
 		if err = tx.Commit(); err != nil {
 			return OAuthAttempt{}, fmt.Errorf("commit oauth attempt consumption: %w", err)
 		}
-		attempt.ExpiresAt = unixNano(expiresAt)
+		attempt.ExpiresAt = unixSeconds(expiresAt)
 		return attempt, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -1713,7 +1758,7 @@ SELECT consumed_at, expires_at FROM oauth_attempts WHERE state_hash = ?`, hashSe
 	if consumedAt.Valid {
 		return OAuthAttempt{}, ErrOAuthAttemptConsumed
 	}
-	if expiresAt <= nowNanos {
+	if expiresAt <= nowSeconds {
 		return OAuthAttempt{}, ErrOAuthAttemptExpired
 	}
 	return OAuthAttempt{}, ErrOAuthAttemptNotFound
@@ -1725,7 +1770,7 @@ func (s *Store) CreateSession(userID int64, token string, expiresAt time.Time) e
 	}
 	_, err := s.db.Exec(`
 INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
-VALUES (?, ?, ?, ?)`, hashSecret(token), userID, expiresAt.UTC().UnixNano(), s.now().UTC().UnixNano())
+VALUES (?, ?, ?, ?)`, hashSecret(token), userID, expiresAt.UTC().Unix(), s.now().UTC().Unix())
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
@@ -1746,8 +1791,8 @@ SELECT user_id, expires_at FROM sessions WHERE token_hash = ?`, hashSecret(token
 	if err != nil {
 		return Session{}, fmt.Errorf("get session: %w", err)
 	}
-	session.ExpiresAt = unixNano(expiresAt)
-	if expiresAt <= s.now().UTC().UnixNano() {
+	session.ExpiresAt = unixSeconds(expiresAt)
+	if expiresAt <= s.now().UTC().Unix() {
 		return Session{}, ErrSessionExpired
 	}
 	return session, nil
@@ -1768,6 +1813,6 @@ func hashSecret(value string) []byte {
 	return encoded
 }
 
-func unixNano(value int64) time.Time {
-	return time.Unix(0, value).UTC()
+func unixSeconds(value int64) time.Time {
+	return time.Unix(value, 0).UTC()
 }

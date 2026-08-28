@@ -643,7 +643,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'camp' WHERE user_id = ?`, identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(time.Duration(maxAP)*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(time.Duration(maxAP)*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":1}`))
@@ -653,7 +653,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("insufficient AP contribution status = %d", response.Code)
 	}
-	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	request = httptest.NewRequest(http.MethodPost, "/api/actions/contribute-construction", strings.NewReader(`{"building_id":1,"ap":100}`))
@@ -1052,7 +1052,7 @@ func TestContributeConstructionAPIRejectsDomainFailuresWithoutStateChangesOrLogL
 			if _, err := f.store.db.Exec(`UPDATE buildings SET status = 'under_construction', contributed_ap = 0`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, f.now.Add(maxAP*time.Minute).UnixNano(), f.identity.ID); err != nil {
+			if _, err := f.store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, f.now.Add(maxAP*time.Minute).Unix(), f.identity.ID); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -1359,7 +1359,7 @@ func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
 	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	lowAPRequest := httptest.NewRequest(http.MethodPost, "/api/actions/gather", strings.NewReader(`{}`))
@@ -1586,7 +1586,7 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
@@ -1714,7 +1714,7 @@ func TestMoveAPIInsufficientAPPreservesState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
@@ -1801,7 +1801,7 @@ func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	var before int64

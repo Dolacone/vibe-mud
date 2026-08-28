@@ -1,7 +1,7 @@
 ---
 title: "SQLite Schemas"
 doc_type: schema
-last_reviewed: 2026-08-27
+last_reviewed: 2026-08-28
 source_paths:
   - internal/authapi/store.go
 ---
@@ -23,7 +23,7 @@ source_paths:
 | Max open connections | `1` | 單一 process 內序列化 SQLite connection。 |
 | Max idle connections | `1` | 保留最多一條 idle connection。 |
 
-所有時間欄位都使用 UTC Unix nanoseconds，儲存型別為 `INTEGER`。
+所有時間欄位都使用 UTC Unix seconds，儲存型別為 `INTEGER`。
 
 ## Schema 總覽
 
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS player_ap (
 | Column | 用途 |
 |---|---|
 | `user_id` | 玩家 ID。Primary key 保證每位玩家只有一筆 AP 狀態。 |
-| `full_timestamp` | 玩家恢復至 3000 AP 的 UTC Unix nanoseconds timestamp。 |
+| `full_timestamp` | 玩家恢復至 3000 AP 的 UTC Unix seconds timestamp。 |
 
 索引與約束：`user_id` 同時是 primary key 與 `identities(id)` foreign key。未指定 `ON DELETE`，因此使用 SQLite 預設的 `NO ACTION`。
 
@@ -547,6 +547,8 @@ oauth_attempts          OAuth 完成前的獨立暫存狀態
 ## 初始化與升級
 
 `NewStore` 在同一 transaction 內建立 table，加入 location 與 Route seed，再 backfill 玩家資料。任何步驟失敗時，transaction 會 rollback。
+
+Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `1000000000` 轉為 Unix seconds。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session 與 player AP 時間。
 
 ```sql
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
