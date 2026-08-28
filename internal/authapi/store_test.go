@@ -455,7 +455,7 @@ func TestBuildingCompletionInitializesAndComputesDurability(t *testing.T) {
 		t.Fatalf("buildings = %+v, want one building", state.Buildings)
 	}
 	building := state.Buildings[0]
-	buildingDurabilitySeconds := int(7 * 24 * time.Hour / time.Second)
+	buildingDurabilitySeconds := int(buildingDefaultDurabilitySeconds)
 	if building.Status != "completed" || building.MaxDurabilitySeconds != buildingDurabilitySeconds || building.DurabilityStatus != "active" || building.DurabilityRemainingSeconds != buildingDurabilitySeconds {
 		t.Fatalf("completed building durability = %+v, want active seven-day durability", building)
 	}
@@ -556,7 +556,7 @@ INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, require
 	if err := db.QueryRow(`SELECT display_name, max_durability_seconds, durability_expires_at FROM buildings WHERE id = 1`).Scan(&displayName, &maxDurability, &expiry); err != nil {
 		t.Fatal(err)
 	}
-	if displayName != "Legacy Building" || maxDurability != int64(buildingDefaultDurability/time.Second) || !expiry.Valid || expiry.Int64 < before+int64(buildingDefaultDurability/time.Second)-2 || expiry.Int64 > time.Now().UTC().Unix()+int64(buildingDefaultDurability/time.Second)+2 {
+	if displayName != "Legacy Building" || maxDurability != buildingDefaultDurabilitySeconds || !expiry.Valid || expiry.Int64 < before+buildingDefaultDurabilitySeconds-2 || expiry.Int64 > time.Now().UTC().Unix()+buildingDefaultDurabilitySeconds+2 {
 		t.Fatalf("migrated completed building = name %q max %d expiry %v", displayName, maxDurability, expiry)
 	}
 	var underConstructionExpiry sql.NullInt64
@@ -2361,7 +2361,7 @@ func TestItemActionsCreateFullDurabilityAndNeverConsumeExpiredInputs(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Inventory) != 1 || state.Inventory[0].DurabilityStatus != "active" || state.Inventory[0].DurabilityRemainingSeconds == nil || *state.Inventory[0].DurabilityRemainingSeconds != int(itemDefaultDurability/time.Second) {
+	if len(state.Inventory) != 1 || state.Inventory[0].DurabilityStatus != "active" || state.Inventory[0].DurabilityRemainingSeconds == nil || *state.Inventory[0].DurabilityRemainingSeconds != int(itemDefaultDurabilitySeconds) {
 		t.Fatalf("gathered item = %+v, want a full-lifetime active stack", state.Inventory)
 	}
 	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 10)`, identity.ID); err != nil {
@@ -2377,7 +2377,7 @@ func TestItemActionsCreateFullDurabilityAndNeverConsumeExpiredInputs(t *testing.
 			crafted = item
 		}
 	}
-	if crafted.Quantity != 1 || crafted.DurabilityStatus != "active" || crafted.DurabilityRemainingSeconds == nil || *crafted.DurabilityRemainingSeconds != int(itemDefaultDurability/time.Second) {
+	if crafted.Quantity != 1 || crafted.DurabilityStatus != "active" || crafted.DurabilityRemainingSeconds == nil || *crafted.DurabilityRemainingSeconds != int(itemDefaultDurabilitySeconds) {
 		t.Fatalf("crafted item = %+v, want a full-lifetime active stack", crafted)
 	}
 
@@ -2470,7 +2470,7 @@ func TestSuccessfulActionsPreserveItemDurabilityCleanupMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`INSERT INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('cleanup_item', 'Cleanup Item', 1, ?)`, int(itemDefaultDurability/time.Second)); err != nil {
+			if _, err := db.Exec(`INSERT INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('cleanup_item', 'Cleanup Item', 1, ?)`, itemDefaultDurabilitySeconds); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'cleanup_item', 'active', ?, 1)`, identity.ID, now.Add(-time.Hour).Unix()); err != nil {
@@ -2766,14 +2766,14 @@ INSERT INTO ground_items VALUES ('camp', 'wood_component', 2);`, createdAt, crea
 	if err := db.QueryRow(`SELECT durability_status, status_expires_at, quantity FROM player_inventory WHERE user_id = 41 AND item_id = 'wood'`).Scan(&status, &expiry, &quantity); err != nil {
 		t.Fatal(err)
 	}
-	if status != "active" || quantity != 3 || expiry < before+int64(itemDefaultDurability/time.Second)-2 || expiry > time.Now().UTC().Unix()+int64(itemDefaultDurability/time.Second)+2 {
+	if status != "active" || quantity != 3 || expiry < before+itemDefaultDurabilitySeconds-2 || expiry > time.Now().UTC().Unix()+itemDefaultDurabilitySeconds+2 {
 		t.Fatalf("migrated player holding = status %q expiry %d quantity %d, want full lifetime from migration", status, expiry, quantity)
 	}
 	playerExpiry := expiry
 	if err := db.QueryRow(`SELECT durability_status, status_expires_at, quantity FROM ground_items WHERE location_id = 'camp' AND item_id = 'wood_component'`).Scan(&status, &expiry, &quantity); err != nil {
 		t.Fatal(err)
 	}
-	if status != "active" || quantity != 2 || expiry < before+int64(itemDefaultDurability/time.Second)-2 || expiry > time.Now().UTC().Unix()+int64(itemDefaultDurability/time.Second)+2 {
+	if status != "active" || quantity != 2 || expiry < before+itemDefaultDurabilitySeconds-2 || expiry > time.Now().UTC().Unix()+itemDefaultDurabilitySeconds+2 {
 		t.Fatalf("migrated ground holding = status %q expiry %d quantity %d, want full lifetime from migration", status, expiry, quantity)
 	}
 	state, err := store.GetPlayerState(41)
@@ -2851,7 +2851,7 @@ func TestItemDurabilityNormalizationRetainsExpiredWeightAndCleansFromActualExpir
 	if err := db.QueryRow(`SELECT status_expires_at FROM player_inventory WHERE user_id = ? AND item_id = 'wood' AND durability_status = 'expired'`, identity.ID).Scan(&storedExpiry); err != nil {
 		t.Fatal(err)
 	}
-	expectedExpiry := activeExpiredAt + int64(24*time.Hour/time.Second)
+	expectedExpiry := activeExpiredAt + itemExpiredRetentionSeconds
 	if storedExpiry != expectedExpiry {
 		t.Fatalf("merged expiry = %d, want latest source deadline %d", storedExpiry, expectedExpiry)
 	}

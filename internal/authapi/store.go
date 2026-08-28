@@ -235,18 +235,22 @@ type PlayerState struct {
 }
 
 const (
-	maxAP                     = 3000
-	apRecoveryTime            = time.Minute
-	buildingDefaultDurability = 7 * 24 * time.Hour
-	buildingRepairDuration    = time.Hour
-	buildingRepairAPCost      = 10
-	buildingRepairWoodCost    = 1
-	buildingDisabledRetention = 7 * 24 * time.Hour
-	itemDefaultDurability     = time.Hour
-	itemExpiredRetention      = 24 * time.Hour
-	movementWeightThreshold   = 1000
-	unixNanosecondsThreshold  = int64(1_000_000_000_000_000)
-	nanosecondsPerSecond      = int64(time.Second)
+	maxAP                            = 3000
+	apRecoveryTime                   = time.Minute
+	buildingDefaultDurability        = 7 * 24 * time.Hour
+	buildingDefaultDurabilitySeconds = int64(buildingDefaultDurability / time.Second)
+	buildingRepairDuration           = time.Hour
+	buildingRepairAPCost             = 10
+	buildingRepairWoodCost           = 1
+	buildingDisabledRetention        = 7 * 24 * time.Hour
+	buildingDisabledRetentionSeconds = int64(buildingDisabledRetention / time.Second)
+	itemDefaultDurability            = time.Hour
+	itemDefaultDurabilitySeconds     = int64(itemDefaultDurability / time.Second)
+	itemExpiredRetention             = 24 * time.Hour
+	itemExpiredRetentionSeconds      = int64(itemExpiredRetention / time.Second)
+	movementWeightThreshold          = 1000
+	unixNanosecondsThreshold         = int64(1_000_000_000_000_000)
+	nanosecondsPerSecond             = int64(time.Second)
 )
 
 func NewStore(db *sql.DB) (*Store, error) {
@@ -563,13 +567,12 @@ func ensureWeightSchema(tx *sql.Tx) error {
 }
 
 func ensureItemDurabilitySchema(tx *sql.Tx, migrationNow time.Time) error {
-	const defaultDurabilitySeconds = int64(itemDefaultDurability / time.Second)
 	itemColumns, err := tableColumns(tx, "items")
 	if err != nil {
 		return err
 	}
 	if !itemColumns["max_durability_seconds"] {
-		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE items ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, defaultDurabilitySeconds)); err != nil {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE items ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, itemDefaultDurabilitySeconds)); err != nil {
 			return fmt.Errorf("add item durability: %w", err)
 		}
 	}
@@ -685,13 +688,12 @@ FROM conversion_rules_legacy`); err != nil {
 }
 
 func ensureBuildingSchema(tx *sql.Tx) error {
-	const defaultDurabilitySeconds = int64(buildingDefaultDurability / time.Second)
 	recipeColumns, err := tableColumns(tx, "building_recipes")
 	if err != nil {
 		return err
 	}
 	if !recipeColumns["max_durability_seconds"] {
-		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, defaultDurabilitySeconds)); err != nil {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, buildingDefaultDurabilitySeconds)); err != nil {
 			return fmt.Errorf("add building recipe durability: %w", err)
 		}
 	}
@@ -711,7 +713,7 @@ WHERE display_name = ''`); err != nil {
 		}
 	}
 	if !columns["max_durability_seconds"] {
-		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, defaultDurabilitySeconds)); err != nil {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, buildingDefaultDurabilitySeconds)); err != nil {
 			return fmt.Errorf("add building durability: %w", err)
 		}
 	}
@@ -1220,7 +1222,7 @@ VALUES (?, ?, 'expired', ?, ?)
 ON CONFLICT (%s, item_id, durability_status) DO UPDATE SET
 quantity = %s.quantity + excluded.quantity,
 status_expires_at = MAX(%s.status_expires_at, excluded.status_expires_at)`, table, scopeColumn, scopeColumn, table, table)
-		if _, err := tx.Exec(insertQuery, holding.scope, holding.itemID, holding.expiresAt+int64(itemExpiredRetention/time.Second), holding.quantity); err != nil {
+		if _, err := tx.Exec(insertQuery, holding.scope, holding.itemID, holding.expiresAt+itemExpiredRetentionSeconds, holding.quantity); err != nil {
 			return nil, fmt.Errorf("merge expired %s: %w", table, err)
 		}
 		deleteQuery := fmt.Sprintf(`DELETE FROM %s WHERE %s = ? AND item_id = ? AND durability_status = 'active'`, table, scopeColumn)
@@ -1228,7 +1230,7 @@ status_expires_at = MAX(%s.status_expires_at, excluded.status_expires_at)`, tabl
 			return nil, fmt.Errorf("remove active %s: %w", table, err)
 		}
 		if holdingName != "" {
-			cleanups = append(cleanups, ItemDurabilityCleanup{Holding: holdingName, ItemID: holding.itemID, Quantity: holding.quantity, Action: "expired", ExpiredAt: holding.expiresAt, RetentionExpiresAt: holding.expiresAt + int64(itemExpiredRetention/time.Second)})
+			cleanups = append(cleanups, ItemDurabilityCleanup{Holding: holdingName, ItemID: holding.itemID, Quantity: holding.quantity, Action: "expired", ExpiredAt: holding.expiresAt, RetentionExpiresAt: holding.expiresAt + itemExpiredRetentionSeconds})
 		}
 	}
 	cleanupRows, err := tx.Query(fmt.Sprintf(`SELECT item_id, quantity, status_expires_at FROM %s WHERE %s = ? AND durability_status = 'expired' AND status_expires_at <= ?`, table, scopeColumn), scopeValue, now.Unix())
@@ -1299,7 +1301,7 @@ func setBuildingDurability(building *Building, expiresAt sql.NullInt64, now time
 }
 
 func deleteDestroyedBuildingsTx(tx *sql.Tx, now time.Time) error {
-	cutoff := now.Unix() - int64(buildingDisabledRetention/time.Second)
+	cutoff := now.Unix() - buildingDisabledRetentionSeconds
 	if _, err := tx.Exec(`
 DELETE FROM buildings
 WHERE status = 'completed' AND durability_expires_at IS NOT NULL AND durability_expires_at <= ?`, cutoff); err != nil {

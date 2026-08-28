@@ -2277,7 +2277,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		t.Fatalf("ground item response = %#v", body["ground_items"])
 	}
 	groundItem := groundItems[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(3600) || groundItem["retention_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(itemDefaultDurabilitySeconds) || groundItem["retention_remaining_seconds"] != nil {
 		t.Fatalf("ground item shape = %#v", groundItem)
 	}
 	item := groundItem["item"].(map[string]any)
@@ -2497,7 +2497,7 @@ INSERT INTO ground_items (location_id, item_id, durability_status, status_expire
 	}
 	active := inventory[0].(map[string]any)
 	expired := inventory[1].(map[string]any)
-	if active["durability_status"] != "active" || active["durability_remaining_seconds"] != float64(3600) || active["retention_remaining_seconds"] != nil {
+	if active["durability_status"] != "active" || active["durability_remaining_seconds"] != float64(itemDefaultDurabilitySeconds) || active["retention_remaining_seconds"] != nil {
 		t.Fatalf("active durability = %#v", active)
 	}
 	if expired["durability_status"] != "expired" || expired["durability_remaining_seconds"] != nil || expired["retention_remaining_seconds"] != float64(7200) {
