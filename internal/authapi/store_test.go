@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -203,7 +204,7 @@ func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollba
 	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp',  'building_lv1', 1, 60, 0, 'under_construction', 1)`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(2995*time.Minute).UnixNano(), contributor.ID); err != nil {
+	if _, err := db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(2995*time.Minute).Unix(), contributor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ap, err := store.GetAP(contributor.ID); err != nil || ap != 5 {
@@ -524,7 +525,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1);`, identity.ID, identity.ID, identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetPlayerState(identity.ID)
@@ -581,7 +582,7 @@ func TestCraftingSchemaUpgradePreservesExistingPlayerState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	createdAt := time.Date(2026, 8, 27, 11, 0, 0, 0, time.UTC).UnixNano()
+	createdAt := time.Date(2026, 8, 27, 11, 0, 0, 0, time.UTC).Unix()
 	if _, err := db.Exec(`
 CREATE TABLE identities (id INTEGER PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE player_ap (user_id INTEGER PRIMARY KEY, full_timestamp INTEGER NOT NULL);
@@ -597,7 +598,7 @@ INSERT INTO player_locations VALUES (41, 'legacy-location');`, createdAt, create
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.now = func() time.Time { return time.Unix(0, createdAt).UTC() }
+	store.now = func() time.Time { return time.Unix(createdAt, 0).UTC() }
 	state, err := store.GetPlayerState(41)
 	if err != nil {
 		t.Fatal(err)
@@ -611,6 +612,123 @@ INSERT INTO player_locations VALUES (41, 'legacy-location');`, createdAt, create
 	}
 	if buildingTableCount != 4 {
 		t.Fatalf("schema upgrade building tables = %d, want 4", buildingTableCount)
+	}
+}
+
+func TestStorePersistsAllAbsoluteTimesAsUnixSeconds(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 987_654_321, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "seconds", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oauthExpiresAt := now.Add(10 * time.Minute)
+	if err := store.CreateOAuthAttempt("seconds-state", "nonce", "verifier", oauthExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConsumeOAuthAttempt("seconds-state"); err != nil {
+		t.Fatal(err)
+	}
+	sessionExpiresAt := now.Add(time.Hour)
+	if err := store.CreateSession(identity.ID, "seconds-session", sessionExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]int64, 7)
+	if err := db.QueryRow("SELECT created_at, updated_at FROM identities WHERE id = ?", identity.ID).Scan(&values[0], &values[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&values[2]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT expires_at, consumed_at FROM oauth_attempts WHERE state_hash = ?", hashSecret("seconds-state")).Scan(&values[3], &values[4]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT expires_at, created_at FROM sessions WHERE token_hash = ?", hashSecret("seconds-session")).Scan(&values[5], &values[6]); err != nil {
+		t.Fatal(err)
+	}
+	want := []int64{now.Unix(), now.Unix(), now.Unix(), oauthExpiresAt.Unix(), now.Unix(), sessionExpiresAt.Unix(), now.Unix()}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("persisted timestamps = %v, want Unix seconds %v", values, want)
+	}
+}
+
+func TestNewStoreMigratesPersistentTimestampsToUnixSecondsOnce(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 987_654_321, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "legacy-timestamps", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := now.Add(-time.Hour)
+	updatedAt := now.Add(-time.Minute)
+	fullAt := now.Add(10 * time.Minute)
+	oauthExpiresAt := now.Add(10 * time.Minute)
+	oauthConsumedAt := now.Add(-time.Minute)
+	sessionExpiresAt := now.Add(time.Hour)
+	sessionCreatedAt := now.Add(-time.Hour)
+	if _, err := db.Exec("UPDATE identities SET created_at = ?, updated_at = ? WHERE id = ?", createdAt.UnixNano(), updatedAt.UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", fullAt.UnixNano(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO oauth_attempts (state_hash, nonce, verifier, expires_at, consumed_at) VALUES (?, '', '', ?, ?)", []byte("legacy-oauth"), oauthExpiresAt.UnixNano(), oauthConsumedAt.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", []byte("legacy-session"), identity.ID, sessionExpiresAt.UnixNano(), sessionCreatedAt.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	readTimestamps := func() []int64 {
+		t.Helper()
+		values := make([]int64, 7)
+		if err := db.QueryRow("SELECT created_at, updated_at FROM identities WHERE id = ?", identity.ID).Scan(&values[0], &values[1]); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&values[2]); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow("SELECT expires_at, consumed_at FROM oauth_attempts WHERE state_hash = ?", []byte("legacy-oauth")).Scan(&values[3], &values[4]); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow("SELECT expires_at, created_at FROM sessions WHERE token_hash = ?", []byte("legacy-session")).Scan(&values[5], &values[6]); err != nil {
+			t.Fatal(err)
+		}
+		return values
+	}
+
+	var migratedStore *Store
+	logOutput := captureStdout(t, func() {
+		migratedStore, err = NewStore(db)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logOutput, "user_id=anonymous action=timestamp_migration outcome=success converted_rows=7 request_id=unavailable") {
+		t.Fatalf("timestamp migration log = %q", logOutput)
+	}
+	migratedStore.now = func() time.Time { return now }
+	want := []int64{createdAt.Unix(), updatedAt.Unix(), fullAt.Unix(), oauthExpiresAt.Unix(), oauthConsumedAt.Unix(), sessionExpiresAt.Unix(), sessionCreatedAt.Unix()}
+	if got := readTimestamps(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("migrated timestamps = %v, want Unix seconds %v", got, want)
+	}
+	if ap, err := migratedStore.GetAP(identity.ID); err != nil || ap != 2990 {
+		t.Fatalf("AP after timestamp migration = %d, %v; want 2990", ap, err)
+	}
+	logOutput = captureStdout(t, func() {
+		_, err = NewStore(db)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logOutput, "converted_rows=0") {
+		t.Fatalf("idempotent timestamp migration log = %q", logOutput)
+	}
+	if got := readTimestamps(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("second initialization changed Unix seconds: got %v want %v", got, want)
 	}
 }
 
@@ -661,8 +779,8 @@ func TestPlayerAPUsesOnlyFullTimestampAndHonorsMinuteBoundaries(t *testing.T) {
 	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if fullTimestamp != now.UnixNano() {
-		t.Fatalf("new player full timestamp = %d, want %d", fullTimestamp, now.UnixNano())
+	if fullTimestamp != now.Unix() {
+		t.Fatalf("new player full timestamp = %d, want %d", fullTimestamp, now.Unix())
 	}
 	var columns []string
 	rows, err := db.Query("PRAGMA table_info(player_ap)")
@@ -693,12 +811,12 @@ func TestPlayerAPUsesOnlyFullTimestampAndHonorsMinuteBoundaries(t *testing.T) {
 		wantAP int
 	}{
 		{name: "one minute", fullAt: now.Add(time.Minute), wantAP: 2999},
-		{name: "just over one minute", fullAt: now.Add(time.Minute + time.Nanosecond), wantAP: 2998},
+		{name: "just over one minute", fullAt: now.Add(time.Minute + time.Second), wantAP: 2998},
 		{name: "at full boundary", fullAt: now.Add(3000 * time.Minute), wantAP: 0},
-		{name: "past full boundary", fullAt: now.Add(-time.Nanosecond), wantAP: 3000},
+		{name: "past full boundary", fullAt: now.Add(-time.Second), wantAP: 3000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", test.fullAt.UnixNano(), identity.ID); err != nil {
+			if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", test.fullAt.Unix(), identity.ID); err != nil {
 				t.Fatal(err)
 			}
 			got, err := store.GetAP(identity.ID)
@@ -729,8 +847,8 @@ func TestRestAtomicallyConsumesAndPersistsAP(t *testing.T) {
 	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if fullTimestamp != now.Add(time.Minute).UnixNano() {
-		t.Fatalf("rest full timestamp = %d, want %d", fullTimestamp, now.Add(time.Minute).UnixNano())
+	if fullTimestamp != now.Add(time.Minute).Unix() {
+		t.Fatalf("rest full timestamp = %d, want %d", fullTimestamp, now.Add(time.Minute).Unix())
 	}
 
 	reloaded, err := NewStore(db)
@@ -742,7 +860,7 @@ func TestRestAtomicallyConsumesAndPersistsAP(t *testing.T) {
 		t.Fatalf("persisted rest AP = %d, %v; want 2999", ap, err)
 	}
 
-	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(3000*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(3000*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ap, err := reloaded.Rest(identity.ID); !errors.Is(err, ErrInsufficientAP) || ap != 0 {
@@ -754,7 +872,7 @@ func TestRestAtomicallyConsumesAndPersistsAP(t *testing.T) {
 	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&fullTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if fullTimestamp != now.Add(3000*time.Minute).UnixNano() {
+	if fullTimestamp != now.Add(3000*time.Minute).Unix() {
 		t.Fatalf("rejected rest changed full timestamp to %d", fullTimestamp)
 	}
 }
@@ -832,10 +950,10 @@ INSERT INTO player_resources (user_id, balance) VALUES (1, 42);`); err != nil {
 	if err := db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", userID).Scan(&fullTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if fullTimestamp > time.Now().UTC().UnixNano() {
+	if fullTimestamp > time.Now().UTC().Unix() {
 		t.Fatalf("backfilled full timestamp is in the future: %d", fullTimestamp)
 	}
-	backfillTime := unixNano(fullTimestamp)
+	backfillTime := unixSeconds(fullTimestamp)
 	store.now = func() time.Time { return backfillTime }
 	if ap, err := store.GetAP(userID); err != nil || ap != 3000 {
 		t.Fatalf("backfilled identity AP = %d, %v; want 3000", ap, err)
@@ -867,7 +985,7 @@ INSERT INTO player_resources (user_id, balance) VALUES (1, 42);`); err != nil {
 		t.Fatalf("migrated conversion output Resource = %q, want wood", outputResourceID)
 	}
 
-	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", time.Unix(0, 1).UnixNano(), userID); err != nil {
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", int64(1), userID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewStore(db); err != nil {
@@ -889,7 +1007,7 @@ func TestRestConcurrentlyConsumesTheLastAPOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(2999*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(2999*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1151,7 +1269,7 @@ func TestGatherRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
 		t.Fatal(err)
 	}
-	before := now.Add(maxAP * time.Minute).UnixNano()
+	before := now.Add(maxAP * time.Minute).Unix()
 	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1226,7 +1344,7 @@ func TestGatherConcurrentlyConsumesTheLastGatherAPOnce(t *testing.T) {
 	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add((maxAP-10)*time.Minute).UnixNano(), identity.ID); err != nil {
+	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add((maxAP-10)*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1289,7 +1407,7 @@ func TestPlayerStateReadsOneSQLiteSnapshotDuringConcurrentMove(t *testing.T) {
 			go func() {
 				tx, err := writer.Begin()
 				if err == nil {
-					_, err = tx.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = 1", time.Date(2026, 8, 25, 12, 20, 0, 0, time.UTC).UnixNano())
+					_, err = tx.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = 1", time.Date(2026, 8, 25, 12, 20, 0, 0, time.UTC).Unix())
 				}
 				if err == nil {
 					_, err = tx.Exec("UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = 1")
@@ -1398,7 +1516,7 @@ func TestMoveRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := now.Add(maxAP * time.Minute).UnixNano()
+	before := now.Add(maxAP * time.Minute).Unix()
 	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1430,7 +1548,7 @@ func TestMoveRejectsUnavailableRouteWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := now.UnixNano()
+	before := now.Unix()
 	if _, err := store.Move(identity.ID, "unknown"); !errors.Is(err, ErrRouteNotFound) {
 		t.Fatalf("move with unavailable route error = %v, want ErrRouteNotFound", err)
 	}
@@ -1563,7 +1681,7 @@ func TestConvertRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	before := now.Add(maxAP * time.Minute).UnixNano()
+	before := now.Add(maxAP * time.Minute).Unix()
 	if _, err := db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", before, identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1638,7 +1756,7 @@ func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	if attempt.Nonce != "nonce-secret" || attempt.Verifier != "verifier-secret" {
 		t.Fatalf("callback could not recover PKCE values: %+v", attempt)
 	}
-	if !attempt.ExpiresAt.Equal(expiresAt.UTC().Truncate(time.Nanosecond)) {
+	if !attempt.ExpiresAt.Equal(expiresAt.UTC().Truncate(time.Second)) {
 		t.Fatalf("unexpected expiration: got %s want %s", attempt.ExpiresAt, expiresAt.UTC())
 	}
 	var nonce, verifier string

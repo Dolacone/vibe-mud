@@ -1,7 +1,7 @@
 ---
 title: "Architecture"
 doc_type: architecture
-last_reviewed: 2026-08-27
+last_reviewed: 2026-08-28
 source_paths:
   - Dockerfile
   - cmd/server
@@ -18,6 +18,8 @@ One Go process serves the prebuilt React frontend, Google-only SSO, SQLite-backe
 ## Backend
 
 The backend uses Go, chi, `database/sql`, and `modernc.org/sqlite`. It owns authentication, action validation, game rules, persistence, access logs, and computation logs. SQLite runs on one connection because production uses one Fly.io Machine and one attached Volume.
+
+SQLite stores absolute times as UTC Unix seconds. Store initialization converts legacy Unix nanoseconds once while preserving second-level expiry and AP behavior.
 
 ## Frontend
 

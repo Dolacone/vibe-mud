@@ -1,6 +1,11 @@
-<!-- last_reviewed: 2026-08-27 -->
+<!-- last_reviewed: 2026-08-28 -->
 
 # Changelog
+
+## 2026-08-28
+
+- Changed all persistent timestamps from Unix nanoseconds to Unix seconds.
+- Added an idempotent migration for existing timestamps.
 
 ## 2026-08-27
 
