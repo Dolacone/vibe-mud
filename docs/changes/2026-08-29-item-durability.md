@@ -1,6 +1,6 @@
 ---
 title: "Item durability and expired retention"
-status: Done
+status: Ready-to-implement
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -21,7 +21,7 @@ source_paths:
   - web/src/App.test.tsx
 req_ref: REQ-015
 base_branch: main
-scope: "Tracks time-derived durability for stackable Items and seven-day expired retention for Items and Buildings."
+scope: "Tracks one-hour durability for stackable Items, one-day expired Item retention, and seven-day Disabled Building retention."
 ---
 
 ## Problem Statement
@@ -41,6 +41,8 @@ Return `durability_status`, nullable `durability_remaining_seconds`, and nullabl
 ## Key Assumptions
 
 - The MVP covers existing stackable Items in Inventory and on the ground.
+- Every Item definition uses a one-hour test durability and one-day Expired retention.
+- The production upgrade source has no Item durability columns or Expired rows. Unreleased intermediate branch schemas are not migration baselines.
 - Active and Expired quantities use separate stacks.
 - Resources remain non-expiring.
 - Equipment and per-instance durability remain outside this change.
@@ -65,6 +67,7 @@ Task 1: durability schema and lifecycle [parallel: no]
     └── Task 3: backend durability API and logs [parallel: no]
         └── Task 4: frontend durability contract [parallel: no]
             └── Task 5: durability interface [parallel: no]
+                └── Task 6: testing duration adjustment [parallel: no]
 ```
 
 - [x] Task 1 [parallel: no]: Add Item durability definitions, idempotent holding-table migration, Active-to-Expired normalization, Expired cleanup, carrying-weight integration, and seven-day Building retention in `internal/authapi/store.go`. Update store tests and keep planned documentation aligned.
@@ -73,13 +76,13 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-011.8: 永久消失的 Building 不得再顯示或維修。
   - REQ-011.9: Building 永久消失後，不得繼續占用玩家在該 Location 的 Building 名額。
   - REQ-015.1: 每種 Item 必須分別定義耐久時間上限。
-  - REQ-015.2: Wood Item 與 Wood Component 的耐久時間上限都必須為 7 天。
-  - REQ-015.3: 既有的有效 Item 必須在此功能部署時取得完整 7 天耐久時間。
+  - REQ-015.2: 所有 Item 的耐久時間上限都必須為 1 小時。
+  - REQ-015.3: 既有的有效 Item 必須在此功能部署時取得完整 1 小時耐久時間。
   - REQ-015.5: Item 剩餘耐久時間大於 0 時必須顯示為 Active。
   - REQ-015.6: Item 剩餘耐久時間到達 0 時必須顯示為 Expired，且不能修復或恢復為 Active。
   - REQ-015.7: Active 與 Expired Item 必須顯示為不同堆疊。
   - REQ-015.8: 玩家必須能看到每個 Item 堆疊的狀態與剩餘有效時間。
-  - REQ-015.14: Expired Item 必須從失效時間起保留 7 天。
+  - REQ-015.14: Expired Item 必須從失效時間起保留 1 天。
   - REQ-015.15: Expired Item 保留期結束後必須永久刪除。
   - REQ-015.16: Expired Item 仍必須計入玩家的攜帶重量。
   - REQ-015.18: 相同持有位置的同種 Expired Item 可以合併為一個堆疊。
@@ -145,6 +148,18 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.8: 玩家必須能看到每個 Item 堆疊的狀態與剩餘有效時間。
   - REQ-015.21: Inventory 與地面都必須顯示尚在保留期內的 Expired Item。
   - REQ-015.22: 前端必須顯示 Expired Item 的剩餘保留時間，且不能提供會使用該 Item 的操作。
+- [ ] Task 6 [parallel: no]: Set every Item definition to a one-hour test durability, make the production base-schema migration grant existing Item quantities one hour, and reduce Expired Item retention to one day in `internal/authapi/store.go`. Update store tests and related documentation. Repeated initialization must preserve existing deadlines. Building durability and retention must remain seven days.
+  - REQ-011.1: `Building Lv1` 完成時必須取得 7 天耐久時間。
+  - REQ-011.6: Disabled Building 必須保留 7 天，期間仍能維修。
+  - REQ-015.2: 所有 Item 的耐久時間上限都必須為 1 小時。
+  - REQ-015.3: 既有的有效 Item 必須在此功能部署時取得完整 1 小時耐久時間。
+  - REQ-015.14: Expired Item 必須從失效時間起保留 1 天。
+
+## Plan Review Issues
+
+- [x] Task 6 only says Building durability and retention remain unchanged. Copy REQ-011.1 and REQ-011.6 into the task so implementation and review must preserve the exact seven-day Active durability and seven-day Disabled retention values.
+- [x] Task 6 and `docs/schemas.md` do not define an idempotent one-time migration for databases that already have the durability columns. Resolved by defining the supported production migration source, which has no Item durability columns, and requiring repeated initialization to preserve final-schema deadlines.
+- [x] Task 6 does not migrate existing Expired Item deletion deadlines from the former seven-day retention to one day. Resolved because the production migration source has no Expired Item rows. The seven-day Item retention existed only in unreleased intermediate commits.
 
 ## Review Issues
 

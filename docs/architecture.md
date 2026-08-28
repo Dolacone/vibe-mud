@@ -51,6 +51,6 @@ Building recipes are Location-independent. `POST /api/actions/build` starts a Bu
 
 The backend derives Building durability from its UTC Unix seconds clock. Completed Buildings are Active before expiry and Disabled for seven days after expiry. State reads, builds, construction contributions, and repairs delete Buildings beyond that window. `POST /api/actions/repair-building` accepts only a Building ID. It lets any player at the Building's Location spend 10 AP and one Wood Resource. Repair extends durability by at most one hour and clamps expiry to seven days from the repair time.
 
-Each Item definition supplies a durability limit. Inventory and ground holdings keep separate Active and Expired stacks. Active stacks merge by quantity-weighted remaining time. Expired stacks retain the latest deletion time when merged. Expired Items remain visible for seven days, count toward carrying weight, can be dropped, and cannot be picked up or consumed.
+Each Item definition supplies a durability limit. The current test setting gives every Item one hour of Active durability. Inventory and ground holdings keep separate Active and Expired stacks. Active stacks merge by quantity-weighted remaining time. Expired stacks retain the latest deletion time when merged. Expired Items remain visible for one day, count toward carrying weight, can be dropped, and cannot be picked up or consumed.
 
 See [SQLite Schemas](schemas.md) for data structures and [Behavior Index](../requirements/BEHAVIOR.md) for agreed behavior.

@@ -208,14 +208,14 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 ## items
 
-用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`，兩者耐久上限都是 604800 秒。
+用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`，所有 Item 的測試耐久上限都是 3600 秒。
 
 ```sql
 CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     weight_units INTEGER NOT NULL CHECK (weight_units > 0),
-    max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)
+    max_durability_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (max_durability_seconds > 0)
 );
 ```
 
@@ -625,7 +625,7 @@ SELECT id, ? FROM identities;
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities;
 
-INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('wood', 'Wood', 100, 604800);
+INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('wood', 'Wood', 100, 3600);
 
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost)
 VALUES ('forest_edge', 'wood', 1, 10);
@@ -644,7 +644,7 @@ INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quanti
 VALUES ('camp', 'wood', 1, 'wood', 1, 1);
 
 INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds)
-VALUES ('wood_component', 'Wood Component', 10, 604800);
+VALUES ('wood_component', 'Wood Component', 10, 3600);
 
 INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
 VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
@@ -670,7 +670,7 @@ Existing databases gain empty `ground_items` and `ground_resources` tables throu
 
 既有資料庫若缺少 `weight_units`，Store 會在 `items` 與 `resource_types` 加入正整數欄位。既有 Item 與 Resource quantity 保持不變。Wood Item 設為 100，Wood Component 設為 10，所有 Resource type 設為 1。
 
-既有資料庫若缺少 Item durability schema，Store 會替 `items` 加入 `max_durability_seconds`，並重建 `player_inventory` 與 `ground_items`。既有 quantity 會成為 Active 堆疊，`status_expires_at` 設為 migration 當下加該 Item 的完整耐久秒數。
+Production migration 的起點沒有 Item durability columns 或 Expired rows。Store 會替 `items` 加入 `max_durability_seconds`，並重建 `player_inventory` 與 `ground_items`。既有 quantity 會成為 Active 堆疊，`status_expires_at` 設為 migration 當下加 3600 秒。重複初始化不會重設既有 Active 或 Expired 期限。
 
 既有資料庫若缺少 durability columns，`ensureBuildingSchema` 依序執行 `ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)`、`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)` 與 `ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`。接著以 migration 當下的 UTC Unix seconds `migration_now` 執行 `UPDATE buildings SET durability_expires_at = migration_now + max_durability_seconds WHERE status = 'completed' AND durability_expires_at IS NULL`。施工中的 Building 不會被 backfill expiry。
 

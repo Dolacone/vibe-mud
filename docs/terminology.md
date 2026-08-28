@@ -219,7 +219,7 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Expired Item
 - 中文名稱：失效物品
-- 定義：耐久時間到達 0，不能恢復有效、使用或 Pickup，但仍在七天保留期內顯示並計入攜帶重量的 Item 堆疊。
+- 定義：耐久時間到達 0，不能恢復有效、使用或 Pickup，但仍在一天保留期內顯示並計入攜帶重量的 Item 堆疊。
 - 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
 - 與相似名詞的差異：Expired Item 可以 Drop。Active Item 可以 Pickup 與作為 Action input。
 
