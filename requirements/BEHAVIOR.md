@@ -12,4 +12,4 @@
 - 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
 - 玩家可在目前 Location 免費 Transfer 資產，Item 必須指定狀態，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
 - 玩家可持有超過負重門檻的資產，但超重時不能 Move -> REQ-014
-- Item 依各自耐久上限自然失效，分開保存 Active 與 Expired 堆疊，失效後保留 7 天 -> REQ-015
+- 所有 Item 於 1 小時後自然失效，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
