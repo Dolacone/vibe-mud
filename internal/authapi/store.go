@@ -879,7 +879,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
 	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0), ItemDurabilityComputations: make([]ItemDurabilityComputation, 0), ItemDurabilityCleanups: make([]ItemDurabilityCleanup, 0), MovementWeightThreshold: movementWeightThreshold}
-	cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		return PlayerState{}, err
 	}
@@ -1135,32 +1135,46 @@ SELECT COALESCE((SELECT SUM(pi.quantity * i.weight_units)
 	return weight, nil
 }
 
-func normalizeItemHoldingsTx(tx *sql.Tx, now time.Time) error {
-	_, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+func normalizeItemHoldingsTx(tx *sql.Tx, now time.Time, userID int64) error {
+	_, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	return err
 }
 
-func normalizeItemHoldingsWithMetadataTx(tx *sql.Tx, now time.Time) ([]ItemDurabilityCleanup, error) {
+func normalizeItemHoldingsWithMetadataTx(tx *sql.Tx, now time.Time, userID int64) ([]ItemDurabilityCleanup, error) {
+	var locationID string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("get player location for item normalization: %w", err)
+	}
 	if _, err := tx.Exec(`
 UPDATE player_inventory
 SET status_expires_at = (SELECT ? + i.max_durability_seconds FROM items i WHERE i.id = player_inventory.item_id)
-WHERE durability_status = 'active' AND status_expires_at = 0`, now.Unix()); err != nil {
+WHERE user_id = ? AND durability_status = 'active' AND status_expires_at = 0`, now.Unix(), userID); err != nil {
 		return nil, fmt.Errorf("initialize inventory item durability: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if locationID != "" {
+		if _, err := tx.Exec(`
 UPDATE ground_items
 SET status_expires_at = (SELECT ? + i.max_durability_seconds FROM items i WHERE i.id = ground_items.item_id)
-WHERE durability_status = 'active' AND status_expires_at = 0`, now.Unix()); err != nil {
-		return nil, fmt.Errorf("initialize ground item durability: %w", err)
+		WHERE location_id = ? AND durability_status = 'active' AND status_expires_at = 0`, now.Unix(), locationID); err != nil {
+			return nil, fmt.Errorf("initialize ground item durability: %w", err)
+		}
 	}
 	cleanups := make([]ItemDurabilityCleanup, 0)
-	for _, holding := range []struct {
+	holdings := []struct {
 		table, scope, name string
+		scopeValue         interface{}
 	}{
-		{table: "player_inventory", scope: "user_id", name: "inventory"},
-		{table: "ground_items", scope: "location_id", name: "ground"},
-	} {
-		events, err := expireItemHoldingTableWithMetadataTx(tx, holding.table, holding.scope, holding.name, now)
+		{table: "player_inventory", scope: "user_id", name: "inventory", scopeValue: userID},
+	}
+	for _, holding := range holdings {
+		events, err := expireItemHoldingTableWithMetadataTx(tx, holding.table, holding.scope, holding.name, holding.scopeValue, now)
+		if err != nil {
+			return nil, err
+		}
+		cleanups = append(cleanups, events...)
+	}
+	if locationID != "" {
+		events, err := expireItemHoldingTableWithMetadataTx(tx, "ground_items", "location_id", "ground", locationID, now)
 		if err != nil {
 			return nil, err
 		}
@@ -1169,9 +1183,9 @@ WHERE durability_status = 'active' AND status_expires_at = 0`, now.Unix()); err 
 	return cleanups, nil
 }
 
-func expireItemHoldingTableWithMetadataTx(tx *sql.Tx, table, scopeColumn, holdingName string, now time.Time) ([]ItemDurabilityCleanup, error) {
-	query := fmt.Sprintf(`SELECT %s, item_id, quantity, status_expires_at FROM %s WHERE durability_status = 'active' AND status_expires_at <= ?`, scopeColumn, table)
-	rows, err := tx.Query(query, now.Unix())
+func expireItemHoldingTableWithMetadataTx(tx *sql.Tx, table, scopeColumn, holdingName string, scopeValue interface{}, now time.Time) ([]ItemDurabilityCleanup, error) {
+	query := fmt.Sprintf(`SELECT %s, item_id, quantity, status_expires_at FROM %s WHERE %s = ? AND durability_status = 'active' AND status_expires_at <= ?`, scopeColumn, table, scopeColumn)
+	rows, err := tx.Query(query, scopeValue, now.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("find expired %s: %w", table, err)
 	}
@@ -1215,7 +1229,7 @@ status_expires_at = MAX(%s.status_expires_at, excluded.status_expires_at)`, tabl
 			cleanups = append(cleanups, ItemDurabilityCleanup{Holding: holdingName, ItemID: holding.itemID, Quantity: holding.quantity, Action: "expired", ExpiredAt: holding.expiresAt, RetentionExpiresAt: holding.expiresAt + int64(itemExpiredRetention/time.Second)})
 		}
 	}
-	cleanupRows, err := tx.Query(fmt.Sprintf(`SELECT item_id, quantity, status_expires_at FROM %s WHERE durability_status = 'expired' AND status_expires_at <= ?`, table), now.Unix())
+	cleanupRows, err := tx.Query(fmt.Sprintf(`SELECT item_id, quantity, status_expires_at FROM %s WHERE %s = ? AND durability_status = 'expired' AND status_expires_at <= ?`, table, scopeColumn), scopeValue, now.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("find retained %s: %w", table, err)
 	}
@@ -1240,8 +1254,8 @@ status_expires_at = MAX(%s.status_expires_at, excluded.status_expires_at)`, tabl
 	if err := cleanupRows.Close(); err != nil {
 		return nil, fmt.Errorf("close retained %s: %w", table, err)
 	}
-	cleanupQuery := fmt.Sprintf(`DELETE FROM %s WHERE durability_status = 'expired' AND status_expires_at <= ?`, table)
-	if _, err := tx.Exec(cleanupQuery, now.Unix()); err != nil {
+	cleanupQuery := fmt.Sprintf(`DELETE FROM %s WHERE %s = ? AND durability_status = 'expired' AND status_expires_at <= ?`, table, scopeColumn)
+	if _, err := tx.Exec(cleanupQuery, scopeValue, now.Unix()); err != nil {
 		return nil, fmt.Errorf("delete retained %s: %w", table, err)
 	}
 	if holdingName != "" {
@@ -1432,7 +1446,7 @@ func (s *Store) Gather(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin gather: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -1527,7 +1541,7 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 		return PlayerState{}, fmt.Errorf("begin drop: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -1604,7 +1618,7 @@ func (s *Store) Pickup(userID int64, assetType, assetID string, quantity int, it
 		return PlayerState{}, fmt.Errorf("begin pickup: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -1815,7 +1829,7 @@ func (s *Store) Move(userID int64, targetID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin move: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -1924,7 +1938,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin convert: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -2031,7 +2045,7 @@ func (s *Store) Craft(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin craft: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -2168,7 +2182,7 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin building: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -2299,7 +2313,7 @@ func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int
 		return PlayerState{}, fmt.Errorf("begin construction contribution: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -2430,7 +2444,7 @@ func (s *Store) RepairBuilding(userID, buildingID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("begin building repair: %w", err)
 	}
 	now := s.now().UTC()
-	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now)
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
