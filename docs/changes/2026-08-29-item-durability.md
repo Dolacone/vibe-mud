@@ -1,6 +1,6 @@
 ---
 title: "Item durability and expired retention"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -152,3 +152,4 @@ Task 1: durability schema and lifecycle [parallel: no]
 - [x] [Major] Successful Pickup, Move, Convert, Craft, Build, construction contribution, and repair operations discard cleanup metadata from normalization. Expiry and deletion results triggered by those operations never reach `logItemDurability`, which violates the stdout computation-log contract.
 - [x] [Major] Item normalization processes every player's Inventory, but cleanup metadata omits the holding owner. A request by one player can log another player's cleanup with the requester's `user_id`, so the stable application user ID is incorrect.
 - [x] [Major] Active-stack weighting multiplies persisted quantities by Unix deadlines in `int64` without overflow checks. Valid large quantities can wrap the weighted deadline and corrupt durability instead of applying the required floored weighted average.
+- [ ] [Minor] Frontend response validation enforces unique `(item_id, durability_status)` ground stacks but does not enforce the same Inventory invariant. A malformed response with duplicate Active or duplicate Expired Inventory rows is accepted and reaches React with duplicate row keys.
