@@ -1,6 +1,6 @@
 ---
 title: "Compact table interface"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
@@ -63,6 +63,9 @@ Task 1 [parallel: no]
   - Evidence: `npm test -- --run` passed 86 tests in 2 files, `npm run build` passed, and the 320 px browser check measured document width 320 px, body width 320 px, 10 tables, 10 wrappers, and wrapper scroll widths up to 1386 px while the page remained within the viewport.
 
 ## Review Issues
+
+- [ ] [Minor] Add `docs/architecture.md` to `source_paths`; `main...HEAD` modifies this implementation document, but the metadata omits it.
+- [ ] [Minor] Add a test with multiple routes, recipes, or Buildings that asserts distinct accessible control names; the resolved plan issue requires coverage when multiple rows expose the same Action, while current tests only exercise one row per Action type.
 
 ## Plan Review Issues
 
