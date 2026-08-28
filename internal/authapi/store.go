@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"os"
 	"strings"
 	"time"
@@ -1738,13 +1740,59 @@ func addItemHoldingTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, ite
 	}
 	newExpiry := expiresAt
 	if status == "active" {
-		newExpiry = (existingQuantity*existingExpiry + int64(quantity)*expiresAt) / (existingQuantity + int64(quantity))
+		incomingQuantity := int64(quantity)
+		if existingQuantity <= 0 || incomingQuantity <= 0 || existingQuantity > math.MaxInt64-incomingQuantity {
+			return fmt.Errorf("merge active item quantity overflow")
+		}
+		newExpiry = weightedActiveExpiry(existingQuantity, incomingQuantity, existingExpiry, expiresAt)
 	} else if expiresAt < existingExpiry {
 		newExpiry = existingExpiry
 	}
 	updateQuery := fmt.Sprintf("UPDATE %s SET quantity = quantity + ?, status_expires_at = ? WHERE %s = ? AND item_id = ? AND durability_status = ?", table, scopeColumn)
 	_, err = tx.Exec(updateQuery, quantity, newExpiry, scopeValue, itemID, status)
 	return err
+}
+
+func weightedActiveExpiry(existingQuantity, incomingQuantity, existingExpiry, incomingExpiry int64) int64 {
+	totalQuantity := existingQuantity + incomingQuantity
+	lowExpiry, highExpiry := existingExpiry, incomingExpiry
+	lowQuantity, highQuantity := existingQuantity, incomingQuantity
+	if lowExpiry > highExpiry {
+		lowExpiry, highExpiry = highExpiry, lowExpiry
+		lowQuantity, highQuantity = highQuantity, lowQuantity
+	}
+	if lowExpiry >= 0 {
+		delta := uint64(highExpiry - lowExpiry)
+		weightedDelta, _ := mulDivFloor(uint64(highQuantity), delta, uint64(totalQuantity))
+		return lowExpiry + int64(weightedDelta)
+	}
+	if highExpiry <= 0 {
+		delta := uint64(highExpiry - lowExpiry)
+		weightedDelta, remainder := mulDivFloor(uint64(lowQuantity), delta, uint64(totalQuantity))
+		if remainder != 0 {
+			weightedDelta++
+		}
+		return highExpiry - int64(weightedDelta)
+	}
+	positivePart, positiveRemainder := mulDivFloor(uint64(highQuantity), uint64(highExpiry), uint64(totalQuantity))
+	negativePart, negativeRemainder := mulDivFloor(uint64(lowQuantity), int64Magnitude(lowExpiry), uint64(totalQuantity))
+	weightedExpiry := int64(positivePart) - int64(negativePart)
+	if positiveRemainder < negativeRemainder {
+		weightedExpiry--
+	}
+	return weightedExpiry
+}
+
+func mulDivFloor(multiplicand, multiplier, divisor uint64) (uint64, uint64) {
+	high, low := bits.Mul64(multiplicand, multiplier)
+	return bits.Div64(high, low, divisor)
+}
+
+func int64Magnitude(value int64) uint64 {
+	if value >= 0 {
+		return uint64(value)
+	}
+	return uint64(-(value + 1)) + 1
 }
 
 func consumeTransferQuantityTx(tx *sql.Tx, table, scopeColumn string, scopeValue any, assetColumn, assetID string, quantity int, label string) error {
