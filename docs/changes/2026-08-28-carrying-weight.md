@@ -1,6 +1,6 @@
 ---
 title: "Player carrying weight"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
