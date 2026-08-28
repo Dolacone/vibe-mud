@@ -861,16 +861,7 @@ ORDER BY b.id`, state.Location.ID)
 			return PlayerState{}, fmt.Errorf("scan building: %w", err)
 		}
 		building.Recipe.MaxDurabilitySeconds = building.MaxDurabilitySeconds
-		if building.Status == "completed" && durabilityExpiresAt.Valid {
-			remaining := int(durabilityExpiresAt.Int64 - now.Unix())
-			if remaining > 0 {
-				building.DurabilityStatus = "active"
-			} else {
-				building.DurabilityStatus = "disabled"
-				remaining = 0
-			}
-			building.DurabilityRemainingSeconds = remaining
-		}
+		setBuildingDurability(&building, durabilityExpiresAt, now)
 		state.Buildings = append(state.Buildings, building)
 	}
 	if err := buildingRows.Err(); err != nil {
@@ -900,6 +891,20 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func setBuildingDurability(building *Building, expiresAt sql.NullInt64, now time.Time) {
+	if building.Status != "completed" || !expiresAt.Valid {
+		return
+	}
+	remaining := int(expiresAt.Int64 - now.Unix())
+	if remaining > 0 {
+		building.DurabilityStatus = "active"
+	} else {
+		building.DurabilityStatus = "disabled"
+		remaining = 0
+	}
+	building.DurabilityRemainingSeconds = remaining
 }
 
 func deleteDestroyedBuildingsTx(tx *sql.Tx, now time.Time) error {
