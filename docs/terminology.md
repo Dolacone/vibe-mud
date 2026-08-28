@@ -1,7 +1,7 @@
 ---
 title: "Game Terminology"
 doc_type: glossary
-last_reviewed: 2026-08-28
+last_reviewed: 2026-08-29
 source_paths: []
 scope: "Canonical game terms used by the application."
 ---
@@ -28,15 +28,18 @@ scope: "Canonical game terms used by the application."
 | [Action: contribute construction](#action-contribute-construction) | - | 投入施工 AP | [REQ-010](../requirements/REQ-010.md) |
 | [Action: repair Building](#action-repair-building) | - | 維修建築 | [REQ-011](../requirements/REQ-011.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
+| [Active Item](#active-item) | - | 有效物品 | [REQ-015](../requirements/REQ-015.md) |
 | [Building](#building) | - | 建築 | [REQ-010](../requirements/REQ-010.md) |
 | [Building recipe](#building-recipe) | - | 建築配方 | [REQ-010](../requirements/REQ-010.md) |
 | [Building durability](#building-durability) | - | 建築耐久度 | [REQ-011](../requirements/REQ-011.md) |
 | [Carrying weight](#carrying-weight) | - | 攜帶重量 | [REQ-014](../requirements/REQ-014.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
 | [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-010](../requirements/REQ-010.md) |
+| [Expired Item](#expired-item) | - | 失效物品 | [REQ-015](../requirements/REQ-015.md) |
 | [Ground assets](#ground-assets) | - | 地面資產 | [REQ-013](../requirements/REQ-013.md) |
-| [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
-| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
+| [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md)、[REQ-015](../requirements/REQ-015.md) |
+| [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md)、[REQ-015](../requirements/REQ-015.md) |
+| [Item durability](#item-durability) | - | 物品耐久度 | [REQ-015](../requirements/REQ-015.md) |
 | [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Movement weight threshold](#movement-weight-threshold) | - | 移動負重門檻 | [REQ-014](../requirements/REQ-014.md) |
@@ -176,33 +179,57 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Inventory
 - 中文名稱：物品欄
-- 定義：保存玩家目前持有 item 與 quantity 的持久化玩家狀態。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)
-- 與相似名詞的差異：Inventory 保存持有狀態。Item 定義可持有的物品種類。
+- 定義：保存玩家目前持有 Item 堆疊、quantity、耐久狀態與狀態期限的持久化玩家狀態。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
+- 與相似名詞的差異：Inventory 保存持有狀態。Item 定義可持有的物品種類與耐久上限。
 
 ### Carrying weight
 
 - 正式英文名稱：Carrying weight
 - 中文名稱：攜帶重量
-- 定義：玩家持有的每種 Item 與 Resource quantity 乘以對應單位重量後的總和。系統讀取玩家狀態時即時計算，不保存總和。
-- 對應行為：[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
+- 定義：玩家持有的 Active Item、尚在保留期內的 Expired Item 與 Resource quantity 乘以對應單位重量後的總和。系統讀取玩家狀態時即時計算，不保存總和。
+- 對應行為：[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
 - 與相似名詞的差異：Carrying weight 是目前計算值。Movement weight threshold 是判斷能否移動的固定門檻。
 
 ### Ground assets
 
 - 正式英文名稱：Ground assets
 - 中文名稱：地面資產
-- 定義：位於單一 Location、沒有 owner 或權限、所有同地點玩家都能 Pickup 的公共 Item 與 Resource quantity。
-- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 定義：位於單一 Location、沒有 owner 或權限的公共 Item 與 Resource quantity。Active Item 與 Resource 可以 Pickup，Expired Item 只能查看。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
 - 與相似名詞的差異：Ground assets 屬於 Location 的公共狀態。Inventory 與玩家 Resource 屬於單一玩家。
 
 ### Item
 
 - 正式英文名稱：Item
 - 中文名稱：物品
-- 定義：玩家可以取得並保存在 Inventory，或放在 Location 地面的離散物品種類。每種 Item 定義正整數單位重量。
-- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
-- 與相似名詞的差異：Item 以 Inventory 或地面 quantity 保存。Resource 依 Resource type 保存，不轉換成 Item。
+- 定義：玩家可以取得並保存在 Inventory，或放在 Location 地面的離散物品種類。每種 Item 定義正整數單位重量與耐久時間上限。
+- 對應行為：[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
+- 與相似名詞的差異：Item 具有耐久狀態。Resource 不會失效，也不轉換成 Item。
+
+### Active Item
+
+- 正式英文名稱：Active Item
+- 中文名稱：有效物品
+- 定義：剩餘耐久時間大於 0，可以 Transfer 或作為 Action input 的 Item 堆疊。
+- 對應行為：[REQ-015 - Item durability](../requirements/REQ-015.md)
+- 與相似名詞的差異：Active Item 可以使用。Expired Item 只能查看或 Drop。
+
+### Expired Item
+
+- 正式英文名稱：Expired Item
+- 中文名稱：失效物品
+- 定義：耐久時間到達 0，不能恢復有效、使用或 Pickup，但仍在七天保留期內顯示並計入攜帶重量的 Item 堆疊。
+- 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-015 - Item durability](../requirements/REQ-015.md)
+- 與相似名詞的差異：Expired Item 可以 Drop。Active Item 可以 Pickup 與作為 Action input。
+
+### Item durability
+
+- 正式英文名稱：Item durability
+- 中文名稱：物品耐久度
+- 定義：後端依 Item definition 的耐久上限與 UTC Unix seconds 計算 Item 堆疊剩餘有效時間的規則。
+- 對應行為：[REQ-015 - Item durability](../requirements/REQ-015.md)
+- 與相似名詞的差異：Item durability 不可修復。Building durability 可以由玩家維修。
 
 ### Location
 
@@ -281,7 +308,7 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Transfer: Drop
 - 中文名稱：放置
-- 定義：把玩家持有的 Item 或 Resource quantity 轉移至目前 Location 的公共地面。
+- 定義：把玩家持有的 Active Item、Expired Item 或 Resource quantity 轉移至目前 Location 的公共地面。
 - 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
 - 與相似名詞的差異：Drop 的來源是玩家持有狀態。Pickup 的來源是地面資產。
 
@@ -289,6 +316,6 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Transfer: Pickup
 - 中文名稱：撿取
-- 定義：把目前 Location 的公共地面 Item 或 Resource quantity 轉移給玩家。
+- 定義：把目前 Location 的公共 Active Item 或 Resource quantity 轉移給玩家。Expired Item 不能 Pickup。
 - 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
 - 與相似名詞的差異：Pickup 的來源是地面資產。Drop 的來源是玩家持有狀態。
