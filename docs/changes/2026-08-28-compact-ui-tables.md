@@ -5,6 +5,9 @@ created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
 source_paths:
+  - docs/architecture.md
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-012.md
   - web/src/App.tsx
   - web/src/styles.css
   - web/src/App.test.tsx
