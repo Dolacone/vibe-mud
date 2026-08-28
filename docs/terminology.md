@@ -1,7 +1,7 @@
 ---
 title: "Game Terminology"
 doc_type: glossary
-last_reviewed: 2026-08-27
+last_reviewed: 2026-08-28
 source_paths: []
 scope: "Canonical game terms used by the application."
 ---
@@ -18,7 +18,7 @@ scope: "Canonical game terms used by the application."
 
 | 英文名稱 | 縮寫 | 中文名稱 | 對應 REQ |
 |---|---|---|---|
-| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md) |
+| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-011](../requirements/REQ-011.md) |
 | [Action: rest](#action-rest) | - | 休息行動 | [REQ-004](../requirements/REQ-004.md) |
 | [Action: move](#action-move) | - | 移動行動 | [REQ-005](../requirements/REQ-005.md) |
 | [Action: gather](#action-gather) | - | 採集行動 | [REQ-006](../requirements/REQ-006.md) |
@@ -26,9 +26,11 @@ scope: "Canonical game terms used by the application."
 | [Action: craft](#action-craft) | - | 製作行動 | [REQ-009](../requirements/REQ-009.md) |
 | [Action: build](#action-build) | - | 開始施工 | [REQ-010](../requirements/REQ-010.md) |
 | [Action: contribute construction](#action-contribute-construction) | - | 投入施工 AP | [REQ-010](../requirements/REQ-010.md) |
+| [Action: repair Building](#action-repair-building) | - | 維修建築 | [REQ-011](../requirements/REQ-011.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
 | [Building](#building) | - | 建築 | [REQ-010](../requirements/REQ-010.md) |
 | [Building recipe](#building-recipe) | - | 建築配方 | [REQ-010](../requirements/REQ-010.md) |
+| [Building durability](#building-durability) | - | 建築耐久度 | [REQ-011](../requirements/REQ-011.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
 | [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-010](../requirements/REQ-010.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md) |
@@ -48,7 +50,7 @@ scope: "Canonical game terms used by the application."
 - 正式英文名稱：Action
 - 中文名稱：行動
 - 定義：玩家要求後端執行的遊戲狀態變更。後端只執行明確允許的 Action。
-- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)
+- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
 - 與相似名詞的差異：Action 是行為種類。AP 是執行 Action 可以消耗的資源。
 
 ### Action: rest
@@ -107,6 +109,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-010 - Building construction](../requirements/REQ-010.md)
 - 與相似名詞的差異：`contribute construction` 不消耗 recipe inputs，也不建立新 Building。
 
+### Action: repair Building
+
+- 正式英文名稱：Action: repair Building
+- 中文名稱：維修建築
+- 定義：同一 Location 的玩家消耗 10 AP 與 1 Wood Resource，替完成的 Building 增加最多一小時耐久時間。
+- 對應行為：[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
+- 與相似名詞的差異：`repair Building` 增加完成 Building 的耐久時間。`contribute construction` 增加施工中 Building 的進度。
+
 ### Action Points (AP)
 
 - 正式英文名稱：Action Points
@@ -131,6 +141,14 @@ scope: "Canonical game terms used by the application."
 - 定義：後端定義的 Building 建立規則。它包含 inputs、施工 AP 需求、Building level 與 extension slot 數量。
 - 對應行為：[REQ-010 - Building construction](../requirements/REQ-010.md)
 - 與相似名詞的差異：Building recipe 建立世界物件。Crafting Recipe 產出 Inventory Item。
+
+### Building durability
+
+- 正式英文名稱：Building durability
+- 中文名稱：建築耐久度
+- 定義：完成 Building 依耐久期限與後端目前時間計算的剩餘可用時間。大於 0 時為 Active。到期後為 Disabled。Disabled 超過三天後永久消失。
+- 對應行為：[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
+- 與相似名詞的差異：Building durability 隨現實時間降低。Construction progress 只隨玩家投入 AP 增加。
 
 ### Construction progress
 

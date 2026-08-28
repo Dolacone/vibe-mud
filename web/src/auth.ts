@@ -87,6 +87,9 @@ export type Building = {
   contributed_ap: number;
   status: "under_construction" | "completed";
   extension_slot_count: number;
+  max_durability_seconds: number;
+  durability_status: "active" | "disabled" | null;
+  durability_remaining_seconds: number | null;
 };
 
 export type PlayerState = {
@@ -155,6 +158,17 @@ export type BuildResult =
   | { status: "error"; error: Error };
 
 export type ContributeConstructionResult = BuildResult;
+
+export type RepairBuildingRequest = {
+  building_id: number;
+};
+
+export type RepairResult =
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "conflict"; error: string } & PlayerState)
+  | { status: "invalid"; error: string; state?: PlayerState }
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
 
 const maxAP = 3000;
 
@@ -283,7 +297,7 @@ function isBuilding(value: unknown): value is Building {
   const building = value as Record<string, unknown>;
   const owner = building.owner;
   const recipe = building.recipe;
-  return (
+  if (
     isPositiveInteger(building.id) &&
     typeof owner === "object" && owner !== null &&
     isPositiveInteger((owner as Record<string, unknown>).id) &&
@@ -300,8 +314,23 @@ function isBuilding(value: unknown): value is Building {
     (building.status === "under_construction" || building.status === "completed") &&
     typeof building.extension_slot_count === "number" &&
     Number.isInteger(building.extension_slot_count) &&
-    building.extension_slot_count >= 0
-  );
+    building.extension_slot_count >= 0 &&
+    isPositiveInteger(building.max_durability_seconds)
+  ) {
+    if (building.status === "under_construction") {
+      return building.durability_status === null && building.durability_remaining_seconds === null;
+    }
+    if (building.durability_status === "active") {
+      return (
+        typeof building.durability_remaining_seconds === "number" &&
+        Number.isInteger(building.durability_remaining_seconds) &&
+        building.durability_remaining_seconds > 0 &&
+        building.durability_remaining_seconds <= building.max_durability_seconds
+      );
+    }
+    return building.durability_status === "disabled" && building.durability_remaining_seconds === 0;
+  }
+  return false;
 }
 
 function isBuildings(value: unknown): value is Building[] {
@@ -419,6 +448,14 @@ function isCraftError(value: unknown): value is { error: string } {
 
 function isCraftConflict(value: unknown): value is { error: string } & PlayerState {
   return isCraftError(value) && isPlayerState(value);
+}
+
+function isRepairError(value: unknown): value is { error: string } {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).error === "string";
+}
+
+function isRepairConflict(value: unknown): value is { error: string } & PlayerState {
+  return isRepairError(value) && isPlayerState(value);
 }
 
 export async function getCurrentUser(
@@ -782,4 +819,57 @@ export function contributeConstruction(buildingID: number, ap: number, fetcher: 
   if (!isPositiveInteger(buildingID)) return Promise.resolve({ status: "invalid", error: "invalid building identifier" } as BuildResult);
   if (!isPositiveInteger(ap)) return Promise.resolve({ status: "invalid", error: "invalid AP" } as BuildResult);
   return buildingAction("/api/actions/contribute-construction", { building_id: buildingID, ap }, "contribute-construction", fetcher);
+}
+
+export async function repairBuilding(buildingID: number, fetcher: typeof fetch = fetch): Promise<RepairResult> {
+  if (!isPositiveInteger(buildingID)) {
+    return { status: "invalid", error: "invalid building identifier" };
+  }
+
+  const request: RepairBuildingRequest = { building_id: buildingID };
+  try {
+    const response = await fetcher("/api/actions/repair-building", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isRepairConflict(body)) {
+        return { status: "error", error: new Error("repair-building response is invalid") };
+      }
+      return { status: "conflict", ...body };
+    }
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (!isRepairConflict(body)) {
+        return { status: "error", error: new Error("repair-building response is invalid") };
+      }
+      const { error, ...state } = body;
+      return { status: "invalid", error, state };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`repair-building request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body)) {
+      return { status: "error", error: new Error("repair-building response is invalid") };
+    }
+    return { status: "success", ...body };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error("repair-building request failed"),
+    };
+  }
 }

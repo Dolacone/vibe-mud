@@ -590,7 +590,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		t.Fatalf("buildings response = %#v", body["buildings"])
 	}
 	building := buildings[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "extension_slot_count", "id", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" {
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
 		t.Fatalf("building response = %#v", building)
 	}
 	recipe := building["recipe"].(map[string]any)
@@ -748,12 +748,22 @@ func buildingFromResponse(t *testing.T, body []byte) map[string]any {
 
 func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
 	t.Helper()
-	wantKeys := []string{"building_level", "contributed_ap", "extension_slot_count", "id", "owner", "recipe", "required_ap", "status"}
+	wantKeys := []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
 	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
 		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
 	}
 	if building["id"] != float64(1) || building["building_level"] != float64(1) || building["required_ap"] != float64(60) || building["contributed_ap"] != contributedAP || building["status"] != status || building["extension_slot_count"] != float64(1) {
 		t.Fatalf("building contract = %#v", building)
+	}
+	if building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
+		t.Fatalf("building max durability = %#v", building["max_durability_seconds"])
+	}
+	if status == "under_construction" {
+		if building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
+			t.Fatalf("under-construction durability = %#v/%#v", building["durability_status"], building["durability_remaining_seconds"])
+		}
+	} else if building["durability_status"] != "active" || building["durability_remaining_seconds"] != float64(buildingDefaultDurability/time.Second) {
+		t.Fatalf("completed durability = %#v/%#v", building["durability_status"], building["durability_remaining_seconds"])
 	}
 	owner, ok := building["owner"].(map[string]any)
 	if !ok || !reflect.DeepEqual(sortedMapKeys(owner), []string{"display_name", "id"}) || owner["id"] != float64(1) || owner["display_name"] != "Person" {
@@ -1096,6 +1106,243 @@ func TestContributeConstructionAPIRejectsDomainFailuresWithoutStateChangesOrLogL
 			}
 			assertUnchangedBuildingState(t, before, after)
 		})
+	}
+}
+
+func prepareCompletedBuilding(t *testing.T, fixture buildingAPIFixture, expiresAt time.Time) int64 {
+	t.Helper()
+	prepareBuilding(t, fixture, "completed", 60)
+	buildingID := preparedBuildingID(t, fixture)
+	if _, err := fixture.store.db.Exec(`UPDATE buildings SET durability_expires_at = ? WHERE id = ?`, expiresAt.Unix(), buildingID); err != nil {
+		t.Fatal(err)
+	}
+	return buildingID
+}
+
+func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing.T) {
+	tests := []struct {
+		name          string
+		expiresAt     *time.Time
+		wantStatus    any
+		wantRemaining any
+		wantBuildings int
+	}{
+		{name: "under construction", wantBuildings: 1},
+		{name: "active", expiresAt: func() *time.Time { value := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC); return &value }(), wantStatus: "active", wantRemaining: float64(7 * 24 * 60 * 60), wantBuildings: 1},
+		{name: "disabled", expiresAt: func() *time.Time { value := time.Date(2026, 8, 25, 11, 59, 59, 0, time.UTC); return &value }(), wantStatus: "disabled", wantRemaining: float64(0), wantBuildings: 1},
+		{name: "destroyed", expiresAt: func() *time.Time { value := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC); return &value }(), wantBuildings: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "building-durability-api-"+strings.ReplaceAll(test.name, " ", "-"))
+			if test.expiresAt == nil {
+				prepareBuilding(t, fixture, "under_construction", 0)
+			} else {
+				prepareCompletedBuilding(t, fixture, *test.expiresAt)
+			}
+			request := fixture.request(http.MethodGet, "/api/me", "", "building-durability-"+strings.ReplaceAll(test.name, " ", "-"))
+			response := httptest.NewRecorder()
+			fixture.server.Routes().ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			buildings, ok := body["buildings"].([]any)
+			if !ok || len(buildings) != test.wantBuildings {
+				t.Fatalf("buildings = %#v, want %d entries", body["buildings"], test.wantBuildings)
+			}
+			if test.wantBuildings == 0 {
+				return
+			}
+			building, ok := buildings[0].(map[string]any)
+			if !ok {
+				t.Fatalf("building = %#v", buildings[0])
+			}
+			if building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
+				t.Fatalf("max durability = %#v", building["max_durability_seconds"])
+			}
+			if building["durability_status"] != test.wantStatus || building["durability_remaining_seconds"] != test.wantRemaining {
+				t.Fatalf("durability = %#v/%#v, want %#v/%#v", building["durability_status"], building["durability_remaining_seconds"], test.wantStatus, test.wantRemaining)
+			}
+		})
+	}
+}
+
+func TestPlayerStateResponseLogsBuildingDurabilityComputation(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "building-durability-computation-log")
+	prepareCompletedBuilding(t, fixture, fixture.now.Add(24*time.Hour))
+	requestID := "building-durability-computation-request"
+	request := fixture.request(http.MethodGet, "/api/me", "", requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+	}
+	want := "user_id=1 action=building_durability_calculation outcome=success building_id=1 durability_status=active remaining_seconds=86400 request_id=" + requestID
+	if !strings.Contains(logOutput, want) {
+		t.Fatalf("building durability computation log = %q, want %q", logOutput, want)
+	}
+	for _, secret := range []string{"session-token", "authorization-code", "request-body"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("building durability log leaked %q: %q", secret, logOutput)
+		}
+	}
+}
+
+func TestRepairBuildingAPIRejectsInvalidRequestsWithAuthoritativeState(t *testing.T) {
+	tests := []struct {
+		name, body, reason string
+	}{
+		{"invalid JSON", `{`, repairReasonInvalidJSON},
+		{"unknown field", `{"unexpected":1}`, repairReasonUnknownField},
+		{"duplicate building", `{"building_id":1,"building_id":1}`, repairReasonDuplicate},
+		{"extra JSON value", `{"building_id":1}{}`, repairReasonExtraValue},
+		{"missing building", `{}`, repairReasonMissingBuilding},
+		{"building string", `{"building_id":"1"}`, repairReasonInvalidBuilding},
+		{"building zero", `{"building_id":0}`, repairReasonInvalidBuilding},
+		{"building negative", `{"building_id":-1}`, repairReasonInvalidBuilding},
+		{"unknown target", `{"building_id":999}`, repairReasonUnknownBuilding},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "repair-invalid-"+strings.ReplaceAll(test.name, " ", "-"))
+			prepareCompletedBuilding(t, fixture, fixture.now.Add(24*time.Hour))
+			if _, err := fixture.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, fixture.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "repair-invalid-" + strings.ReplaceAll(test.name, " ", "-")
+			request := fixture.request(http.MethodPost, "/api/actions/repair-building", test.body, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusBadRequest || !strings.Contains(logOutput, "user_id=1 action=repair-building outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] == nil || body["ap"] == nil || body["buildings"] == nil {
+				t.Fatalf("failure lacks authoritative state = %#v", body)
+			}
+			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
+	}
+}
+
+func TestRepairBuildingAPIRejectsDomainFailuresWithAuthoritativeState(t *testing.T) {
+	tests := []struct {
+		name, reason string
+		prepare      func(*testing.T, buildingAPIFixture, int64)
+	}{
+		{"remote building", repairReasonRemote, func(t *testing.T, f buildingAPIFixture, _ int64) {
+			if _, err := f.store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-repair-location', 'Remote')`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.db.Exec(`UPDATE player_locations SET location_id = 'remote-repair-location' WHERE user_id = ?`, f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"under construction", repairReasonUnderConstruction, func(t *testing.T, f buildingAPIFixture, buildingID int64) {
+			if _, err := f.store.db.Exec(`UPDATE buildings SET status = 'under_construction', durability_expires_at = NULL, contributed_ap = 0 WHERE id = ?`, buildingID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"insufficient AP", repairReasonInsufficientAP, func(t *testing.T, f buildingAPIFixture, _ int64) {
+			if _, err := f.store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, f.now.Add(maxAP*time.Minute).Unix(), f.identity.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"insufficient resource", repairReasonInsufficientResource, func(_ *testing.T, _ buildingAPIFixture, _ int64) {
+			return
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBuildingAPIFixture(t, "repair-domain-"+strings.ReplaceAll(test.name, " ", "-"))
+			buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(24*time.Hour))
+			if test.name != "insufficient resource" {
+				if _, err := fixture.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, fixture.identity.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			test.prepare(t, fixture, buildingID)
+			before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "repair-domain-" + strings.ReplaceAll(test.name, " ", "-")
+			request := fixture.request(http.MethodPost, "/api/actions/repair-building", `{"building_id":`+strconv.FormatInt(buildingID, 10)+`}`, requestID)
+			response := httptest.NewRecorder()
+			logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+			if response.Code != http.StatusConflict || !strings.Contains(logOutput, "user_id=1 action=repair-building outcome=error reason="+test.reason+" request_id="+requestID) {
+				t.Fatalf("rejection status/log = %d/%q", response.Code, logOutput)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] == nil || body["ap"] == nil || body["buildings"] == nil {
+				t.Fatalf("failure lacks authoritative state = %#v", body)
+			}
+			after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertUnchangedBuildingState(t, before, after)
+		})
+	}
+}
+
+func TestRepairBuildingAPIReturnsAuthoritativeStateAndSanitizedComputationLog(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "repair-success")
+	buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(6*24*time.Hour))
+	if _, err := fixture.store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 2)`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "repair-success-request"
+	request := fixture.request(http.MethodPost, "/api/actions/repair-building", `{"building_id":`+strconv.FormatInt(buildingID, 10)+`}`, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("repair status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=repair-building outcome=success building_id=1 prior_durability_status=active added_seconds=3600 resulting_remaining_seconds=522000 ap_cost=10 wood_cost=1 request_id="+requestID) {
+		t.Fatalf("repair computation log = %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=repair-building outcome=success request_id="+requestID) {
+		t.Fatalf("repair access log = %q", logOutput)
+	}
+	for _, secret := range []string{"session-token", "authorization-code", "request-body"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("repair log leaked %q: %q", secret, logOutput)
+		}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-10) {
+		t.Fatalf("authoritative AP = %#v", body["ap"])
+	}
+	resources := responseResourceQuantities(t, body)
+	if resources["wood"] != 1 {
+		t.Fatalf("authoritative wood = %#v", resources["wood"])
+	}
+	building := buildingFromResponse(t, response.Body.Bytes())
+	if building["durability_status"] != "active" || building["durability_remaining_seconds"] != float64(6*24*60*60+60*60) || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
+		t.Fatalf("authoritative durability = %#v", building)
 	}
 }
 

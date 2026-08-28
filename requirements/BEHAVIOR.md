@@ -8,3 +8,4 @@
 - 已登入玩家可在 `camp` 執行 `convert`，原子消耗 AP 與 Wood item 並累加 Wood Resource -> REQ-008
 - 已登入玩家可在任何 Location 執行後端定義的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可建立 Building Lv1，並由同地點玩家共同投入 AP 完成施工 -> REQ-010
+- 完成的 Building 會自然耗損，所有同地點玩家都能消耗 AP 與 Wood Resource 維修 -> REQ-011

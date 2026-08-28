@@ -14,24 +14,25 @@ import (
 )
 
 var (
-	ErrInvalidArgument      = errors.New("invalid argument")
-	ErrIdentityNotFound     = errors.New("identity not found")
-	ErrOAuthAttemptNotFound = errors.New("oauth attempt not found")
-	ErrOAuthAttemptExpired  = errors.New("oauth attempt expired")
-	ErrOAuthAttemptConsumed = errors.New("oauth attempt already consumed")
-	ErrSessionNotFound      = errors.New("session not found")
-	ErrSessionExpired       = errors.New("session expired")
-	ErrInsufficientAP       = errors.New("insufficient action points")
-	ErrRouteNotFound        = errors.New("route not found")
-	ErrGatheringNotFound    = errors.New("gathering not found")
-	ErrConversionNotFound   = errors.New("conversion not found")
-	ErrInsufficientItem     = errors.New("insufficient item")
-	ErrCraftingNotFound     = errors.New("crafting recipe not found")
-	ErrInsufficientResource = errors.New("insufficient resource")
-	ErrBuildingNotFound     = errors.New("building not found")
-	ErrBuildingOccupied     = errors.New("building location already occupied")
-	ErrBuildingRemote       = errors.New("building is at another location")
-	ErrBuildingCompleted    = errors.New("building is already completed")
+	ErrInvalidArgument           = errors.New("invalid argument")
+	ErrIdentityNotFound          = errors.New("identity not found")
+	ErrOAuthAttemptNotFound      = errors.New("oauth attempt not found")
+	ErrOAuthAttemptExpired       = errors.New("oauth attempt expired")
+	ErrOAuthAttemptConsumed      = errors.New("oauth attempt already consumed")
+	ErrSessionNotFound           = errors.New("session not found")
+	ErrSessionExpired            = errors.New("session expired")
+	ErrInsufficientAP            = errors.New("insufficient action points")
+	ErrRouteNotFound             = errors.New("route not found")
+	ErrGatheringNotFound         = errors.New("gathering not found")
+	ErrConversionNotFound        = errors.New("conversion not found")
+	ErrInsufficientItem          = errors.New("insufficient item")
+	ErrCraftingNotFound          = errors.New("crafting recipe not found")
+	ErrInsufficientResource      = errors.New("insufficient resource")
+	ErrBuildingNotFound          = errors.New("building not found")
+	ErrBuildingOccupied          = errors.New("building location already occupied")
+	ErrBuildingRemote            = errors.New("building is at another location")
+	ErrBuildingCompleted         = errors.New("building is already completed")
+	ErrBuildingUnderConstruction = errors.New("building is under construction")
 )
 
 type Store struct {
@@ -126,13 +127,14 @@ type CraftingRecipe struct {
 }
 
 type BuildingRecipe struct {
-	ID                 string
-	DisplayName        string
-	BuildingLevel      int
-	RequiredAP         int
-	ExtensionSlotCount int
-	ResourceInputs     []CraftingResourceInput
-	ItemInputs         []CraftingItemInput
+	ID                   string
+	DisplayName          string
+	BuildingLevel        int
+	RequiredAP           int
+	ExtensionSlotCount   int
+	MaxDurabilitySeconds int
+	ResourceInputs       []CraftingResourceInput
+	ItemInputs           []CraftingItemInput
 }
 
 type BuildingOwner struct {
@@ -141,14 +143,17 @@ type BuildingOwner struct {
 }
 
 type Building struct {
-	ID                 int64
-	Owner              BuildingOwner
-	Recipe             BuildingRecipe
-	BuildingLevel      int
-	RequiredAP         int
-	ContributedAP      int
-	Status             string
-	ExtensionSlotCount int
+	ID                         int64
+	Owner                      BuildingOwner
+	Recipe                     BuildingRecipe
+	BuildingLevel              int
+	RequiredAP                 int
+	ContributedAP              int
+	Status                     string
+	ExtensionSlotCount         int
+	MaxDurabilitySeconds       int
+	DurabilityStatus           string
+	DurabilityRemainingSeconds int
 }
 
 type ConstructionComputation struct {
@@ -157,6 +162,15 @@ type ConstructionComputation struct {
 	ResultingProgress int
 	RequiredAP        int
 	CompletionOutcome string
+}
+
+type RepairComputation struct {
+	BuildingID                int64
+	PriorDurabilityStatus     string
+	AddedSeconds              int
+	ResultingRemainingSeconds int
+	APCost                    int
+	WoodCost                  int
 }
 
 type PlayerState struct {
@@ -171,13 +185,19 @@ type PlayerState struct {
 	BuildingRecipes         []BuildingRecipe
 	Buildings               []Building
 	ConstructionComputation *ConstructionComputation
+	RepairComputation       *RepairComputation
 }
 
 const (
-	maxAP                    = 3000
-	apRecoveryTime           = time.Minute
-	unixNanosecondsThreshold = int64(1_000_000_000_000_000)
-	nanosecondsPerSecond     = int64(time.Second)
+	maxAP                     = 3000
+	apRecoveryTime            = time.Minute
+	buildingDefaultDurability = 7 * 24 * time.Hour
+	buildingRepairDuration    = time.Hour
+	buildingRepairAPCost      = 10
+	buildingRepairWoodCost    = 1
+	buildingDisabledRetention = 3 * 24 * time.Hour
+	unixNanosecondsThreshold  = int64(1_000_000_000_000_000)
+	nanosecondsPerSecond      = int64(time.Second)
 )
 
 func NewStore(db *sql.DB) (*Store, error) {
@@ -294,7 +314,8 @@ CREATE TABLE IF NOT EXISTS building_recipes (
 	display_name TEXT NOT NULL,
 	building_level INTEGER NOT NULL CHECK (building_level > 0),
 	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
-	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0)
+	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+	max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)
 );
 CREATE TABLE IF NOT EXISTS building_recipe_resource_inputs (
 	recipe_id TEXT NOT NULL REFERENCES building_recipes(id),
@@ -319,6 +340,8 @@ CREATE TABLE IF NOT EXISTS buildings (
 	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
 	status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
 	extension_slot_count INTEGER NOT NULL CHECK (extension_slot_count >= 0),
+	max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0),
+	durability_expires_at INTEGER,
 	UNIQUE (owner_id, location_id)
 );`); err != nil {
 		_ = tx.Rollback()
@@ -489,21 +512,46 @@ FROM conversion_rules_legacy`); err != nil {
 }
 
 func ensureBuildingSchema(tx *sql.Tx) error {
+	const defaultDurabilitySeconds = int64(buildingDefaultDurability / time.Second)
+	recipeColumns, err := tableColumns(tx, "building_recipes")
+	if err != nil {
+		return err
+	}
+	if !recipeColumns["max_durability_seconds"] {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, defaultDurabilitySeconds)); err != nil {
+			return fmt.Errorf("add building recipe durability: %w", err)
+		}
+	}
 	columns, err := tableColumns(tx, "buildings")
 	if err != nil {
 		return err
 	}
-	if columns["display_name"] {
-		return nil
-	}
-	if _, err := tx.Exec(`ALTER TABLE buildings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("add building display name: %w", err)
-	}
-	if _, err := tx.Exec(`
+	if !columns["display_name"] {
+		if _, err := tx.Exec(`ALTER TABLE buildings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add building display name: %w", err)
+		}
+		if _, err := tx.Exec(`
 UPDATE buildings
 SET display_name = (SELECT display_name FROM building_recipes WHERE building_recipes.id = buildings.recipe_id)
 WHERE display_name = ''`); err != nil {
-		return fmt.Errorf("backfill building display name: %w", err)
+			return fmt.Errorf("backfill building display name: %w", err)
+		}
+	}
+	if !columns["max_durability_seconds"] {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT %d CHECK (max_durability_seconds > 0)`, defaultDurabilitySeconds)); err != nil {
+			return fmt.Errorf("add building durability: %w", err)
+		}
+	}
+	if !columns["durability_expires_at"] {
+		if _, err := tx.Exec(`ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`); err != nil {
+			return fmt.Errorf("add building durability expiry: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`
+UPDATE buildings
+SET durability_expires_at = ? + max_durability_seconds
+WHERE status = 'completed' AND durability_expires_at IS NULL`, time.Now().UTC().Unix()); err != nil {
+		return fmt.Errorf("backfill building durability expiry: %w", err)
 	}
 	return nil
 }
@@ -661,6 +709,9 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
 	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0)}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		return PlayerState{}, err
+	}
 	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
@@ -768,7 +819,7 @@ ORDER BY cr.id`)
 		return PlayerState{}, fmt.Errorf("read crafting recipes: %w", err)
 	}
 	buildingRecipeRows, err := tx.Query(`
-SELECT br.id, br.display_name, br.building_level, br.required_ap, br.extension_slot_count
+	SELECT br.id, br.display_name, br.building_level, br.required_ap, br.extension_slot_count, br.max_durability_seconds
 FROM building_recipes br
 WHERE EXISTS (SELECT 1 FROM building_recipe_resource_inputs ri WHERE ri.recipe_id = br.id)
    OR EXISTS (SELECT 1 FROM building_recipe_item_inputs ii WHERE ii.recipe_id = br.id)
@@ -779,7 +830,7 @@ ORDER BY br.id`)
 	defer buildingRecipeRows.Close()
 	for buildingRecipeRows.Next() {
 		var recipe BuildingRecipe
-		if err := buildingRecipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount); err != nil {
+		if err := buildingRecipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount, &recipe.MaxDurabilitySeconds); err != nil {
 			return PlayerState{}, fmt.Errorf("scan building recipe: %w", err)
 		}
 		if err := loadBuildingInputsTx(tx, &recipe); err != nil {
@@ -791,8 +842,9 @@ ORDER BY br.id`)
 		return PlayerState{}, fmt.Errorf("read building recipes: %w", err)
 	}
 	buildingRows, err := tx.Query(`
-SELECT b.id, i.id, i.display_name, br.id, b.display_name,
-       b.building_level, b.required_ap, b.contributed_ap, b.status, b.extension_slot_count
+	SELECT b.id, i.id, i.display_name, br.id, b.display_name,
+	       b.building_level, b.required_ap, b.contributed_ap, b.status, b.extension_slot_count,
+	       b.max_durability_seconds, b.durability_expires_at
 FROM buildings b
 JOIN identities i ON i.id = b.owner_id
 JOIN building_recipes br ON br.id = b.recipe_id
@@ -804,9 +856,12 @@ ORDER BY b.id`, state.Location.ID)
 	defer buildingRows.Close()
 	for buildingRows.Next() {
 		var building Building
-		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount); err != nil {
+		var durabilityExpiresAt sql.NullInt64
+		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount, &building.MaxDurabilitySeconds, &durabilityExpiresAt); err != nil {
 			return PlayerState{}, fmt.Errorf("scan building: %w", err)
 		}
+		building.Recipe.MaxDurabilitySeconds = building.MaxDurabilitySeconds
+		setBuildingDurability(&building, durabilityExpiresAt, now)
 		state.Buildings = append(state.Buildings, building)
 	}
 	if err := buildingRows.Err(); err != nil {
@@ -836,6 +891,30 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("close player routes: %w", err)
 	}
 	return state, nil
+}
+
+func setBuildingDurability(building *Building, expiresAt sql.NullInt64, now time.Time) {
+	if building.Status != "completed" || !expiresAt.Valid {
+		return
+	}
+	remaining := int(expiresAt.Int64 - now.Unix())
+	if remaining > 0 {
+		building.DurabilityStatus = "active"
+	} else {
+		building.DurabilityStatus = "disabled"
+		remaining = 0
+	}
+	building.DurabilityRemainingSeconds = remaining
+}
+
+func deleteDestroyedBuildingsTx(tx *sql.Tx, now time.Time) error {
+	cutoff := now.Unix() - int64(buildingDisabledRetention/time.Second)
+	if _, err := tx.Exec(`
+DELETE FROM buildings
+WHERE status = 'completed' AND durability_expires_at IS NOT NULL AND durability_expires_at <= ?`, cutoff); err != nil {
+		return fmt.Errorf("delete destroyed buildings: %w", err)
+	}
+	return nil
 }
 
 func loadBuildingInputsTx(tx *sql.Tx, recipe *BuildingRecipe) error {
@@ -1395,6 +1474,11 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("begin building: %w", err)
 	}
+	now := s.now().UTC()
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
 	recipe, err := buildingRecipeForID(tx, recipeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
@@ -1488,15 +1572,15 @@ func (s *Store) Build(userID int64, recipeID string) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("delete empty building resources: %w", err)
 	}
 	if _, err := tx.Exec(`
-	INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count)
-	VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction', ?)`, userID, locationID, recipe.ID, recipe.DisplayName, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount); err != nil {
+	INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds)
+	VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction', ?, ?)`, userID, locationID, recipe.ID, recipe.DisplayName, recipe.BuildingLevel, recipe.RequiredAP, recipe.ExtensionSlotCount, recipe.MaxDurabilitySeconds); err != nil {
 		_ = tx.Rollback()
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: buildings.owner_id, buildings.location_id") {
 			return PlayerState{}, ErrBuildingOccupied
 		}
 		return PlayerState{}, fmt.Errorf("create building: %w", err)
 	}
-	state, err := s.getPlayerStateTx(tx, userID, s.now().UTC())
+	state, err := s.getPlayerStateTx(tx, userID, now)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, err
@@ -1515,8 +1599,13 @@ func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("begin construction contribution: %w", err)
 	}
+	now := s.now().UTC()
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
 	var contributorLocation, buildingLocation, status string
-	var contributedAP, requiredAP int
+	var contributedAP, requiredAP, maxDurabilitySeconds int
 	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
@@ -1527,8 +1616,8 @@ func (s *Store) ContributeConstruction(userID, buildingID int64, requestedAP int
 		return PlayerState{}, fmt.Errorf("get contributor location: %w", err)
 	}
 	err = tx.QueryRow(`
-SELECT location_id, contributed_ap, required_ap, status
-FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP, &requiredAP, &status)
+SELECT location_id, contributed_ap, required_ap, status, max_durability_seconds
+FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP, &requiredAP, &status, &maxDurabilitySeconds)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrBuildingNotFound
@@ -1556,7 +1645,6 @@ FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &contributedAP
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get contributor AP: %w", err)
 	}
-	now := s.now().UTC()
 	availableAP := calculateAP(unixSeconds(fullTimestamp), now)
 	remainingAP := requiredAP - contributedAP
 	actualAP := requestedAP
@@ -1590,9 +1678,15 @@ WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*ap
 	if newProgress == requiredAP {
 		newStatus = "completed"
 	}
-	result, err = tx.Exec(`
+	if newStatus == "completed" {
+		result, err = tx.Exec(`
+			UPDATE buildings SET contributed_ap = ?, status = ?, durability_expires_at = ?
+WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, now.Unix()+int64(maxDurabilitySeconds), buildingID, contributedAP)
+	} else {
+		result, err = tx.Exec(`
 UPDATE buildings SET contributed_ap = ?, status = ?
 WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, buildingID, contributedAP)
+	}
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("update construction progress: %w", err)
@@ -1622,11 +1716,166 @@ WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgr
 	return state, nil
 }
 
+func (s *Store) RepairBuilding(userID, buildingID int64) (PlayerState, error) {
+	if userID <= 0 || buildingID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID and building ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin building repair: %w", err)
+	}
+	now := s.now().UTC()
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var playerLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&playerLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get repair player location: %w", err)
+	}
+	var buildingLocation, status string
+	var maxDurabilitySeconds int64
+	var durabilityExpiresAt sql.NullInt64
+	err = tx.QueryRow(`
+SELECT location_id, status, max_durability_seconds, durability_expires_at
+FROM buildings WHERE id = ?`, buildingID).Scan(&buildingLocation, &status, &maxDurabilitySeconds, &durabilityExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get repair target: %w", err)
+	}
+	if playerLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if status != "completed" || maxDurabilitySeconds <= 0 || !durabilityExpiresAt.Valid {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingUnderConstruction
+	}
+	nowSeconds := now.Unix()
+	priorStatus := "disabled"
+	if durabilityExpiresAt.Int64 > nowSeconds {
+		priorStatus = "active"
+	}
+	var fullTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get repair player AP: %w", err)
+	}
+	if calculateAP(unixSeconds(fullTimestamp), now) < buildingRepairAPCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	var woodQuantity int
+	err = tx.QueryRow(`SELECT quantity FROM player_resources WHERE user_id = ? AND resource_id = 'wood'`, userID).Scan(&woodQuantity)
+	if errors.Is(err, sql.ErrNoRows) || woodQuantity < buildingRepairWoodCost {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientResource
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get repair wood: %w", err)
+	}
+	fullAt := unixSeconds(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(buildingRepairAPCost)*apRecoveryTime).Unix(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume repair AP: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check repair AP: %w", rowsErr)
+		}
+		return PlayerState{}, ErrInsufficientAP
+	}
+	result, err = tx.Exec(`
+UPDATE player_resources SET quantity = quantity - ?
+WHERE user_id = ? AND resource_id = 'wood' AND quantity >= ?`, buildingRepairWoodCost, userID, buildingRepairWoodCost)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume repair wood: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check repair wood: %w", rowsErr)
+		}
+		return PlayerState{}, ErrInsufficientResource
+	}
+	newExpiry := durabilityExpiresAt.Int64
+	if newExpiry <= nowSeconds {
+		newExpiry = nowSeconds
+	}
+	newExpiry += int64(buildingRepairDuration / time.Second)
+	maximumExpiry := nowSeconds + maxDurabilitySeconds
+	if newExpiry > maximumExpiry {
+		newExpiry = maximumExpiry
+	}
+	result, err = tx.Exec(`
+UPDATE buildings SET durability_expires_at = ?
+WHERE id = ? AND status = 'completed' AND durability_expires_at = ?`, newExpiry, buildingID, durabilityExpiresAt.Int64)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("update building durability: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check building durability: %w", rowsErr)
+		}
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if _, err := tx.Exec(`DELETE FROM player_resources WHERE user_id = ? AND resource_id = 'wood' AND quantity = 0`, userID); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("delete empty repair wood: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit building repair: %w", err)
+	}
+	state.RepairComputation = &RepairComputation{
+		BuildingID:                buildingID,
+		PriorDurabilityStatus:     priorStatus,
+		AddedSeconds:              int(newExpiry - maxInt64(durabilityExpiresAt.Int64, nowSeconds)),
+		ResultingRemainingSeconds: int(newExpiry - nowSeconds),
+		APCost:                    buildingRepairAPCost,
+		WoodCost:                  buildingRepairWoodCost,
+	}
+	return state, nil
+}
+
+func maxInt64(left, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
 func buildingRecipeForID(tx *sql.Tx, recipeID string) (BuildingRecipe, error) {
 	var recipe BuildingRecipe
 	err := tx.QueryRow(`
-SELECT id, display_name, building_level, required_ap, extension_slot_count
-FROM building_recipes WHERE id = ?`, recipeID).Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount)
+SELECT id, display_name, building_level, required_ap, extension_slot_count, max_durability_seconds
+FROM building_recipes WHERE id = ?`, recipeID).Scan(&recipe.ID, &recipe.DisplayName, &recipe.BuildingLevel, &recipe.RequiredAP, &recipe.ExtensionSlotCount, &recipe.MaxDurabilitySeconds)
 	if err != nil {
 		return BuildingRecipe{}, err
 	}
