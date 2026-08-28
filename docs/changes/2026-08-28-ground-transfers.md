@@ -4,7 +4,11 @@ status: Ready-to-implement
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
+  - docs/schemas.md
+  - docs/changes/2026-08-28-ground-transfers.md
 req_ref: REQ-013
 base_branch: main
 scope: "Tracks AP-free transfers between player holdings and public Location ground assets."
@@ -48,7 +52,7 @@ Task 1: persistence and Transfer rules [parallel: no]
         └── Task 4: ground Transfer interface [parallel: no]
 ```
 
-- [ ] Task 1 [parallel: no]: Add public Location ground persistence and atomic Item or Resource Transfer rules in `internal/authapi/store.go`. Update store tests. Update `docs/schemas.md` with exact executable schema, migration behavior, zero-row cleanup, and transaction behavior in the same commit.
+- [x] Task 1 [parallel: no]: Add public Location ground persistence and atomic Item or Resource Transfer rules in `internal/authapi/store.go`. Update store tests. Update `docs/schemas.md` with exact executable schema, migration behavior, zero-row cleanup, and transaction behavior in the same commit.
   - REQ-013.1: 每個 Location 必須具有獨立的地面 Item 與 Resource 狀態。
   - REQ-013.2: 地面資產不得限制總重量、quantity 或堆疊數量。
   - REQ-013.3: 地面資產不得具有 owner、存取權限或預留機制。

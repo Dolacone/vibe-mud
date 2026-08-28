@@ -668,7 +668,7 @@ Existing databases gain empty `ground_items` and `ground_resources` tables throu
 
 `craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
 
-`drop` transaction 會從後端取得玩家目前 Location，驗證 submitted asset type、identifier 與正整數 quantity，再從玩家 Inventory 或 Resource quantity 扣除並累加對應地面 quantity。`pickup` 使用相反方向。來源不足、asset 不存在或輸入無效時，transaction 不修改資料。來源歸零時刪除 row。Transfer 不讀寫 `player_ap.full_timestamp`。
+`Store.Drop` transaction 會從後端取得玩家目前 Location，驗證 asset type、identifier 與正整數 quantity，再從玩家 Inventory 或 Resource quantity 扣除並累加對應地面 quantity。`Store.Pickup` 使用相反方向。來源不足、asset 不存在或輸入無效時，transaction 不修改資料。來源剛好用盡時先刪除 row，避免違反 ground table 的 `quantity > 0` constraint。Transfer 不讀寫 `player_ap.full_timestamp`，也不受 ground capacity 限制。條件式來源更新與 transaction lock 防止 concurrent Pickup 超領。
 
 開始施工 transaction 會先刪除已超過 Disabled 保留期的 Building，再依 submitted recipe identifier 查找 Location-independent recipe 與 inputs。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP、extension slot count 與最大耐久秒數快照。
 
