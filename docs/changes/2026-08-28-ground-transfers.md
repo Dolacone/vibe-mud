@@ -1,6 +1,6 @@
 ---
 title: "Ground asset transfers"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-28
 doc_type: change
 last_reviewed: 2026-08-28
@@ -109,6 +109,11 @@ Task 1: persistence and Transfer rules [parallel: no]
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
 
 ## Review Issues
+
+- [ ] [Minor] `source_paths` 未列出 diff 中修改的 `docs/architecture.md`、`docs/terminology.md`、`requirements/BEHAVIOR.md` 與 `requirements/REQ-013.md`，因此 frontmatter 不是完整的實際變更清單。
+- [ ] [Minor] Transfer AP 測試只使用已達 `maxAP` 的玩家，也未檢查 `player_ap.full_timestamp`。新增非滿 AP 情境並直接檢查 timestamp，才能防止「恢復 AP」的回歸被上限遮蔽。
+- [ ] [Minor] Concurrent Pickup 測試以同一位玩家送出兩個請求，未覆蓋 acceptance criterion 指定的多位玩家競爭同一地面 quantity。
+- [ ] [Minor] Backend 測試未觸發 Transfer 的 unexpected internal failure，因此沒有鎖定 HTTP 500 不含 authoritative state 的 contract。
 
 ## Plan Review Issues
 
