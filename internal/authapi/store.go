@@ -242,7 +242,8 @@ const (
 	buildingRepairAPCost      = 10
 	buildingRepairWoodCost    = 1
 	buildingDisabledRetention = 7 * 24 * time.Hour
-	itemExpiredRetention      = 7 * 24 * time.Hour
+	itemDefaultDurability     = time.Hour
+	itemExpiredRetention      = 24 * time.Hour
 	movementWeightThreshold   = 1000
 	unixNanosecondsThreshold  = int64(1_000_000_000_000_000)
 	nanosecondsPerSecond      = int64(time.Second)
@@ -308,7 +309,7 @@ CREATE TABLE IF NOT EXISTS items (
 	id TEXT PRIMARY KEY,
 	display_name TEXT NOT NULL,
 	weight_units INTEGER NOT NULL CHECK (weight_units > 0),
-	max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)
+	max_durability_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (max_durability_seconds > 0)
 );
 CREATE TABLE IF NOT EXISTS gathering_rules (
 	location_id TEXT PRIMARY KEY REFERENCES locations(id),
@@ -462,7 +463,7 @@ INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES
 	('wood_component', 'Wood Component', 10);
 UPDATE items SET weight_units = 100 WHERE id = 'wood';
 UPDATE items SET weight_units = 10 WHERE id = 'wood_component';
-UPDATE items SET max_durability_seconds = 604800 WHERE id IN ('wood', 'wood_component');
+UPDATE items SET max_durability_seconds = 3600 WHERE id IN ('wood', 'wood_component');
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
@@ -562,7 +563,7 @@ func ensureWeightSchema(tx *sql.Tx) error {
 }
 
 func ensureItemDurabilitySchema(tx *sql.Tx, migrationNow time.Time) error {
-	const defaultDurabilitySeconds = int64(7 * 24 * 60 * 60)
+	const defaultDurabilitySeconds = int64(itemDefaultDurability / time.Second)
 	itemColumns, err := tableColumns(tx, "items")
 	if err != nil {
 		return err

@@ -11,6 +11,7 @@ source_paths:
   - docs/changes/2026-08-29-item-durability.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server_test.go
   - internal/authapi/store_durability_overflow_test.go
   - internal/authapi/store_durability_attribution_test.go
   - internal/authapi/server.go
@@ -148,7 +149,7 @@ Task 1: durability schema and lifecycle [parallel: no]
   - REQ-015.8: 玩家必須能看到每個 Item 堆疊的狀態與剩餘有效時間。
   - REQ-015.21: Inventory 與地面都必須顯示尚在保留期內的 Expired Item。
   - REQ-015.22: 前端必須顯示 Expired Item 的剩餘保留時間，且不能提供會使用該 Item 的操作。
-- [ ] Task 6 [parallel: no]: Set every Item definition to a one-hour test durability, make the production base-schema migration grant existing Item quantities one hour, and reduce Expired Item retention to one day in `internal/authapi/store.go`. Update store tests and related documentation. Repeated initialization must preserve existing deadlines. Building durability and retention must remain seven days.
+- [x] Task 6 [parallel: no]: Set every Item definition to a one-hour test durability, make the production base-schema migration grant existing Item quantities one hour, and reduce Expired Item retention to one day in `internal/authapi/store.go`. Update store tests and related documentation. Repeated initialization must preserve existing deadlines. Building durability and retention must remain seven days.
   - REQ-011.1: `Building Lv1` 完成時必須取得 7 天耐久時間。
   - REQ-011.6: Disabled Building 必須保留 7 天，期間仍能維修。
   - REQ-015.2: 所有 Item 的耐久時間上限都必須為 1 小時。

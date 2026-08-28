@@ -2277,7 +2277,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		t.Fatalf("ground item response = %#v", body["ground_items"])
 	}
 	groundItem := groundItems[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(7*24*60*60) || groundItem["retention_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(3600) || groundItem["retention_remaining_seconds"] != nil {
 		t.Fatalf("ground item shape = %#v", groundItem)
 	}
 	item := groundItem["item"].(map[string]any)
