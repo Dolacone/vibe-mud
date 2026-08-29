@@ -75,6 +75,14 @@ export type BuildingExtension = {
   status: "under_construction" | "completed";
 };
 
+export type BuildingExtensionDefinition = {
+  id: string;
+  display_name: string;
+  tier: number;
+  package_item: Item;
+  required_ap: number;
+};
+
 export type Resource = {
   resource: Item;
   quantity: number;
@@ -147,6 +155,7 @@ export type PlayerState = {
   gathering_option: GatheringOption | null;
   conversion_option: ConversionOption | null;
   conversion_methods?: ConversionMethod[];
+  building_extension_definitions?: BuildingExtensionDefinition[];
   resources: Resource[];
   crafting_recipes?: CraftingRecipe[];
   building_recipes?: BuildingRecipe[];
@@ -523,6 +532,12 @@ function isBuildingExtension(value: unknown): value is BuildingExtension {
   return isPositiveInteger(extension.id) && isNonNegativeInteger(extension.slot_index) && isString(extension.definition_id) && isString(extension.display_name) && isPositiveInteger(extension.tier) && isPositiveInteger(extension.required_ap) && isNonNegativeInteger(extension.contributed_ap) && extension.contributed_ap <= extension.required_ap && (extension.status === "under_construction" || extension.status === "completed");
 }
 
+function isBuildingExtensionDefinition(value: unknown): value is BuildingExtensionDefinition {
+  if (typeof value !== "object" || value === null) return false;
+  const definition = value as Record<string, unknown>;
+  return isString(definition.id) && isString(definition.display_name) && isPositiveInteger(definition.tier) && isItem(definition.package_item) && isPositiveInteger(definition.required_ap);
+}
+
 function isPlayerState(value: unknown): value is PlayerState {
   if (typeof value !== "object" || value === null) return false;
   const state = value as Record<string, unknown>;
@@ -543,6 +558,7 @@ function isPlayerState(value: unknown): value is PlayerState {
     (state.gathering_option === null || isGatheringOption(state.gathering_option)) &&
     (state.conversion_option === null || isConversionOption(state.conversion_option)) &&
     (state.conversion_methods === undefined || isConversionMethods(state.conversion_methods)) &&
+    (state.building_extension_definitions === undefined || (Array.isArray(state.building_extension_definitions) && state.building_extension_definitions.every(isBuildingExtensionDefinition))) &&
     isResources(state.resources) &&
     isCraftingRecipes(state.crafting_recipes) &&
     isBuildingRecipes(state.building_recipes) &&
@@ -874,10 +890,10 @@ export async function convert(methodID: string | typeof fetch, quantity?: number
     }
 
     const body: unknown = await response.json();
-    if (!isPlayerState(body) || (!legacy && (typeof (body as Record<string, unknown>).method_id !== "string" || !isPositiveInteger((body as Record<string, unknown>).quantity) || !isNonNegativeInteger((body as Record<string, unknown>).resource_quantity) || !isNonNegativeInteger((body as Record<string, unknown>).essence_quantity)))) {
+    if (!isPlayerState(body) || (!legacy && (typeof (body as Record<string, unknown>).method_id !== "string" || !isPositiveInteger((body as Record<string, unknown>).quantity) || !isNonNegativeInteger((body as Record<string, unknown>).resource_quantity) || ((body as Record<string, unknown>).essence_quantity !== undefined && !isNonNegativeInteger((body as Record<string, unknown>).essence_quantity))))) {
       return { status: "error", error: new Error("convert response is invalid") };
     }
-    return { status: "success", ...body } as ConvertResult;
+    return { status: "success", ...body, ...(legacy || (body as Record<string, unknown>).essence_quantity !== undefined ? {} : { essence_quantity: 0 }) } as ConvertResult;
   } catch (error) {
     return {
       status: "error",
