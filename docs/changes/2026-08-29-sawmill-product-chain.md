@@ -1,6 +1,6 @@
 ---
 title: "Sawmill product chain"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -149,11 +149,13 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Major] 前端未暴露 extension definitions，也未提供安裝控制。施工中的 extension 也沒有拆除控制。Backend contract 已提供 definitions，待 Task 5 完成前端控制後勾選。
 - [x] [Major] Sawmill Convert 未強制選擇 provider。無 provider 時仍可送出，後端再把 `ErrExtensionNotFound` 回成 500。
 - [x] [Major] Convert 以 `methodID != "hand_wood_t1"` 判定 provider 需求。`global_conversion_methods` 的設定未參與判定。
-- [x] [Major] Extension 操作日誌的 `building_id`、`extension_id` 與 `ap` 固定為 0。日誌未記錄實際操作目標與投入 AP。
+- [ ] [Major] Extension 日誌仍未使用 request metadata。AP 固定為 0，Building 與 extension 取自 mutation 後狀態的最後一筆，移除與失敗操作會記錯目標。
 - [x] [Major] 超過 method capacity 的 Convert 會回傳 500。後端未把 `ErrInvalidArgument` 映射為無效 action 回應。
 - [x] [Major] `install-extension` 缺少 `slot_index` 時仍使用預設值 0。無效 payload 可以消耗 Package 並安裝 extension。
 - [x] [Major] 前端向非 owner 顯示拆除控制，也向 Disabled Building 顯示安裝與施工控制。這些不是玩家可用操作。
-- [x] [Minor] `source_paths` 重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單完全一致。
+- [ ] [Minor] `source_paths` 仍重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單精確唯一匹配。
+- [ ] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
+- [ ] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
 
 ## Plan Review Issues
 
