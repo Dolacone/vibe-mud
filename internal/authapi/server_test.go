@@ -1164,6 +1164,88 @@ func prepareCompletedBuilding(t *testing.T, fixture buildingAPIFixture, expiresA
 	return buildingID
 }
 
+func prepareExtensionActionFixture(t *testing.T, subject string) (buildingAPIFixture, int64, int64) {
+	t.Helper()
+	fixture := newBuildingAPIFixture(t, subject)
+	buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(time.Hour))
+	if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'sawmill_package_t1', 1)`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.store.InstallExtension(fixture.identity.ID, buildingID, 0, "sawmill_t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 || len(state.Buildings[0].Extensions) != 1 {
+		t.Fatalf("installed extension state = %#v", state.Buildings)
+	}
+	return fixture, buildingID, state.Buildings[0].Extensions[0].ID
+}
+
+func TestInstallExtensionAPILogUsesRequestBuildingAndCreatedExtension(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "extension-api-install-log")
+	buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(time.Hour))
+	if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'sawmill_package_t1', 1)`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-install-success"
+	body := `{"building_id":` + strconv.FormatInt(buildingID, 10) + `,"slot_index":0,"definition_id":"sawmill_t1"}`
+	request := fixture.request(http.MethodPost, "/api/actions/install-extension", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=install-extension building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=1 ap=0 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("install status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestContributeExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-contribute-log")
+	requestID := "extension-contribute-success"
+	body := `{"extension_id":1,"ap":10}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=10 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("contribute status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestRemoveExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-remove-log")
+	requestID := "extension-remove-success"
+	body := `{"extension_id":1}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/remove-extension", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=remove-extension building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=0 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("remove status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestContributeExtensionAPILogUsesAuthoritativeBuildingOnDomainFailure(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-domain-log")
+	if _, err := fixture.store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-extension-location', 'Remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE player_locations SET location_id = 'remote-extension-location' WHERE user_id = ?`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-contribute-domain-failure"
+	body := `{"extension_id":1,"ap":1}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=1 outcome=error request_id=" + requestID
+	if response.Code != http.StatusConflict || !strings.Contains(logOutput, want) {
+		t.Fatalf("domain failure status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
 func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing.T) {
 	tests := []struct {
 		name          string

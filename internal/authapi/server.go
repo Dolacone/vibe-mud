@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -709,55 +710,71 @@ type extensionIDRequest struct {
 	AP          int
 }
 
+type extensionActionMetadata struct {
+	BuildingID  int64
+	ExtensionID int64
+	AP          int
+}
+
 func (s *Server) installExtension(w http.ResponseWriter, r *http.Request) {
-	s.extensionActionWithMeta(w, r, "install-extension", 0, 0, 0, func(userID int64) (PlayerState, error) {
-		request, reason := decodeInstallExtensionRequest(r.Body)
+	request, reason := decodeInstallExtensionRequest(r.Body)
+	s.extensionActionWithMeta(w, r, "install-extension", func(userID int64) (PlayerState, extensionActionMetadata, error) {
 		if reason != "" {
-			return PlayerState{}, fmt.Errorf("%s", reason)
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
 		}
-		return s.store.InstallExtension(userID, request.BuildingID, request.SlotIndex, request.DefinitionID)
+		metadata := extensionActionMetadata{BuildingID: request.BuildingID}
+		state, err := s.store.InstallExtension(userID, request.BuildingID, request.SlotIndex, request.DefinitionID)
+		if err != nil {
+			return PlayerState{}, metadata, err
+		}
+		metadata.ExtensionID = extensionIDAtSlot(state, request.BuildingID, request.SlotIndex)
+		return state, metadata, nil
 	})
 }
 
 func (s *Server) contributeExtensionConstruction(w http.ResponseWriter, r *http.Request) {
-	s.extensionAction(w, r, "contribute-extension-construction", func(userID int64) (PlayerState, error) {
-		request, reason := decodeExtensionIDRequest(r.Body, true)
+	request, reason := decodeExtensionIDRequest(r.Body, true)
+	s.extensionActionWithMeta(w, r, "contribute-extension-construction", func(userID int64) (PlayerState, extensionActionMetadata, error) {
 		if reason != "" {
-			return PlayerState{}, fmt.Errorf("%s", reason)
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
 		}
-		return s.store.ContributeExtensionConstruction(userID, request.ExtensionID, request.AP)
+		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID, AP: request.AP}
+		var err error
+		metadata.BuildingID, err = s.extensionBuildingID(request.ExtensionID)
+		if err != nil {
+			return PlayerState{}, metadata, err
+		}
+		state, err := s.store.ContributeExtensionConstruction(userID, request.ExtensionID, request.AP)
+		return state, metadata, err
 	})
 }
 
 func (s *Server) removeExtension(w http.ResponseWriter, r *http.Request) {
-	s.extensionAction(w, r, "remove-extension", func(userID int64) (PlayerState, error) {
-		request, reason := decodeExtensionIDRequest(r.Body, false)
+	request, reason := decodeExtensionIDRequest(r.Body, false)
+	s.extensionActionWithMeta(w, r, "remove-extension", func(userID int64) (PlayerState, extensionActionMetadata, error) {
 		if reason != "" {
-			return PlayerState{}, fmt.Errorf("%s", reason)
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
 		}
-		return s.store.RemoveExtension(userID, request.ExtensionID)
+		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID}
+		var err error
+		metadata.BuildingID, err = s.extensionBuildingID(request.ExtensionID)
+		if err != nil {
+			return PlayerState{}, metadata, err
+		}
+		state, err := s.store.RemoveExtension(userID, request.ExtensionID)
+		return state, metadata, err
 	})
 }
 
-func (s *Server) extensionAction(w http.ResponseWriter, r *http.Request, action string, execute func(int64) (PlayerState, error)) {
-	s.extensionActionWithMeta(w, r, action, 0, 0, 0, execute)
-}
-
-func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request, action string, buildingID, extensionID int64, ap int, execute func(int64) (PlayerState, error)) {
+func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request, action string, execute func(int64) (PlayerState, extensionActionMetadata, error)) {
 	session, err := s.authenticatedSession(r)
 	if err != nil {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	state, err := execute(session.UserID)
-	if buildingID == 0 && len(state.Buildings) > 0 {
-		buildingID = state.Buildings[len(state.Buildings)-1].ID
-	}
-	if extensionID == 0 && len(state.Buildings) > 0 && len(state.Buildings[len(state.Buildings)-1].Extensions) > 0 {
-		extensionID = state.Buildings[len(state.Buildings)-1].Extensions[len(state.Buildings[len(state.Buildings)-1].Extensions)-1].ID
-	}
+	state, metadata, err := execute(session.UserID)
 	if err != nil {
-		s.logExtensionAction(r, session.UserID, action, buildingID, extensionID, ap, "error")
+		s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "error")
 		current, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
@@ -766,8 +783,34 @@ func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request,
 		s.writeJSON(w, http.StatusConflict, extensionActionResponse{Error: "invalid action", playerStateResponse: s.playerStateResponse(r, session.UserID, current)})
 		return
 	}
-	s.logExtensionAction(r, session.UserID, action, buildingID, extensionID, ap, "success")
+	s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "success")
 	s.writeJSON(w, http.StatusOK, extensionActionResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+}
+
+func extensionIDAtSlot(state PlayerState, buildingID int64, slotIndex int) int64 {
+	for _, building := range state.Buildings {
+		if building.ID != buildingID {
+			continue
+		}
+		for _, extension := range building.Extensions {
+			if extension.SlotIndex == slotIndex {
+				return extension.ID
+			}
+		}
+	}
+	return 0
+}
+
+func (s *Server) extensionBuildingID(extensionID int64) (int64, error) {
+	var buildingID int64
+	err := s.store.db.QueryRow(`SELECT building_id FROM building_extensions WHERE id = ?`, extensionID).Scan(&buildingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get extension building: %w", err)
+	}
+	return buildingID, nil
 }
 
 func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, string) {
