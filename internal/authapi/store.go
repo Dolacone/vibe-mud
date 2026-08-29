@@ -16,28 +16,34 @@ import (
 )
 
 var (
-	ErrInvalidArgument           = errors.New("invalid argument")
-	ErrIdentityNotFound          = errors.New("identity not found")
-	ErrOAuthAttemptNotFound      = errors.New("oauth attempt not found")
-	ErrOAuthAttemptExpired       = errors.New("oauth attempt expired")
-	ErrOAuthAttemptConsumed      = errors.New("oauth attempt already consumed")
-	ErrSessionNotFound           = errors.New("session not found")
-	ErrSessionExpired            = errors.New("session expired")
-	ErrInsufficientAP            = errors.New("insufficient action points")
-	ErrOverweight                = errors.New("player is overweight")
-	ErrRouteNotFound             = errors.New("route not found")
-	ErrGatheringNotFound         = errors.New("gathering not found")
-	ErrConversionNotFound        = errors.New("conversion not found")
-	ErrInsufficientItem          = errors.New("insufficient item")
-	ErrCraftingNotFound          = errors.New("crafting recipe not found")
-	ErrInsufficientResource      = errors.New("insufficient resource")
-	ErrBuildingNotFound          = errors.New("building not found")
-	ErrBuildingOccupied          = errors.New("building location already occupied")
-	ErrBuildingRemote            = errors.New("building is at another location")
-	ErrBuildingCompleted         = errors.New("building is already completed")
-	ErrBuildingUnderConstruction = errors.New("building is under construction")
-	ErrTransferAssetNotFound     = errors.New("transfer asset not found")
-	ErrInsufficientTransferAsset = errors.New("insufficient transfer asset")
+	ErrInvalidArgument             = errors.New("invalid argument")
+	ErrIdentityNotFound            = errors.New("identity not found")
+	ErrOAuthAttemptNotFound        = errors.New("oauth attempt not found")
+	ErrOAuthAttemptExpired         = errors.New("oauth attempt expired")
+	ErrOAuthAttemptConsumed        = errors.New("oauth attempt already consumed")
+	ErrSessionNotFound             = errors.New("session not found")
+	ErrSessionExpired              = errors.New("session expired")
+	ErrInsufficientAP              = errors.New("insufficient action points")
+	ErrOverweight                  = errors.New("player is overweight")
+	ErrRouteNotFound               = errors.New("route not found")
+	ErrGatheringNotFound           = errors.New("gathering not found")
+	ErrConversionNotFound          = errors.New("conversion not found")
+	ErrInsufficientItem            = errors.New("insufficient item")
+	ErrCraftingNotFound            = errors.New("crafting recipe not found")
+	ErrInsufficientResource        = errors.New("insufficient resource")
+	ErrBuildingNotFound            = errors.New("building not found")
+	ErrBuildingOccupied            = errors.New("building location already occupied")
+	ErrBuildingRemote              = errors.New("building is at another location")
+	ErrBuildingCompleted           = errors.New("building is already completed")
+	ErrBuildingUnderConstruction   = errors.New("building is under construction")
+	ErrBuildingDisabled            = errors.New("building is disabled")
+	ErrBuildingNotOwner            = errors.New("building owner required")
+	ErrExtensionNotFound           = errors.New("extension not found")
+	ErrExtensionDefinitionNotFound = errors.New("extension definition not found")
+	ErrExtensionOccupied           = errors.New("extension slot already occupied")
+	ErrExtensionCompleted          = errors.New("extension is already completed")
+	ErrTransferAssetNotFound       = errors.New("transfer asset not found")
+	ErrInsufficientTransferAsset   = errors.New("insufficient transfer asset")
 )
 
 type Store struct {
@@ -222,6 +228,18 @@ type Building struct {
 	MaxDurabilitySeconds       int
 	DurabilityStatus           string
 	DurabilityRemainingSeconds int
+	Extensions                 []BuildingExtension
+}
+
+type BuildingExtension struct {
+	ID            int64
+	SlotIndex     int
+	DefinitionID  string
+	DisplayName   string
+	Tier          int
+	RequiredAP    int
+	ContributedAP int
+	Status        string
 }
 
 type ConstructionComputation struct {
@@ -477,6 +495,22 @@ CREATE TABLE IF NOT EXISTS buildings (
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS building_extensions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	building_id INTEGER NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+	slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
+	definition_id TEXT NOT NULL REFERENCES building_extension_definitions(id),
+	display_name TEXT NOT NULL,
+	tier INTEGER NOT NULL CHECK (tier > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+	status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+	UNIQUE (building_id, slot_index)
+);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("initialize building extensions: %w", err)
 	}
 	migrationNow := time.Now().UTC()
 	migratedTimestampValues, err := migrateTimestampsToUnixSeconds(tx)
@@ -1176,13 +1210,16 @@ ORDER BY b.id`, state.Location.ID)
 	}
 	defer buildingRows.Close()
 	for buildingRows.Next() {
-		var building Building
+		building := Building{Extensions: make([]BuildingExtension, 0)}
 		var durabilityExpiresAt sql.NullInt64
 		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount, &building.MaxDurabilitySeconds, &durabilityExpiresAt); err != nil {
 			return PlayerState{}, fmt.Errorf("scan building: %w", err)
 		}
 		building.Recipe.MaxDurabilitySeconds = building.MaxDurabilitySeconds
 		setBuildingDurability(&building, durabilityExpiresAt, now)
+		if err := loadBuildingExtensionsTx(tx, &building); err != nil {
+			return PlayerState{}, err
+		}
 		state.Buildings = append(state.Buildings, building)
 	}
 	if err := buildingRows.Err(); err != nil {
@@ -1598,6 +1635,29 @@ ORDER BY ed.id`)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read building extension definitions: %w", err)
+	}
+	return nil
+}
+
+func loadBuildingExtensionsTx(tx *sql.Tx, building *Building) error {
+	rows, err := tx.Query(`
+SELECT id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status
+FROM building_extensions
+WHERE building_id = ?
+ORDER BY slot_index`, building.ID)
+	if err != nil {
+		return fmt.Errorf("get building extensions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var extension BuildingExtension
+		if err := rows.Scan(&extension.ID, &extension.SlotIndex, &extension.DefinitionID, &extension.DisplayName, &extension.Tier, &extension.RequiredAP, &extension.ContributedAP, &extension.Status); err != nil {
+			return fmt.Errorf("scan building extension: %w", err)
+		}
+		building.Extensions = append(building.Extensions, extension)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read building extensions: %w", err)
 	}
 	return nil
 }
@@ -2796,6 +2856,323 @@ WHERE id = ? AND status = 'completed' AND durability_expires_at = ?`, newExpiry,
 		ResultingRemainingSeconds: int(newExpiry - nowSeconds),
 		APCost:                    buildingRepairAPCost,
 		WoodCost:                  buildingRepairWoodCost,
+	}
+	return state, nil
+}
+
+func (s *Store) InstallExtension(userID, buildingID int64, slotIndex int, definitionID string) (PlayerState, error) {
+	if userID <= 0 || buildingID <= 0 || slotIndex < 0 || strings.TrimSpace(definitionID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: user ID, building ID, slot index, and definition ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin extension installation: %w", err)
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var playerLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&playerLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension installer location: %w", err)
+	}
+	var ownerID int64
+	var buildingLocation, buildingStatus string
+	var durabilityExpiresAt sql.NullInt64
+	var slotCount int
+	err = tx.QueryRow(`
+SELECT owner_id, location_id, status, extension_slot_count, durability_expires_at
+FROM buildings WHERE id = ?`, buildingID).Scan(&ownerID, &buildingLocation, &buildingStatus, &slotCount, &durabilityExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension building: %w", err)
+	}
+	if ownerID != userID {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotOwner
+	}
+	if playerLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if buildingStatus != "completed" {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingUnderConstruction
+	}
+	if !durabilityExpiresAt.Valid || durabilityExpiresAt.Int64 <= now.Unix() {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingDisabled
+	}
+	if slotIndex >= slotCount {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: slot index is outside building capacity", ErrInvalidArgument)
+	}
+	var definition BuildingExtensionDefinition
+	err = tx.QueryRow(`
+SELECT ed.id, ed.display_name, ed.tier, ed.package_item_id, i.display_name, i.weight_units, i.max_durability_seconds, ed.required_ap
+FROM building_extension_definitions ed
+JOIN items i ON i.id = ed.package_item_id
+WHERE ed.id = ?`, definitionID).Scan(
+		&definition.ID, &definition.DisplayName, &definition.Tier, &definition.PackageItem.ID,
+		&definition.PackageItem.DisplayName, &definition.PackageItem.WeightUnits,
+		&definition.PackageItem.MaxDurabilitySeconds, &definition.RequiredAP,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionDefinitionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension definition: %w", err)
+	}
+	var occupied int
+	err = tx.QueryRow(`SELECT 1 FROM building_extensions WHERE building_id = ? AND slot_index = ?`, buildingID, slotIndex).Scan(&occupied)
+	if err == nil {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionOccupied
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check extension slot: %w", err)
+	}
+	var packageQuantity int
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, definition.PackageItem.ID).Scan(&packageQuantity)
+	if errors.Is(err, sql.ErrNoRows) || packageQuantity < 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientItem
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension package: %w", err)
+	}
+	var result sql.Result
+	if packageQuantity == 1 {
+		result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, definition.PackageItem.ID)
+	} else {
+		result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ? AND durability_status = 'active' AND quantity >= 1`, userID, definition.PackageItem.ID)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume extension package: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension package: %w", rowsErr)
+		}
+		return PlayerState{}, ErrInsufficientItem
+	}
+	if _, err := tx.Exec(`
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction')`, buildingID, slotIndex, definition.ID, definition.DisplayName, definition.Tier, definition.RequiredAP); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("create building extension: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit extension installation: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) ContributeExtensionConstruction(userID, extensionID int64, requestedAP int) (PlayerState, error) {
+	if userID <= 0 || extensionID <= 0 || requestedAP <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID, extension ID, and AP are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin extension construction contribution: %w", err)
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var contributorLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension contributor location: %w", err)
+	}
+	var buildingLocation, buildingStatus string
+	var durabilityExpiresAt sql.NullInt64
+	var contributedAP, requiredAP int
+	err = tx.QueryRow(`
+SELECT b.location_id, b.status, b.durability_expires_at, e.contributed_ap, e.required_ap
+FROM building_extensions e
+JOIN buildings b ON b.id = e.building_id
+WHERE e.id = ? AND e.status = 'under_construction'`, extensionID).Scan(&buildingLocation, &buildingStatus, &durabilityExpiresAt, &contributedAP, &requiredAP)
+	if errors.Is(err, sql.ErrNoRows) {
+		var status string
+		if scanErr := tx.QueryRow(`SELECT status FROM building_extensions WHERE id = ?`, extensionID).Scan(&status); scanErr == nil && status == "completed" {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrExtensionCompleted
+		}
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension construction target: %w", err)
+	}
+	if contributorLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if buildingStatus != "completed" {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingUnderConstruction
+	}
+	if !durabilityExpiresAt.Valid || durabilityExpiresAt.Int64 <= now.Unix() {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingDisabled
+	}
+	remainingAP := requiredAP - contributedAP
+	actualAP := requestedAP
+	if actualAP > remainingAP {
+		actualAP = remainingAP
+	}
+	var fullTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension contributor AP: %w", err)
+	}
+	if calculateAP(unixSeconds(fullTimestamp), now) < actualAP {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientAP
+	}
+	fullAt := unixSeconds(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume extension construction AP: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension construction AP: %w", rowsErr)
+		}
+		return PlayerState{}, ErrInsufficientAP
+	}
+	newProgress := contributedAP + actualAP
+	newStatus := "under_construction"
+	if newProgress == requiredAP {
+		newStatus = "completed"
+	}
+	result, err = tx.Exec(`
+UPDATE building_extensions SET contributed_ap = ?, status = ?
+WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, extensionID, contributedAP)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("update extension construction progress: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension construction progress: %w", rowsErr)
+		}
+		return PlayerState{}, ErrExtensionCompleted
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit extension construction contribution: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) RemoveExtension(userID, extensionID int64) (PlayerState, error) {
+	if userID <= 0 || extensionID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID and extension ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin extension removal: %w", err)
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var ownerID int64
+	err = tx.QueryRow(`
+SELECT b.owner_id
+FROM building_extensions e
+JOIN buildings b ON b.id = e.building_id
+WHERE e.id = ?`, extensionID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension removal target: %w", err)
+	}
+	if ownerID != userID {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotOwner
+	}
+	result, err := tx.Exec(`DELETE FROM building_extensions WHERE id = ?`, extensionID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("remove building extension: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension removal: %w", rowsErr)
+		}
+		return PlayerState{}, ErrExtensionNotFound
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit extension removal: %w", err)
 	}
 	return state, nil
 }

@@ -524,6 +524,237 @@ VALUES (?, 'camp', 'building_lv1', 1, 60, 12, 'under_construction', 1),
 	}
 }
 
+func TestInstallExtensionConsumesPackageAndPersistsSlotSnapshot(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventoryQuantity(state, "sawmill_package_t1") != 0 || len(state.Buildings) != 1 || len(state.Buildings[0].Extensions) != 1 {
+		t.Fatalf("installed extension state = %+v", state)
+	}
+	extension := state.Buildings[0].Extensions[0]
+	if extension.SlotIndex != 0 || extension.DefinitionID != "sawmill_t1" || extension.DisplayName != "Sawmill T1" || extension.Tier != 1 || extension.RequiredAP != 30 || extension.ContributedAP != 0 || extension.Status != "under_construction" {
+		t.Fatalf("installed extension snapshot = %+v", extension)
+	}
+	if _, err := db.Exec(`UPDATE building_extension_definitions SET display_name = 'Edited Sawmill', tier = 2, required_ap = 99 WHERE id = 'sawmill_t1'`); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Buildings[0].Extensions[0]; got.DisplayName != "Sawmill T1" || got.Tier != 1 || got.RequiredAP != 30 {
+		t.Fatalf("extension snapshot changed after definition edit = %+v", got)
+	}
+}
+
+func TestInstallExtensionRejectsOwnerSlotAndPackageFailuresWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install-fail-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install-fail-other", "other@example.com", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 2, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(other.ID, 1, 0, "sawmill_t1"); !errors.Is(err, ErrBuildingNotOwner) {
+		t.Fatalf("non-owner installation error = %v, want ErrBuildingNotOwner", err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 2, "sawmill_t1"); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("out-of-range slot error = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "unknown"); !errors.Is(err, ErrExtensionDefinitionNotFound) {
+		t.Fatalf("unknown definition error = %v, want ErrExtensionDefinitionNotFound", err)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed extension installations changed state: before=%+v after=%+v", before, after)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	before, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 1, "sawmill_t1"); !errors.Is(err, ErrInsufficientItem) {
+		t.Fatalf("second package installation error = %v, want ErrInsufficientItem", err)
+	}
+	after, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) || len(after.Buildings[0].Extensions) != 1 {
+		t.Fatalf("insufficient package changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestExtensionConstructionSharesAPAndCompletesAtRequiredProgress(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-construction-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributor, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-construction-contributor", "contributor@example.com", "Contributor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeExtensionConstruction(contributor.ID, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-10 || state.Buildings[0].Extensions[0].ContributedAP != 10 || state.Buildings[0].Extensions[0].Status != "under_construction" {
+		t.Fatalf("first extension contribution = %+v", state.Buildings[0].Extensions[0])
+	}
+	state, err = store.ContributeExtensionConstruction(owner.ID, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-20 || state.Buildings[0].Extensions[0].ContributedAP != 30 || state.Buildings[0].Extensions[0].Status != "completed" {
+		t.Fatalf("completed extension contribution = %+v", state.Buildings[0].Extensions[0])
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeExtensionConstruction(owner.ID, 1, 1); !errors.Is(err, ErrExtensionCompleted) {
+		t.Fatalf("completed extension error = %v, want ErrExtensionCompleted", err)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("completed extension contribution changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestDisabledBuildingBlocksExtensionProgressUntilRepairAndRemovalDoesNotRefund(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-disabled", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1);`, owner.ID, now.Add(-time.Second).Unix(), owner.ID, now.Add(time.Hour).Unix(), owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); !errors.Is(err, ErrBuildingDisabled) {
+		t.Fatalf("disabled installation error = %v, want ErrBuildingDisabled", err)
+	}
+	if _, err := db.Exec(`UPDATE buildings SET durability_expires_at = ?`, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE buildings SET durability_expires_at = ?`, now.Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeExtensionConstruction(owner.ID, 1, 1); !errors.Is(err, ErrBuildingDisabled) {
+		t.Fatalf("disabled contribution error = %v, want ErrBuildingDisabled", err)
+	}
+	if _, err := store.RepairBuilding(owner.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeExtensionConstruction(owner.ID, 1, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Buildings[0].Extensions[0].Status != "completed" {
+		t.Fatalf("repaired extension state = %+v", state.Buildings[0].Extensions[0])
+	}
+	if _, err := store.RemoveExtension(owner.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings[0].Extensions) != 0 || inventoryQuantity(state, "sawmill_package_t1") != 0 {
+		t.Fatalf("removed extension state = %+v", state)
+	}
+}
+
+func TestExpiredBuildingCascadesItsExtensions(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-cascade", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 0, 'under_construction');`, owner.ID, now.Add(-buildingDisabledRetention-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetPlayerState(owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	var buildings, extensions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM buildings`).Scan(&buildings); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM building_extensions`).Scan(&extensions); err != nil {
+		t.Fatal(err)
+	}
+	if buildings != 0 || extensions != 0 {
+		t.Fatalf("expired cascade counts = buildings %d, extensions %d; want zero", buildings, extensions)
+	}
+}
+
 func TestBuildSeededRecipeConsumesMixedInputsAtomically(t *testing.T) {
 	store, db := newTestStore(t)
 	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-seeded-building", "owner@example.com", "Owner")

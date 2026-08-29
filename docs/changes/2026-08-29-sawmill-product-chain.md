@@ -65,7 +65,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
   - REQ-017.2: Sawmill Package T1 recipe 必須消耗 30 AP、10 Wood Resource 與 1 個 Active Wood Essence T1，並產出 1 個 Sawmill Package T1。
   - REQ-017.3: Sawmill Package T1 recipe 不得使用其他 Resource 或其他 Essence。
   - REQ-017.4: `Sawmill T1` extension definition 必須使用 Sawmill Package T1，且施工需要 30 AP。
-- [ ] Task 2 [parallel: no]: Implement generic extension installation, shared construction, completion, use eligibility, removal, and parent lifecycle in `internal/authapi/store.go`. Update store tests in the same commit.
+- [x] Task 2 [parallel: no]: Implement generic extension installation, shared construction, completion, use eligibility, removal, and parent lifecycle in `internal/authapi/store.go`. Update store tests in the same commit.
   - REQ-011.23: Disabled Building 不得安裝 extension、增加 extension 施工 progress 或提供 extension 功能。
   - REQ-011.24: Building 維修並恢復 Active 後，原有 extension 必須恢復施工或使用，不需要重新安裝。
   - REQ-011.25: Building 永久消失時，其 extension 必須一併永久消失。
