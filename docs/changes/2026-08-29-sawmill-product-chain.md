@@ -1,6 +1,6 @@
 ---
 title: "Sawmill product chain"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -155,6 +155,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Minor] `source_paths` 仍重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單精確唯一匹配。
 - [x] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
 - [x] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
+- [ ] [Major] Extension 施工日誌記錄 request AP，不是實際投入 AP。投入量被剩餘進度截斷時，日誌會高報 AP。
 
 ## Plan Review Issues
 
