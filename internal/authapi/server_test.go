@@ -1976,7 +1976,7 @@ func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-1) || body["error"] != nil {
+	if body["ap"] != float64(maxAP-1) || body["error"] != nil || body["method_id"] != "legacy" || body["quantity"] != float64(1) || body["resource_quantity"] != float64(1) || body["essence_quantity"] != float64(0) {
 		t.Fatalf("legacy convert response = %#v", body)
 	}
 	if resources := responseResourceQuantities(t, body); len(resources) != 8 || resources["wood"] != 1 {
@@ -1985,8 +1985,11 @@ func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
 	if inventory, ok := body["inventory"].([]any); !ok || len(inventory) != 0 {
 		t.Fatalf("legacy convert inventory = %#v", body["inventory"])
 	}
-	if !strings.Contains(logOutput, "user_id=1 action=convert outcome=success request_id=legacy-convert-request") {
+	if !strings.Contains(logOutput, "user_id=1 action=convert method_id=legacy quantity=1 resource_quantity=1 essence_quantity=0 essence_result=reported outcome=success request_id=legacy-convert-request") {
 		t.Fatalf("legacy convert log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, "session-secret") || strings.Contains(logOutput, "{}") {
+		t.Fatalf("legacy convert log leaked credentials or raw input: %q", logOutput)
 	}
 	state, err := store.GetPlayerState(identity.ID)
 	if err != nil {

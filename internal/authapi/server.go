@@ -541,6 +541,14 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
+	if request.Legacy {
+		if before.ConversionOption == nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		request.MethodID = "legacy"
+		request.Quantity = before.ConversionOption.InputQuantity
+	}
 	var state PlayerState
 	if request.Legacy {
 		state, err = s.store.Convert(session.UserID)
@@ -607,6 +615,9 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resourceQuantity := resourceDelta(before, state, request.MethodID, request.Quantity)
+	if request.Legacy {
+		resourceQuantity = before.ConversionOption.ResourceYield * request.Quantity
+	}
 	essenceQuantity := itemDelta(before, state, request.MethodID)
 	s.logConvertComputation(r, session.UserID, request, resourceQuantity, essenceQuantity, "success")
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
