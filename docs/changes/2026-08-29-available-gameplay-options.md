@@ -6,15 +6,15 @@ doc_type: change
 last_reviewed: 2026-08-29
 source_paths:
   - CHANGELOG.md
+  - docs/architecture.md
+  - docs/changes/2026-08-29-available-gameplay-options.md
   - docs/changes/2026-08-29-sawmill-product-chain.md
   - docs/schemas.md
   - docs/terminology.md
   - internal/authapi/server.go
-  - internal/authapi/store.go
   - internal/authapi/server_test.go
+  - internal/authapi/store.go
   - internal/authapi/store_test.go
-  - docs/architecture.md
-  - docs/changes/2026-08-29-available-gameplay-options.md
   - requirements/BEHAVIOR.md
   - requirements/REQ-004.md
   - requirements/REQ-005.md
@@ -28,10 +28,10 @@ source_paths:
   - requirements/REQ-016.md
   - requirements/REQ-017.md
   - requirements/REQ-018.md
-  - web/src/App.tsx
   - web/src/App.test.tsx
-  - web/src/auth.ts
+  - web/src/App.tsx
   - web/src/auth.test.ts
+  - web/src/auth.ts
 req_ref: REQ-018
 base_branch: main
 scope: "Only expose gameplay options that the authenticated player can currently execute."
@@ -93,4 +93,4 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
 - [x] [Major] The full Go suite failed three stale tests: `TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState` assumed action ordering, `TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState` expected consumed recipes to remain available, and `TestRestInsufficientAPReturnsConflictWithoutChangingState` expected a partial error response. Tests now assert unordered availability, post-mutation filtering, and the complete authoritative state response.
 - [x] [Major] The frontend hides a backend-returned legacy Convert option when `conversion_option` is available but `conversion_methods` is empty. The backend returns `convert` for that state, while `App.tsx` renders no control unless a method exists.
 - [x] [Major] A remote owned extension is omitted from the current-Location response but remains removable by direct submission. `RemoveExtension` checks ownership only, then deletes the extension without checking the player's current Location.
-- [ ] [Major] `source_paths` does not match `main...HEAD`. The actual 27-file diff includes the earlier sawmill change, schema and terminology documents, store tests, changelog, and requirement files beyond the declared eight paths.
+- [x] [Major] `source_paths` does not match `main...HEAD`. The actual 27-file diff includes the earlier sawmill change, schema and terminology documents, store tests, changelog, and requirement files beyond the declared eight paths.
