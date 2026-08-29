@@ -2452,6 +2452,61 @@ END;`); err != nil {
 	}
 }
 
+func TestConvertSelectsHandMethodAtAnyLocationAndRollsEssencePerInput(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	store.essenceRoll = func() int { return 0 }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-method", "method@example.com", "Method")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 3)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Convert(identity.ID, "hand_wood_t1", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-20-30 || resourceQuantity(state, "wood") != 3 || inventoryQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood_essence_t1") != 3 {
+		t.Fatalf("method conversion state = %+v", state)
+	}
+}
+
+func TestConvertSawmillRequiresProviderAndAtomicallyUsesBuildingDurability(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	store.essenceRoll = func() int { return 10000 }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-sawmill", "sawmill@example.com", "Sawmill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, 604800, ?); INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status) VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 30, 'completed'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 6)`, identity.ID, now.Add(100*time.Second).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID, "sawmill_wood_t1", 7, int64(1)); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	state, err := store.Convert(identity.ID, "sawmill_wood_t1", 6, int64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-30 || resourceQuantity(state, "wood") != 6 || inventoryQuantity(state, "wood") != 0 {
+		t.Fatalf("sawmill state = %+v", state)
+	}
+	var expiry int64
+	if err := db.QueryRow("SELECT durability_expires_at FROM buildings WHERE id = 1").Scan(&expiry); err != nil {
+		t.Fatal(err)
+	}
+	if expiry != now.Add(40*time.Second).Unix() {
+		t.Fatalf("sawmill durability expiry = %d, want %d", expiry, now.Add(40*time.Second).Unix())
+	}
+}
+
 func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	store, db := newTestStore(t)
 	expiresAt := time.Now().Add(time.Hour)

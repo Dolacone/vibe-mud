@@ -47,8 +47,9 @@ var (
 )
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db          *sql.DB
+	now         func() time.Time
+	essenceRoll func() int
 }
 
 type Identity struct {
@@ -616,7 +617,7 @@ SELECT id, 'camp' FROM identities`); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }}, nil
 }
 
 func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
@@ -2200,7 +2201,33 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 	return state, nil
 }
 
-func (s *Store) Convert(userID int64) (PlayerState, error) {
+func conversionMethodForID(tx *sql.Tx, methodID string) (ConversionMethod, error) {
+	var method ConversionMethod
+	var essenceID, essenceDisplay sql.NullString
+	var essenceWeight, essenceDurability sql.NullInt64
+	err := tx.QueryRow(`
+SELECT cm.id, cm.display_name, cm.ap_cost, ii.id, ii.display_name, ii.weight_units, ii.max_durability_seconds,
+       cm.max_input_quantity, output.id, output.display_name, cm.resource_quantity_per_input,
+       essence.id, essence.display_name, essence.weight_units, essence.max_durability_seconds,
+       cm.essence_chance_bps, cm.essence_quantity
+FROM conversion_methods cm JOIN items ii ON ii.id = cm.input_item_id
+JOIN resource_types output ON output.id = cm.output_resource_id
+LEFT JOIN items essence ON essence.id = cm.essence_item_id WHERE cm.id = ?`, methodID).Scan(
+		&method.ID, &method.DisplayName, &method.APCost, &method.Input.ID, &method.Input.DisplayName,
+		&method.Input.WeightUnits, &method.Input.MaxDurabilitySeconds, &method.MaxInputQuantity,
+		&method.OutputResource.ID, &method.OutputResource.DisplayName, &method.ResourceQuantityPerInput,
+		&essenceID, &essenceDisplay, &essenceWeight, &essenceDurability, &method.EssenceChanceBPS, &method.EssenceQuantity)
+	if err != nil {
+		return ConversionMethod{}, err
+	}
+	if essenceID.Valid {
+		method.EssenceItem = &Item{ID: essenceID.String, DisplayName: essenceDisplay.String, WeightUnits: int(essenceWeight.Int64), MaxDurabilitySeconds: int(essenceDurability.Int64)}
+	}
+	return method, nil
+}
+
+// Convert accepts the legacy no-argument call and the methodID, quantity, providerExtensionID form.
+func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error) {
 	if userID <= 0 {
 		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
 	}
@@ -2224,14 +2251,91 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get player location for convert: %w", err)
 	}
-	option, err := conversionOptionForLocation(tx, locationID)
+	methodID, quantity, providerID := "hand_wood_t1", 1, int64(0)
+	legacy := len(params) == 0
+	durabilityCost := 0
+	var legacyOption ConversionOption
+	if legacy {
+		legacyOption, err = conversionOptionForLocation(tx, locationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrConversionNotFound
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get conversion rule: %w", err)
+		}
+		methodID, quantity = "legacy", legacyOption.InputQuantity
+	}
+	if len(params) > 0 {
+		if len(params) < 2 {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: method and quantity are required", ErrInvalidArgument)
+		}
+		var ok bool
+		methodID, ok = params[0].(string)
+		if !ok {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: method ID is required", ErrInvalidArgument)
+		}
+		quantity, ok = params[1].(int)
+		if !ok || quantity <= 0 {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: quantity must be positive", ErrInvalidArgument)
+		}
+		if len(params) > 2 && params[2] != nil {
+			switch v := params[2].(type) {
+			case int64:
+				providerID = v
+			case int:
+				providerID = int64(v)
+			default:
+				_ = tx.Rollback()
+				return PlayerState{}, fmt.Errorf("%w: provider extension ID is invalid", ErrInvalidArgument)
+			}
+		}
+	}
+	method, err := conversionMethodForID(tx, methodID)
+	if legacy {
+		method = ConversionMethod{ID: methodID, APCost: legacyOption.APCost, Input: legacyOption.Item, MaxInputQuantity: legacyOption.InputQuantity, OutputResource: legacyOption.Resource, ResourceQuantityPerInput: legacyOption.ResourceYield}
+		err = nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrConversionNotFound
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get conversion rule: %w", err)
+		return PlayerState{}, fmt.Errorf("get conversion method: %w", err)
+	}
+	if quantity > method.MaxInputQuantity {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: quantity exceeds method capacity", ErrInvalidArgument)
+	}
+	if !legacy && methodID != "hand_wood_t1" {
+		if providerID <= 0 {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrExtensionNotFound
+		}
+		var capability, buildingLocation, buildingStatus string
+		var expiry sql.NullInt64
+		err = tx.QueryRow(`SELECT c.conversion_method_id, b.location_id, b.status, b.durability_expires_at, c.building_durability_cost_seconds FROM building_extensions e JOIN extension_conversion_capabilities c ON c.extension_definition_id=e.definition_id AND c.conversion_method_id=? JOIN buildings b ON b.id=e.building_id WHERE e.id=? AND e.status='completed'`, methodID, providerID).Scan(&capability, &buildingLocation, &buildingStatus, &expiry, &durabilityCost)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrExtensionNotFound
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get conversion provider: %w", err)
+		}
+		if buildingLocation != locationID {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingRemote
+		}
+		if buildingStatus != "completed" || !expiry.Valid || expiry.Int64 <= now.Unix() {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingDisabled
+		}
 	}
 	var fullTimestamp int64
 	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
@@ -2244,8 +2348,8 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("get player AP for convert: %w", err)
 	}
 	var itemQuantity int
-	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID).Scan(&itemQuantity)
-	if errors.Is(err, sql.ErrNoRows) || itemQuantity < option.InputQuantity {
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, method.Input.ID).Scan(&itemQuantity)
+	if errors.Is(err, sql.ErrNoRows) || itemQuantity < quantity {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientItem
 	}
@@ -2253,7 +2357,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get conversion item: %w", err)
 	}
-	if calculateAP(unixSeconds(fullTimestamp), now) < option.APCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < method.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
@@ -2261,7 +2365,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).Unix()
+	nextFullTimestamp := fullAt.Add(time.Duration(method.APCost) * apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -2278,10 +2382,10 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	if itemQuantity == option.InputQuantity {
-		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID)
+	if itemQuantity == quantity {
+		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, method.Input.ID)
 	} else {
-		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, option.InputQuantity, userID, option.Item.ID)
+		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, quantity, userID, method.Input.ID)
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -2289,11 +2393,36 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 	}
 	_, err = tx.Exec(`
 INSERT INTO player_resources (user_id, resource_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, option.Resource.ID, option.ResourceYield)
+	VALUES (?, ?, ?)
+	ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, method.OutputResource.ID, quantity*method.ResourceQuantityPerInput)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("add conversion resources: %w", err)
+	}
+	if method.EssenceItem != nil && s.essenceRoll != nil {
+		essenceCount := 0
+		for i := 0; i < quantity; i++ {
+			if s.essenceRoll() < method.EssenceChanceBPS {
+				essenceCount += method.EssenceQuantity
+			}
+		}
+		if essenceCount > 0 {
+			if err := addActiveItemHoldingTx(tx, "player_inventory", "user_id", userID, method.EssenceItem.ID, essenceCount, now.Unix()+int64(method.EssenceItem.MaxDurabilitySeconds)); err != nil {
+				_ = tx.Rollback()
+				return PlayerState{}, err
+			}
+		}
+	}
+	if !legacy && methodID != "hand_wood_t1" {
+		result, err := tx.Exec(`UPDATE buildings SET durability_expires_at = CASE WHEN durability_expires_at - ? > ? THEN durability_expires_at - ? ELSE ? END WHERE id = (SELECT building_id FROM building_extensions WHERE id = ?) AND durability_expires_at > ?`, durabilityCost, now.Unix(), durabilityCost, now.Unix(), providerID, now.Unix())
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building durability: %w", err)
+		}
+		if rows, _ := result.RowsAffected(); rows != 1 {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingDisabled
+		}
 	}
 	state, err := s.getPlayerStateTx(tx, userID, now)
 	if err != nil {

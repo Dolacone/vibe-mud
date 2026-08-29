@@ -86,7 +86,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
   - REQ-016.16: 拆除 extension 時不得返還已消耗的 Package Item 或已投入 AP。
   - REQ-016.17: Extension 被拆除後，其 slot 必須恢復為空。
   - REQ-016.18: Extension、施工 progress 與 slot 狀態必須在重新整理與重新登入後保持一致。
-- [ ] Task 3 [parallel: no]: Replace Location-bound conversion with method selection, quantity processing, deterministic Essence rolls, Sawmill provider eligibility, and atomic parent durability use in `internal/authapi/store.go`. Update store tests in the same commit.
+- [x] Task 3 [parallel: no]: Replace Location-bound conversion with method selection, quantity processing, deterministic Essence rolls, Sawmill provider eligibility, and atomic parent durability use in `internal/authapi/store.go`. Update store tests in the same commit.
   - REQ-008.1: 已登入玩家必須能在任何 Location 使用徒手 Convert method。
   - REQ-008.6: 每次 Convert 必須扣除該 method 定義的一個完整 AP 成本，實際 quantity 不得改變該次 AP 成本。
   - REQ-008.7: Convert 成功時，必須依實際 quantity 扣除 Active input Item，並依每單位產量增加 output Resource。
