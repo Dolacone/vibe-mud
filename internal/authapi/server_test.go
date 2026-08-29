@@ -1212,6 +1212,23 @@ func TestContributeExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.
 	}
 }
 
+func TestContributeExtensionAPILogUsesEffectiveAPWhenRequestIsClamped(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-contribute-clamped-log")
+	if _, err := fixture.store.db.Exec(`UPDATE building_extensions SET contributed_ap = 25 WHERE id = ?`, extensionID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-contribute-clamped-success"
+	body := `{"extension_id":1,"ap":30}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=5 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("clamped contribution status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
 func TestRemoveExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.T) {
 	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-remove-log")
 	requestID := "extension-remove-success"
@@ -1240,7 +1257,7 @@ func TestContributeExtensionAPILogUsesAuthoritativeBuildingOnDomainFailure(t *te
 	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
 	response := httptest.NewRecorder()
 	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
-	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=1 outcome=error request_id=" + requestID
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=0 outcome=error request_id=" + requestID
 	if response.Code != http.StatusConflict || !strings.Contains(logOutput, want) {
 		t.Fatalf("domain failure status/log = %d/%q", response.Code, logOutput)
 	}

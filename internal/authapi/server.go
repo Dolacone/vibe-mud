@@ -738,13 +738,19 @@ func (s *Server) contributeExtensionConstruction(w http.ResponseWriter, r *http.
 		if reason != "" {
 			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
 		}
-		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID, AP: request.AP}
-		var err error
-		metadata.BuildingID, err = s.extensionBuildingID(request.ExtensionID)
+		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID}
+		beforeBuildingID, beforeProgress, err := s.extensionTarget(request.ExtensionID)
 		if err != nil {
 			return PlayerState{}, metadata, err
 		}
+		metadata.BuildingID = beforeBuildingID
 		state, err := s.store.ContributeExtensionConstruction(userID, request.ExtensionID, request.AP)
+		if err == nil {
+			afterProgress, progressErr := s.extensionProgress(request.ExtensionID)
+			if progressErr == nil && afterProgress >= beforeProgress {
+				metadata.AP = afterProgress - beforeProgress
+			}
+		}
 		return state, metadata, err
 	})
 }
@@ -811,6 +817,31 @@ func (s *Server) extensionBuildingID(extensionID int64) (int64, error) {
 		return 0, fmt.Errorf("get extension building: %w", err)
 	}
 	return buildingID, nil
+}
+
+func (s *Server) extensionTarget(extensionID int64) (int64, int, error) {
+	var buildingID int64
+	var progress int
+	err := s.store.db.QueryRow(`SELECT building_id, contributed_ap FROM building_extensions WHERE id = ?`, extensionID).Scan(&buildingID, &progress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("get extension target: %w", err)
+	}
+	return buildingID, progress, nil
+}
+
+func (s *Server) extensionProgress(extensionID int64) (int, error) {
+	var progress int
+	err := s.store.db.QueryRow(`SELECT contributed_ap FROM building_extensions WHERE id = ?`, extensionID).Scan(&progress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get extension progress: %w", err)
+	}
+	return progress, nil
 }
 
 func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, string) {
