@@ -489,8 +489,16 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 18 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 19 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	definitions, ok := meBody["building_extension_definitions"].([]any)
+	if !ok || len(definitions) != 1 {
+		t.Fatalf("extension definitions = %#v", meBody["building_extension_definitions"])
+	}
+	definition := definitions[0].(map[string]any)
+	if definition["id"] != "sawmill_t1" || definition["display_name"] != "Sawmill T1" || definition["tier"] != float64(1) || definition["required_ap"] != float64(30) {
+		t.Fatalf("extension definition = %#v", definition)
 	}
 	if meBody["carried_weight"] != float64(0) || meBody["movement_weight_threshold"] != float64(movementWeightThreshold) {
 		t.Fatalf("GET /api/me carrying weight = %#v/%#v, want 0/%d", meBody["carried_weight"], meBody["movement_weight_threshold"], movementWeightThreshold)

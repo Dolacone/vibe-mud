@@ -130,7 +130,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [ ] [Major] `source_paths` 與 `main...HEAD` 不一致。Diff 還包含 `CHANGELOG.md`、另一份 change doc、兩個 durability 測試、9 份 requirements 文件與 `web/src/App.test.tsx`。
 - [x] [Major] 零 Essence 的成功回應會省略 `essence_quantity`。前端要求該欄位存在，因此拒收已落盤的新狀態。
 - [ ] [Major] Convert 成功訊息未顯示 `essence_quantity`。玩家無法看到該次 Essence 結果。
-- [ ] [Major] 前端未暴露 extension definitions，也未提供安裝控制。施工中的 extension 也沒有拆除控制。
+- [ ] [Major] 前端未暴露 extension definitions，也未提供安裝控制。施工中的 extension 也沒有拆除控制。Backend contract 已提供 definitions，待 Task 5 完成前端控制後勾選。
 - [x] [Major] Sawmill Convert 未強制選擇 provider。無 provider 時仍可送出，後端再把 `ErrExtensionNotFound` 回成 500。
 - [x] [Major] Convert 以 `methodID != "hand_wood_t1"` 判定 provider 需求。`global_conversion_methods` 的設定未參與判定。
 - [x] [Major] Extension 操作日誌只記 user、action、outcome 與 request ID。日誌缺少 Building、extension 與 AP。

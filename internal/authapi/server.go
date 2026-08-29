@@ -65,21 +65,22 @@ type routeResponse struct {
 }
 
 type playerStateResponse struct {
-	Location                locationResponse           `json:"location"`
-	Routes                  []routeResponse            `json:"routes"`
-	AP                      int                        `json:"ap"`
-	CarriedWeight           int                        `json:"carried_weight"`
-	MovementWeightThreshold int                        `json:"movement_weight_threshold"`
-	Inventory               []inventoryItemResponse    `json:"inventory"`
-	GroundItems             []groundItemResponse       `json:"ground_items"`
-	GroundResources         []groundResourceResponse   `json:"ground_resources"`
-	GatheringOption         *gatheringOptionResponse   `json:"gathering_option"`
-	ConversionOption        *conversionOptionResponse  `json:"conversion_option"`
-	ConversionMethods       []conversionMethodResponse `json:"conversion_methods"`
-	Resources               []resourceResponse         `json:"resources"`
-	CraftingRecipes         []craftingRecipeResponse   `json:"crafting_recipes"`
-	BuildingRecipes         []buildingRecipeResponse   `json:"building_recipes"`
-	Buildings               []buildingResponse         `json:"buildings"`
+	Location                     locationResponse                      `json:"location"`
+	Routes                       []routeResponse                       `json:"routes"`
+	AP                           int                                   `json:"ap"`
+	CarriedWeight                int                                   `json:"carried_weight"`
+	MovementWeightThreshold      int                                   `json:"movement_weight_threshold"`
+	Inventory                    []inventoryItemResponse               `json:"inventory"`
+	GroundItems                  []groundItemResponse                  `json:"ground_items"`
+	GroundResources              []groundResourceResponse              `json:"ground_resources"`
+	GatheringOption              *gatheringOptionResponse              `json:"gathering_option"`
+	ConversionOption             *conversionOptionResponse             `json:"conversion_option"`
+	ConversionMethods            []conversionMethodResponse            `json:"conversion_methods"`
+	BuildingExtensionDefinitions []buildingExtensionDefinitionResponse `json:"building_extension_definitions"`
+	Resources                    []resourceResponse                    `json:"resources"`
+	CraftingRecipes              []craftingRecipeResponse              `json:"crafting_recipes"`
+	BuildingRecipes              []buildingRecipeResponse              `json:"building_recipes"`
+	Buildings                    []buildingResponse                    `json:"buildings"`
 }
 
 type moveResponse struct {
@@ -173,6 +174,14 @@ type conversionMethodResponse struct {
 	EssenceItem              *itemResponse `json:"essence_item"`
 	EssenceChanceBPS         int           `json:"essence_chance_bps"`
 	EssenceQuantity          int           `json:"essence_quantity"`
+}
+
+type buildingExtensionDefinitionResponse struct {
+	ID          string       `json:"id"`
+	DisplayName string       `json:"display_name"`
+	Tier        int          `json:"tier"`
+	PackageItem itemResponse `json:"package_item"`
+	RequiredAP  int          `json:"required_ap"`
 }
 
 type transferResponse struct {
@@ -1712,22 +1721,31 @@ func routeResponsesFromStore(routes []Route) []routeResponse {
 
 func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 	return playerStateResponse{
-		Location:                locationResponseFromStore(state.Location),
-		Routes:                  routeResponsesFromStore(state.Routes),
-		AP:                      state.AP,
-		CarriedWeight:           state.CarriedWeight,
-		MovementWeightThreshold: state.MovementWeightThreshold,
-		Inventory:               inventoryResponsesFromStore(state.Inventory),
-		GroundItems:             groundItemResponsesFromStore(state.GroundItems),
-		GroundResources:         groundResourceResponsesFromStore(state.GroundResources),
-		GatheringOption:         gatheringOptionResponseFromStore(state.GatheringOption),
-		ConversionOption:        conversionOptionResponseFromStore(state.ConversionOption),
-		ConversionMethods:       conversionMethodResponsesFromStore(state.ConversionMethods),
-		Resources:               resourceResponsesFromStore(state.Resources),
-		CraftingRecipes:         craftingRecipeResponsesFromStore(state.CraftingRecipes),
-		BuildingRecipes:         buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:               buildingResponsesFromStore(state.Buildings),
+		Location:                     locationResponseFromStore(state.Location),
+		Routes:                       routeResponsesFromStore(state.Routes),
+		AP:                           state.AP,
+		CarriedWeight:                state.CarriedWeight,
+		MovementWeightThreshold:      state.MovementWeightThreshold,
+		Inventory:                    inventoryResponsesFromStore(state.Inventory),
+		GroundItems:                  groundItemResponsesFromStore(state.GroundItems),
+		GroundResources:              groundResourceResponsesFromStore(state.GroundResources),
+		GatheringOption:              gatheringOptionResponseFromStore(state.GatheringOption),
+		ConversionOption:             conversionOptionResponseFromStore(state.ConversionOption),
+		ConversionMethods:            conversionMethodResponsesFromStore(state.ConversionMethods),
+		BuildingExtensionDefinitions: buildingExtensionDefinitionResponsesFromStore(state.BuildingExtensionDefinitions),
+		Resources:                    resourceResponsesFromStore(state.Resources),
+		CraftingRecipes:              craftingRecipeResponsesFromStore(state.CraftingRecipes),
+		BuildingRecipes:              buildingRecipeResponsesFromStore(state.BuildingRecipes),
+		Buildings:                    buildingResponsesFromStore(state.Buildings),
 	}
+}
+
+func buildingExtensionDefinitionResponsesFromStore(definitions []BuildingExtensionDefinition) []buildingExtensionDefinitionResponse {
+	responses := make([]buildingExtensionDefinitionResponse, 0, len(definitions))
+	for _, definition := range definitions {
+		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponse{ID: definition.PackageItem.ID, DisplayName: definition.PackageItem.DisplayName}, RequiredAP: definition.RequiredAP})
+	}
+	return responses
 }
 
 func conversionMethodResponsesFromStore(methods []ConversionMethod) []conversionMethodResponse {
