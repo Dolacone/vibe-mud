@@ -2312,7 +2312,15 @@ func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("%w: quantity exceeds method capacity", ErrInvalidArgument)
 	}
-	if !legacy && methodID != "hand_wood_t1" {
+	globalMethod := false
+	if !legacy {
+		err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM global_conversion_methods WHERE conversion_method_id = ?)`, methodID).Scan(&globalMethod)
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("check global conversion method: %w", err)
+		}
+	}
+	if !legacy && !globalMethod {
 		if providerID <= 0 {
 			_ = tx.Rollback()
 			return PlayerState{}, ErrExtensionNotFound
@@ -2413,7 +2421,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity)
 			}
 		}
 	}
-	if !legacy && methodID != "hand_wood_t1" {
+	if !legacy && !globalMethod {
 		result, err := tx.Exec(`UPDATE buildings SET durability_expires_at = CASE WHEN durability_expires_at - ? > ? THEN durability_expires_at - ? ELSE ? END WHERE id = (SELECT building_id FROM building_extensions WHERE id = ?) AND durability_expires_at > ?`, durabilityCost, now.Unix(), durabilityCost, now.Unix(), providerID, now.Unix())
 		if err != nil {
 			_ = tx.Rollback()

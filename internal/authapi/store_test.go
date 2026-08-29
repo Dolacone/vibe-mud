@@ -2507,6 +2507,26 @@ func TestConvertSawmillRequiresProviderAndAtomicallyUsesBuildingDurability(t *te
 	}
 }
 
+func TestConvertUsesGlobalMethodTableForProviderEligibility(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-global", "global@example.com", "Global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES ('global_wood', 'Global Wood', 5, 'wood', 1, 'wood', 2, NULL, 0, 0); INSERT INTO global_conversion_methods (conversion_method_id) VALUES ('global_wood'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Convert(identity.ID, "global_wood", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-5 || resourceQuantity(state, "wood") != 2 || inventoryQuantity(state, "wood") != 0 {
+		t.Fatalf("global method state = %+v", state)
+	}
+}
+
 func TestConsumeOAuthAttemptRecoversThenErasesSensitiveValues(t *testing.T) {
 	store, db := newTestStore(t)
 	expiresAt := time.Now().Add(time.Hour)
