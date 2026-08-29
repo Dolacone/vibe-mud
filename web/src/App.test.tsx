@@ -34,16 +34,14 @@ const activeItem = (item: { id: string; display_name: string }, quantity: number
   item,
   quantity,
   durability_status: "active" as const,
-  durability_remaining_seconds: 604800,
-  retention_remaining_seconds: null,
+  durability_percentage: 100,
 });
 
 const expiredItem = (item: { id: string; display_name: string }, quantity: number) => ({
   item,
   quantity,
   durability_status: "expired" as const,
-  durability_remaining_seconds: null,
-  retention_remaining_seconds: 604700,
+  durability_percentage: 0,
 });
 
 const woodComponentRecipe = {
@@ -89,9 +87,8 @@ const underConstruction = {
   contributed_ap: 0,
   status: "under_construction" as const,
   extension_slot_count: 1,
-  max_durability_seconds: 604800,
   durability_status: null,
-  durability_remaining_seconds: null,
+  durability_percentage: null,
   available_actions: ["contribute-construction"],
 };
 
@@ -100,14 +97,14 @@ const completedActive = {
   contributed_ap: 60,
   status: "completed" as const,
   durability_status: "active" as const,
-  durability_remaining_seconds: 604700,
+  durability_percentage: 99,
   available_actions: ["repair-building"],
 };
 
 const completedDisabled = {
   ...completedActive,
   durability_status: "disabled" as const,
-  durability_remaining_seconds: 0,
+  durability_percentage: 0,
 };
 
 const campState = {
@@ -357,20 +354,20 @@ describe("App", () => {
     expect(inventory.querySelectorAll("tbody > tr")).toHaveLength(2);
     expect(groundItems.querySelectorAll("tbody > tr")).toHaveLength(2);
     expect(inventory).toHaveTextContent("Status: active");
-    expect(inventory).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(inventory).toHaveTextContent("Durability: 100%");
     expect(inventory).toHaveTextContent("Status: expired");
-    expect(inventory).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(inventory).toHaveTextContent("Durability: 0%");
     expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeEnabled();
     expect(within(inventory).getByRole("button", { name: "Drop Wood (expired)" })).toBeEnabled();
     expect(groundItems).toHaveTextContent("Status: active");
-    expect(groundItems).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(groundItems).toHaveTextContent("Durability: 100%");
     expect(groundItems).toHaveTextContent("Status: expired");
-    expect(groundItems).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(groundItems).toHaveTextContent("Durability: 0%");
     expect(within(groundItems).getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
     expect(within(groundItems).queryByRole("button", { name: "Pickup Wood Component (expired)" })).not.toBeInTheDocument();
   });
 
-  it("drops the selected expired stack and renders the authoritative retention state", async () => {
+  it("drops the selected expired stack and renders the authoritative durability state", async () => {
     const mixedState = {
       ...transferState,
       inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 3)],
@@ -393,7 +390,7 @@ describe("App", () => {
     expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "expired" });
     expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("6")).toBeInTheDocument();
-    expect(within(inventory).getByText("Remaining retention: 604700 seconds")).toBeInTheDocument();
+    expect(within(inventory).getByText("Durability: 0%")).toBeInTheDocument();
   });
 
   it("applies authoritative state after an unsuccessful Resource pickup", async () => {
@@ -449,29 +446,29 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("Durability status: active")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 604700 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 99%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
   });
 
-  it("shows disabled Building durability with zero remaining seconds", async () => {
+  it("shows disabled Building durability with zero percent", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedDisabled] } });
     render(<App />);
 
     expect(await screen.findByText("Durability status: disabled")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
   });
 
   it("repairs a completed Building and applies the authoritative state", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedActive] } });
-    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_remaining_seconds: 604800 }] });
+    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_percentage: 100 }] });
     render(<App />);
 
     (await screen.findByRole("button", { name: "Repair building 1" })).click();
     await waitFor(() => expect(screen.getByText("Building repair succeeded.")).toBeInTheDocument());
     expect(repairBuilding).toHaveBeenCalledWith(1);
     expect(apRow(2990)).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 604800 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 100%")).toBeInTheDocument();
   });
 
   it("shows a repair failure and applies its authoritative state", async () => {
@@ -483,7 +480,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
     expect(apRow(5)).toBeInTheDocument();
     expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
   });
 
   it("displays the backend building recipe and current-location construction state", async () => {

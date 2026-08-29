@@ -8,6 +8,10 @@ source_paths:
   - docs/architecture.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
 req_ref: REQ-011, REQ-015
 base_branch: main
 scope: "Replace frontend durability timing details with rounded-up integer percentages."
@@ -50,7 +54,7 @@ REQ-011 and REQ-015 are the sources of truth. The plan will copy each affected c
   - REQ-015.26: Item 耐久百分比必須以剩餘耐久時間除以該 Item 的耐久時間上限計算，乘以 100 後無條件進位，且不得超過 100。
   - REQ-015.27: Active Item 的耐久百分比必須介於 1 至 100，Expired Item 必須為 0。
   - REQ-015.28: 後端傳給前端的 Item definition、Inventory 與地面 Item 資訊不得包含耐久上限秒數、剩餘耐久秒數、失效保留秒數或對應 timestamp。
-- [ ] Task 2 [parallel: no]: Parse and display status with integer durability percentages in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit.
+- [x] Task 2 [parallel: no]: Parse and display status with integer durability percentages in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit.
   - REQ-011.4: 玩家必須能看到 Building 的耐久狀態與整數耐久百分比。
   - REQ-015.8: 玩家必須能看到每個 Item 堆疊的狀態與整數耐久百分比。
   - REQ-015.22: 前端必須將 Expired Item 顯示為 0% 耐久，且不能提供會使用該 Item 的操作。

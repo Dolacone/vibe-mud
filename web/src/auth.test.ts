@@ -10,16 +10,14 @@ const activeItem = (item: { id: string; display_name: string }, quantity: number
   item,
   quantity,
   durability_status: "active" as const,
-  durability_remaining_seconds: 604800,
-  retention_remaining_seconds: null,
+  durability_percentage: 100,
 });
 
 const expiredItem = (item: { id: string; display_name: string }, quantity: number) => ({
   item,
   quantity,
   durability_status: "expired" as const,
-  durability_remaining_seconds: null,
-  retention_remaining_seconds: 604800,
+  durability_percentage: 0,
 });
 
 const woodComponentRecipe: CraftingRecipe = {
@@ -51,9 +49,8 @@ const building: Building = {
   contributed_ap: 0,
   status: "under_construction",
   extension_slot_count: 1,
-  max_durability_seconds: 604800,
   durability_status: null,
-  durability_remaining_seconds: null,
+  durability_percentage: null,
   available_actions: ["contribute-construction"],
 };
 
@@ -679,7 +676,7 @@ describe("building actions", () => {
       ...building,
       status: "completed" as const,
       durability_status: "active" as const,
-      durability_remaining_seconds: 604800,
+      durability_percentage: 100,
     };
     const state = { ...campState, ap: 2990, buildings: [completed] };
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(state), { status: 200 }));
@@ -698,14 +695,14 @@ describe("building actions", () => {
       ...building,
       status: "completed" as const,
       durability_status: "disabled" as const,
-      durability_remaining_seconds: 0,
+      durability_percentage: 0,
     };
     const disabledState = { ...campState, buildings: [disabled] };
     const disabledFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(disabledState), { status: 200 }));
     await expect(repairBuilding(1, disabledFetcher)).resolves.toEqual({ status: "success", ...disabledState });
 
     const malformedFetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, durability_status: "active", durability_remaining_seconds: 0 }] }), { status: 200 }),
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, status: "completed", durability_status: "active", durability_percentage: 0 }] }), { status: 200 }),
     );
     await expect(repairBuilding(1, malformedFetcher)).resolves.toMatchObject({
       status: "error",
@@ -713,7 +710,7 @@ describe("building actions", () => {
     });
 
     const missingMaximumFetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, max_durability_seconds: undefined }] }), { status: 200 }),
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, status: "completed", durability_status: "active", durability_percentage: undefined }] }), { status: 200 }),
     );
     await expect(repairBuilding(1, missingMaximumFetcher)).resolves.toMatchObject({
       status: "error",
@@ -832,18 +829,19 @@ describe("ground transfers", () => {
     });
   });
 
-  it("parses retained expired stacks without exposing an active durability deadline", async () => {
+  it("parses expired stacks as zero durability without accepting the old seconds contract", async () => {
     const state = { ...transferState, inventory: [expiredItem({ id: "wood", display_name: "Wood" }, 2)] };
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }));
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated", user: state });
 
-    const malformed = {
-      ...state,
-      inventory: [{ ...state.inventory[0], durability_remaining_seconds: 1 }],
-    };
+    const malformed = { ...state, inventory: [{ ...state.inventory[0], durability_remaining_seconds: 1 }] };
     const malformedFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
     await expect(getCurrentUser(malformedFetcher)).resolves.toMatchObject({ status: "error" });
+
+    const oldBuildingContract = { ...campState, buildings: [{ ...building, max_durability_seconds: 604800, status: "completed", durability_status: "active", durability_percentage: 100 }] };
+    const oldBuildingFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(oldBuildingContract), { status: 200 }));
+    await expect(getCurrentUser(oldBuildingFetcher)).resolves.toMatchObject({ status: "error" });
   });
 
   it("keeps authentication and unavailable response behavior", async () => {

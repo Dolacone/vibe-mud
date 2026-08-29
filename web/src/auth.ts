@@ -20,16 +20,14 @@ export type InventoryItem = {
   item: Item;
   quantity: number;
   durability_status: ItemStatus;
-  durability_remaining_seconds: number | null;
-  retention_remaining_seconds: number | null;
+  durability_percentage: number;
 };
 
 export type GroundItem = {
   item: Item;
   quantity: number;
   durability_status: ItemStatus;
-  durability_remaining_seconds: number | null;
-  retention_remaining_seconds: number | null;
+  durability_percentage: number;
 };
 
 export type GroundResource = {
@@ -145,9 +143,8 @@ export type Building = {
   contributed_ap: number;
   status: "under_construction" | "completed";
   extension_slot_count: number;
-  max_durability_seconds: number;
   durability_status: "active" | "disabled" | null;
-  durability_remaining_seconds: number | null;
+  durability_percentage: number | null;
   extensions?: BuildingExtension[];
   available_actions: string[];
 };
@@ -294,10 +291,22 @@ function isRoute(value: unknown): value is Route {
   );
 }
 
+const legacyDurabilityKeys = new Set([
+  "max_durability_seconds",
+  "durability_remaining_seconds",
+  "retention_remaining_seconds",
+  "durability_expires_at",
+  "status_expires_at",
+]);
+
+function hasLegacyDurabilityFields(value: Record<string, unknown>): boolean {
+  return Object.keys(value).some((key) => legacyDurabilityKeys.has(key));
+}
+
 function isItem(value: unknown): value is Item {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
-  return isString(item.id) && isString(item.display_name);
+  return !hasLegacyDurabilityFields(item) && isString(item.id) && isString(item.display_name);
 }
 
 function isQuantity(value: unknown): value is number {
@@ -310,14 +319,10 @@ function isItemStatus(value: unknown): value is ItemStatus {
 
 function isItemDurability(value: Record<string, unknown>): value is Record<string, unknown> & {
   durability_status: ItemStatus;
-  durability_remaining_seconds: number | null;
-  retention_remaining_seconds: number | null;
+  durability_percentage: number;
 } {
-  if (!isItemStatus(value.durability_status)) return false;
-  if (value.durability_status === "active") {
-    return isPositiveInteger(value.durability_remaining_seconds) && value.retention_remaining_seconds === null;
-  }
-  return value.durability_remaining_seconds === null && isPositiveInteger(value.retention_remaining_seconds);
+  if (hasLegacyDurabilityFields(value) || !isItemStatus(value.durability_status) || !isNonNegativeInteger(value.durability_percentage) || value.durability_percentage > 100) return false;
+  return value.durability_status === "active" ? value.durability_percentage > 0 : value.durability_percentage === 0;
 }
 
 function isResource(value: unknown): value is Resource {
@@ -389,6 +394,7 @@ function isBuildingRecipe(value: unknown): value is BuildingRecipe {
   return (
     isString(recipe.id) &&
     isString(recipe.display_name) &&
+    !hasLegacyDurabilityFields(recipe) &&
     isPositiveInteger(recipe.building_level) &&
     isPositiveInteger(recipe.required_ap) &&
     typeof recipe.extension_slot_count === "number" &&
@@ -419,6 +425,7 @@ function isBuilding(value: unknown): value is Building {
     isPositiveInteger((owner as Record<string, unknown>).id) &&
     isString((owner as Record<string, unknown>).display_name) &&
     typeof recipe === "object" && recipe !== null &&
+    !hasLegacyDurabilityFields(recipe as Record<string, unknown>) &&
     isString((recipe as Record<string, unknown>).id) &&
     isString((recipe as Record<string, unknown>).display_name) &&
     isPositiveInteger(building.building_level) &&
@@ -431,22 +438,17 @@ function isBuilding(value: unknown): value is Building {
     typeof building.extension_slot_count === "number" &&
     Number.isInteger(building.extension_slot_count) &&
     building.extension_slot_count >= 0 &&
-    isPositiveInteger(building.max_durability_seconds) &&
+    !hasLegacyDurabilityFields(building) &&
     isAvailableActions(building.available_actions) &&
     (building.extensions === undefined || (Array.isArray(building.extensions) && building.extensions.every(isBuildingExtension)))
   ) {
     if (building.status === "under_construction") {
-      return building.durability_status === null && building.durability_remaining_seconds === null;
+      return building.durability_status === null && building.durability_percentage === null;
     }
     if (building.durability_status === "active") {
-      return (
-        typeof building.durability_remaining_seconds === "number" &&
-        Number.isInteger(building.durability_remaining_seconds) &&
-        building.durability_remaining_seconds > 0 &&
-        building.durability_remaining_seconds <= building.max_durability_seconds
-      );
+      return isPositiveInteger(building.durability_percentage) && building.durability_percentage <= 100;
     }
-    return building.durability_status === "disabled" && building.durability_remaining_seconds === 0;
+    return building.durability_status === "disabled" && building.durability_percentage === 0;
   }
   return false;
 }
