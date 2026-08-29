@@ -259,28 +259,166 @@ func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollba
 
 func TestItemDefinitionsUseOneHourDurability(t *testing.T) {
 	_, db := newTestStore(t)
-	rows, err := db.Query(`SELECT id, max_durability_seconds FROM items ORDER BY id`)
+	rows, err := db.Query(`SELECT id, weight_units, max_durability_seconds FROM items ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	want := map[string]int{"wood": int(time.Hour / time.Second), "wood_component": int(time.Hour / time.Second)}
+	wantWeights := map[string]int{"wood": 100, "wood_component": 10, "wood_essence_t1": 1, "sawmill_package_t1": 10}
 	for rows.Next() {
 		var id string
-		var maxDurabilitySeconds int
-		if err := rows.Scan(&id, &maxDurabilitySeconds); err != nil {
+		var weightUnits, maxDurabilitySeconds int
+		if err := rows.Scan(&id, &weightUnits, &maxDurabilitySeconds); err != nil {
 			t.Fatal(err)
 		}
 		if maxDurabilitySeconds != int(time.Hour/time.Second) {
 			t.Fatalf("item %q durability = %d, want one hour", id, maxDurabilitySeconds)
 		}
-		delete(want, id)
+		if weightUnits != wantWeights[id] {
+			t.Fatalf("item %q weight = %d, want %d", id, weightUnits, wantWeights[id])
+		}
+		delete(wantWeights, id)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != 0 {
-		t.Fatalf("missing one-hour item definitions: %v", want)
+	if len(wantWeights) != 0 {
+		t.Fatalf("missing item definitions: %v", wantWeights)
+	}
+}
+
+func TestSawmillDefinitionsExposeTypedBalanceValuesToPlayerState(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-sawmill-definitions", "sawmill@example.com", "Sawmill Player")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ConversionMethods) != 2 {
+		t.Fatalf("conversion methods = %+v, want hand and sawmill methods", state.ConversionMethods)
+	}
+	methods := make(map[string]ConversionMethod, len(state.ConversionMethods))
+	for _, method := range state.ConversionMethods {
+		methods[method.ID] = method
+	}
+	hand := methods["hand_wood_t1"]
+	if hand.DisplayName != "Hand Wood Convert" || hand.APCost != 30 || hand.Input.ID != "wood" || hand.MaxInputQuantity != 3 || hand.OutputResource.ID != "wood" || hand.ResourceQuantityPerInput != 1 || hand.EssenceItem == nil || hand.EssenceItem.ID != "wood_essence_t1" || hand.EssenceChanceBPS != 1000 || hand.EssenceQuantity != 1 {
+		t.Fatalf("hand conversion definition = %+v", hand)
+	}
+	sawmill := methods["sawmill_wood_t1"]
+	if sawmill.MaxInputQuantity != 6 || sawmill.EssenceItem == nil || sawmill.EssenceItem.ID != "wood_essence_t1" {
+		t.Fatalf("sawmill conversion definition = %+v", sawmill)
+	}
+	if len(state.BuildingExtensionDefinitions) != 1 {
+		t.Fatalf("extension definitions = %+v, want Sawmill T1", state.BuildingExtensionDefinitions)
+	}
+	definition := state.BuildingExtensionDefinitions[0]
+	if definition.ID != "sawmill_t1" || definition.DisplayName != "Sawmill T1" || definition.Tier != 1 || definition.PackageItem.ID != "sawmill_package_t1" || definition.RequiredAP != 30 {
+		t.Fatalf("sawmill extension definition = %+v", definition)
+	}
+	var resourceInputs, itemInputs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM crafting_recipe_resource_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&resourceInputs); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM crafting_recipe_item_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&itemInputs); err != nil {
+		t.Fatal(err)
+	}
+	if resourceInputs != 1 || itemInputs != 1 {
+		t.Fatalf("sawmill package inputs = resources %d, items %d; want one each", resourceInputs, itemInputs)
+	}
+	var recipeAP int
+	var recipeOutput string
+	var recipeOutputQuantity int
+	if err := db.QueryRow(`SELECT base_ap_cost, output_item_id, output_quantity FROM crafting_recipes WHERE id = 'sawmill_package_t1'`).Scan(&recipeAP, &recipeOutput, &recipeOutputQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if recipeAP != 30 || recipeOutput != "sawmill_package_t1" || recipeOutputQuantity != 1 {
+		t.Fatalf("sawmill package recipe = AP %d, output %q x%d", recipeAP, recipeOutput, recipeOutputQuantity)
+	}
+	var resourceID, itemID string
+	var resourceQuantity, itemQuantity int
+	if err := db.QueryRow(`SELECT resource_id, quantity FROM crafting_recipe_resource_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&resourceID, &resourceQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT item_id, quantity FROM crafting_recipe_item_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&itemID, &itemQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if resourceID != "wood" || resourceQuantity != 10 || itemID != "wood_essence_t1" || itemQuantity != 1 {
+		t.Fatalf("sawmill package inputs = resource %q x%d, item %q x%d", resourceID, resourceQuantity, itemID, itemQuantity)
+	}
+	var durabilityCost int
+	if err := db.QueryRow(`SELECT building_durability_cost_seconds FROM extension_conversion_capabilities WHERE extension_definition_id = 'sawmill_t1' AND conversion_method_id = 'sawmill_wood_t1'`).Scan(&durabilityCost); err != nil {
+		t.Fatal(err)
+	}
+	if durabilityCost != 60 {
+		t.Fatalf("sawmill durability cost = %d, want 60", durabilityCost)
+	}
+}
+
+func TestStoreReinitializationPreservesDirectBalanceEdits(t *testing.T) {
+	_, db := newTestStore(t)
+	if _, err := db.Exec(`
+UPDATE items SET display_name = 'Edited Wood', weight_units = 77, max_durability_seconds = 1234 WHERE id = 'wood';
+UPDATE resource_types SET display_name = 'Edited Wood Resource', weight_units = 8 WHERE id = 'wood';
+UPDATE conversion_methods SET display_name = 'Edited Hand Convert', ap_cost = 17, max_input_quantity = 2 WHERE id = 'hand_wood_t1';
+UPDATE building_extension_definitions SET display_name = 'Edited Sawmill', required_ap = 44 WHERE id = 'sawmill_t1';
+UPDATE crafting_recipes SET display_name = 'Edited Package', base_ap_cost = 31 WHERE id = 'sawmill_package_t1';`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var itemName string
+	var itemWeight, itemDurability int
+	if err := db.QueryRow(`SELECT display_name, weight_units, max_durability_seconds FROM items WHERE id = 'wood'`).Scan(&itemName, &itemWeight, &itemDurability); err != nil {
+		t.Fatal(err)
+	}
+	if itemName != "Edited Wood" || itemWeight != 77 || itemDurability != 1234 {
+		t.Fatalf("direct item edit after reinitialization = %q, %d, %d", itemName, itemWeight, itemDurability)
+	}
+	var resourceName string
+	var resourceWeight int
+	if err := db.QueryRow(`SELECT display_name, weight_units FROM resource_types WHERE id = 'wood'`).Scan(&resourceName, &resourceWeight); err != nil {
+		t.Fatal(err)
+	}
+	if resourceName != "Edited Wood Resource" || resourceWeight != 8 {
+		t.Fatalf("direct resource edit after reinitialization = %q, %d", resourceName, resourceWeight)
+	}
+	var methodName string
+	var methodAP, methodCapacity int
+	if err := db.QueryRow(`SELECT display_name, ap_cost, max_input_quantity FROM conversion_methods WHERE id = 'hand_wood_t1'`).Scan(&methodName, &methodAP, &methodCapacity); err != nil {
+		t.Fatal(err)
+	}
+	if methodName != "Edited Hand Convert" || methodAP != 17 || methodCapacity != 2 {
+		t.Fatalf("direct conversion edit after reinitialization = %q, %d, %d", methodName, methodAP, methodCapacity)
+	}
+	var extensionName string
+	var extensionAP int
+	if err := db.QueryRow(`SELECT display_name, required_ap FROM building_extension_definitions WHERE id = 'sawmill_t1'`).Scan(&extensionName, &extensionAP); err != nil {
+		t.Fatal(err)
+	}
+	if extensionName != "Edited Sawmill" || extensionAP != 44 {
+		t.Fatalf("direct extension edit after reinitialization = %q, %d", extensionName, extensionAP)
+	}
+}
+
+func TestStoreReinitializationSeedsOnlyMissingBalanceRows(t *testing.T) {
+	_, db := newTestStore(t)
+	if _, err := db.Exec(`DELETE FROM global_conversion_methods WHERE conversion_method_id = 'hand_wood_t1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM global_conversion_methods WHERE conversion_method_id = 'hand_wood_t1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("missing global method seed count = %d, want one", count)
 	}
 }
 
@@ -944,8 +1082,15 @@ INSERT INTO player_locations VALUES (41, 'legacy-location');`, createdAt, create
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Location.ID != "legacy-location" || state.AP != maxAP || len(state.CraftingRecipes) != 1 || state.CraftingRecipes[0].ID != "wood_component" {
-		t.Fatalf("schema upgrade changed existing player state or omitted recipe: %+v", state)
+	if state.Location.ID != "legacy-location" || state.AP != maxAP || len(state.CraftingRecipes) != 2 {
+		t.Fatalf("schema upgrade changed existing player state or omitted recipes: %+v", state)
+	}
+	seen := map[string]bool{}
+	for _, recipe := range state.CraftingRecipes {
+		seen[recipe.ID] = true
+	}
+	if !seen["wood_component"] || !seen["sawmill_package_t1"] {
+		t.Fatalf("schema upgrade omitted seeded recipes: %+v", state.CraftingRecipes)
 	}
 	var buildingTableCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('building_recipes', 'building_recipe_resource_inputs', 'building_recipe_item_inputs', 'buildings')").Scan(&buildingTableCount); err != nil {

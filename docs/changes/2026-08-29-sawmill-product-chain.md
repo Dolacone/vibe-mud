@@ -4,7 +4,10 @@ status: Ready-to-implement
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
-source_paths: []
+source_paths:
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
+  - docs/schemas.md
 req_ref: [REQ-008, REQ-010, REQ-011, REQ-014, REQ-015, REQ-016, REQ-017]
 base_branch: main
 scope: "Tracks configurable Convert methods, the generic Building extension lifecycle, and Sawmill T1."
@@ -49,7 +52,7 @@ The confirmed requirements referenced by `req_ref` are the source of truth.
 
 Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 
-- [ ] Task 1 [parallel: no]: Add typed SQLite definitions, migrations, seeds, and state models in `internal/authapi/store.go`. Seed only missing rows and test that Store reinitialization preserves direct balance edits. Update store tests and `docs/schemas.md` in the same commit.
+- [x] Task 1 [parallel: no]: Add typed SQLite definitions, migrations, seeds, and state models in `internal/authapi/store.go`. Seed only missing rows and test that Store reinitialization preserves direct balance edits. Update store tests and `docs/schemas.md` in the same commit.
   - REQ-008.2: 每個 Convert method 必須具有穩定 identifier 與顯示名稱。
   - REQ-008.3: 每個 Convert method 必須分別定義 AP 成本、input Item、單次 input quantity 上限、output Resource、每單位 input 的 Resource quantity、Essence Item、Essence 機率與 Essence quantity。
   - REQ-014.11: 每種 Item 必須分別定義單位重量，不能依 Item 類別名稱推導重量。

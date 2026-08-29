@@ -334,6 +334,8 @@ CREATE TABLE IF NOT EXISTS conversion_methods (
 
 索引與約束：Primary key 為 `id`。Essence 三個欄位必須同時表示停用或有效設定。修改 row 會影響後續所有使用該 method 的操作。
 
+Store initialization 只會插入缺少的 method row。既有 method 的 balance 欄位與顯示名稱不會被重新初始化覆寫。
+
 ## global_conversion_methods
 
 用途：列出不需要 Building extension，且能在所有 Location 使用的 Convert method。
@@ -808,6 +810,8 @@ VALUES ('sawmill_t1', 'sawmill_wood_t1', 60);
 ```
 
 Existing databases gain the Sawmill Package recipe and extension definition seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
+
+Store initialization also seeds the typed Convert methods, global hand method reference, Sawmill capability, Wood Essence T1, and Sawmill Package T1 only when each row is missing. Direct edits to existing definition rows persist across Store reinitialization.
 
 Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
 
