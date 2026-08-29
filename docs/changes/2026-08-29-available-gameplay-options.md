@@ -1,6 +1,6 @@
 ---
 title: "Backend-filtered gameplay options"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -98,5 +98,5 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
 - [x] [Major] Direct submission can attach an unreturned `provider_extension_id` to a global Convert method and still mutate state. Global methods return an empty `provider_extension_ids` list, but `Store.Convert` validates the provider only for non-global methods and ignores any supplied ID for a global method, violating the target rejection and no-side-effect criterion.
 - [x] [Major] The full Go suite is nondeterministic and failed during this review. `TestConvertAPIUpdatesStateAndUsesBackendOwnedValues` requires an empty Inventory, but the default `essenceRoll` can create `wood_essence_t1`; the review run failed when that outcome occurred.
 - [x] [Major] Legacy Convert now mutates the correct state, but its success metadata is false. The handler calculates results from the empty legacy request. The response omits method, quantity, and Resource output. The computation log records an empty `method_id`, `quantity=0`, and `resource_quantity=0` for a one-item conversion. The E2E test checks state and only the generic action log. It cannot catch this reporting regression.
-- [ ] [Major] The implementation fixes were submitted while this change document remained `Issues-confirmed` instead of returning to `Ready-to-review`. This violates the review-stage input gate and leaves no durable indication that all confirmed fixes were ready for independent review.
+- [x] [Major] The implementation fixes were submitted while this change document remained `Issues-confirmed` instead of returning to `Ready-to-review`. This violates the review-stage input gate and leaves no durable indication that all confirmed fixes were ready for independent review.
 - [x] [Minor] `docs/architecture.md` says Convert accepts only `method_id`, positive `quantity`, and optional `provider_extension_id`. The repaired API also accepts the empty legacy `{}` contract. The documented request contract no longer matches the handler.
