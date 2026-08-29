@@ -133,7 +133,7 @@ type convertResponse struct {
 	MethodID         string `json:"method_id,omitempty"`
 	Quantity         int    `json:"quantity,omitempty"`
 	ResourceQuantity int    `json:"resource_quantity,omitempty"`
-	EssenceQuantity  int    `json:"essence_quantity,omitempty"`
+	EssenceQuantity  int    `json:"essence_quantity"`
 	playerStateResponse
 }
 
@@ -552,6 +552,16 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
+	if errors.Is(err, ErrExtensionNotFound) || errors.Is(err, ErrBuildingRemote) || errors.Is(err, ErrBuildingDisabled) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logRejection(r, session.UserID, convertAction, "invalid_provider")
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid provider extension", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
@@ -718,7 +728,7 @@ func (s *Server) extensionAction(w http.ResponseWriter, r *http.Request, action 
 	}
 	state, err := execute(session.UserID)
 	if err != nil {
-		s.logAction(r, session.UserID, action, "error")
+		s.logExtensionAction(r, session.UserID, action, 0, 0, 0, "error")
 		current, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
@@ -727,7 +737,7 @@ func (s *Server) extensionAction(w http.ResponseWriter, r *http.Request, action 
 		s.writeJSON(w, http.StatusConflict, extensionActionResponse{Error: "invalid action", playerStateResponse: s.playerStateResponse(r, session.UserID, current)})
 		return
 	}
-	s.logAction(r, session.UserID, action, "success")
+	s.logExtensionAction(r, session.UserID, action, 0, 0, 0, "success")
 	s.writeJSON(w, http.StatusOK, extensionActionResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
@@ -2131,6 +2141,10 @@ func (s *Server) logComputation(r *http.Request, userID int64, action, outcome s
 
 func (s *Server) logConvertComputation(r *http.Request, userID int64, request convertRequest, resourceQuantity, essenceQuantity int, outcome string) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=convert method_id=%s quantity=%d resource_quantity=%d essence_quantity=%d essence_result=reported outcome=%s request_id=%s\n", userID, sanitizeLogValue(request.MethodID), request.Quantity, resourceQuantity, essenceQuantity, sanitizeLogValue(outcome), requestID(r))
+}
+
+func (s *Server) logExtensionAction(r *http.Request, userID int64, action string, buildingID, extensionID int64, ap int, outcome string) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s building_id=%d extension_id=%d ap=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r))
 }
 
 func (s *Server) logCarryingWeightComputation(r *http.Request, userID int64, state PlayerState) {
