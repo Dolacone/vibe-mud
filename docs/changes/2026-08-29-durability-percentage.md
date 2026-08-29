@@ -1,6 +1,6 @@
 ---
 title: "Durability percentage API"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -62,3 +62,7 @@ REQ-011 and REQ-015 are the sources of truth. The plan will copy each affected c
 ## Plan Review Issues
 
 - [x] `docs/architecture.md` 尚未記錄公開 API 僅回傳耐久狀態與整數百分比，且不得回傳秒數或 timestamp。Plan 階段必須先更新相關文件，不得把此更新延後到 Task 1 的實作 commit。
+
+## Review Issues
+
+- [ ] [Major] `source_paths` 只列出 `main...HEAD` 11 個變更檔案中的 7 個。缺少 change document 與 3 個 requirements 檔案，因此中繼資料不符合實際 diff。
