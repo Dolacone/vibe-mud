@@ -156,7 +156,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
 - [x] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
 - [x] [Major] Extension 施工日誌記錄 request AP，不是實際投入 AP。投入量被剩餘進度截斷時，日誌會高報 AP。
-- [ ] [Major] Extension 施工的 effective AP 由交易外的前後 progress 相減。並發施工會把其他 request 的 AP 算入本次日誌。
+- [x] [Major] Extension 施工的 effective AP 由交易外的前後 progress 相減。並發施工會把其他 request 的 AP 算入本次日誌。
 
 ## Plan Review Issues
 

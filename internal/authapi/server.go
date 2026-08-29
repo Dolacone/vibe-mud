@@ -714,6 +714,7 @@ type extensionActionMetadata struct {
 	BuildingID  int64
 	ExtensionID int64
 	AP          int
+	Computation *ExtensionConstructionComputation
 }
 
 func (s *Server) installExtension(w http.ResponseWriter, r *http.Request) {
@@ -739,17 +740,12 @@ func (s *Server) contributeExtensionConstruction(w http.ResponseWriter, r *http.
 			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
 		}
 		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID}
-		beforeBuildingID, beforeProgress, err := s.extensionTarget(request.ExtensionID)
-		if err != nil {
-			return PlayerState{}, metadata, err
-		}
-		metadata.BuildingID = beforeBuildingID
 		state, err := s.store.ContributeExtensionConstruction(userID, request.ExtensionID, request.AP)
-		if err == nil {
-			afterProgress, progressErr := s.extensionProgress(request.ExtensionID)
-			if progressErr == nil && afterProgress >= beforeProgress {
-				metadata.AP = afterProgress - beforeProgress
-			}
+		if computation := state.ExtensionConstructionComputation; computation != nil {
+			metadata.BuildingID = computation.BuildingID
+			metadata.ExtensionID = computation.ExtensionID
+			metadata.AP = computation.EffectiveAP
+			metadata.Computation = computation
 		}
 		return state, metadata, err
 	})
@@ -780,7 +776,7 @@ func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request,
 	}
 	state, metadata, err := execute(session.UserID)
 	if err != nil {
-		s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "error")
+		s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "error", metadata.Computation)
 		current, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
@@ -789,7 +785,7 @@ func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request,
 		s.writeJSON(w, http.StatusConflict, extensionActionResponse{Error: "invalid action", playerStateResponse: s.playerStateResponse(r, session.UserID, current)})
 		return
 	}
-	s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "success")
+	s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "success", metadata.Computation)
 	s.writeJSON(w, http.StatusOK, extensionActionResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
@@ -817,31 +813,6 @@ func (s *Server) extensionBuildingID(extensionID int64) (int64, error) {
 		return 0, fmt.Errorf("get extension building: %w", err)
 	}
 	return buildingID, nil
-}
-
-func (s *Server) extensionTarget(extensionID int64) (int64, int, error) {
-	var buildingID int64
-	var progress int
-	err := s.store.db.QueryRow(`SELECT building_id, contributed_ap FROM building_extensions WHERE id = ?`, extensionID).Scan(&buildingID, &progress)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, 0, nil
-	}
-	if err != nil {
-		return 0, 0, fmt.Errorf("get extension target: %w", err)
-	}
-	return buildingID, progress, nil
-}
-
-func (s *Server) extensionProgress(extensionID int64) (int, error) {
-	var progress int
-	err := s.store.db.QueryRow(`SELECT contributed_ap FROM building_extensions WHERE id = ?`, extensionID).Scan(&progress)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("get extension progress: %w", err)
-	}
-	return progress, nil
 }
 
 func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, string) {
@@ -2257,8 +2228,14 @@ func (s *Server) logConvertComputation(r *http.Request, userID int64, request co
 	fmt.Fprintf(os.Stdout, "user_id=%d action=convert method_id=%s quantity=%d resource_quantity=%d essence_quantity=%d essence_result=reported outcome=%s request_id=%s\n", userID, sanitizeLogValue(request.MethodID), request.Quantity, resourceQuantity, essenceQuantity, sanitizeLogValue(outcome), requestID(r))
 }
 
-func (s *Server) logExtensionAction(r *http.Request, userID int64, action string, buildingID, extensionID int64, ap int, outcome string) {
-	fmt.Fprintf(os.Stdout, "user_id=%d action=%s building_id=%d extension_id=%d ap=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r))
+func (s *Server) logExtensionAction(r *http.Request, userID int64, action string, buildingID, extensionID int64, ap int, outcome string, computation *ExtensionConstructionComputation) {
+	format := "user_id=%d action=%s building_id=%d extension_id=%d ap=%d outcome=%s request_id=%s"
+	if computation != nil {
+		format += " requested_ap=%d effective_ap=%d resulting_progress=%d/%d status=%s"
+		fmt.Fprintf(os.Stdout, format+"\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r), computation.RequestedAP, computation.EffectiveAP, computation.ResultingProgress, computation.RequiredAP, sanitizeLogValue(computation.ResultingStatus))
+		return
+	}
+	fmt.Fprintf(os.Stdout, format+"\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r))
 }
 
 func (s *Server) logCarryingWeightComputation(r *http.Request, userID int64, state PlayerState) {

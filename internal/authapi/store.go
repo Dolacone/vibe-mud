@@ -251,6 +251,16 @@ type ConstructionComputation struct {
 	CompletionOutcome string
 }
 
+type ExtensionConstructionComputation struct {
+	BuildingID        int64
+	ExtensionID       int64
+	RequestedAP       int
+	EffectiveAP       int
+	ResultingProgress int
+	RequiredAP        int
+	ResultingStatus   string
+}
+
 type RepairComputation struct {
 	BuildingID                int64
 	PriorDurabilityStatus     string
@@ -261,26 +271,27 @@ type RepairComputation struct {
 }
 
 type PlayerState struct {
-	Location                     Location
-	Routes                       []Route
-	AP                           int
-	Inventory                    []InventoryItem
-	GroundItems                  []GroundItem
-	GroundResources              []GroundResource
-	GatheringOption              *GatheringOption
-	ConversionOption             *ConversionOption
-	ConversionMethods            []ConversionMethod
-	Resources                    []PlayerResource
-	CraftingRecipes              []CraftingRecipe
-	BuildingRecipes              []BuildingRecipe
-	BuildingExtensionDefinitions []BuildingExtensionDefinition
-	Buildings                    []Building
-	ConstructionComputation      *ConstructionComputation
-	RepairComputation            *RepairComputation
-	CarriedWeight                int
-	MovementWeightThreshold      int
-	ItemDurabilityComputations   []ItemDurabilityComputation `json:"-"`
-	ItemDurabilityCleanups       []ItemDurabilityCleanup     `json:"-"`
+	Location                         Location
+	Routes                           []Route
+	AP                               int
+	Inventory                        []InventoryItem
+	GroundItems                      []GroundItem
+	GroundResources                  []GroundResource
+	GatheringOption                  *GatheringOption
+	ConversionOption                 *ConversionOption
+	ConversionMethods                []ConversionMethod
+	Resources                        []PlayerResource
+	CraftingRecipes                  []CraftingRecipe
+	BuildingRecipes                  []BuildingRecipe
+	BuildingExtensionDefinitions     []BuildingExtensionDefinition
+	Buildings                        []Building
+	ConstructionComputation          *ConstructionComputation
+	ExtensionConstructionComputation *ExtensionConstructionComputation
+	RepairComputation                *RepairComputation
+	CarriedWeight                    int
+	MovementWeightThreshold          int
+	ItemDurabilityComputations       []ItemDurabilityComputation `json:"-"`
+	ItemDurabilityCleanups           []ItemDurabilityCleanup     `json:"-"`
 }
 
 const (
@@ -3135,60 +3146,72 @@ func (s *Store) ContributeExtensionConstruction(userID, extensionID int64, reque
 	if userID <= 0 || extensionID <= 0 || requestedAP <= 0 {
 		return PlayerState{}, fmt.Errorf("%w: user ID, extension ID, and AP are required", ErrInvalidArgument)
 	}
+	computation := &ExtensionConstructionComputation{ExtensionID: extensionID, RequestedAP: requestedAP}
+	failure := func(err error) (PlayerState, error) {
+		return PlayerState{ExtensionConstructionComputation: computation}, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return PlayerState{}, fmt.Errorf("begin extension construction contribution: %w", err)
+		return failure(fmt.Errorf("begin extension construction contribution: %w", err))
 	}
 	now := s.now().UTC()
 	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return failure(err)
 	}
 	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return failure(err)
 	}
 	var contributorLocation string
 	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation); errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrIdentityNotFound
+		return failure(ErrIdentityNotFound)
 	} else if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get extension contributor location: %w", err)
+		return failure(fmt.Errorf("get extension contributor location: %w", err))
 	}
-	var buildingLocation, buildingStatus string
+	var buildingID int64
+	var buildingLocation, buildingStatus, extensionStatus string
 	var durabilityExpiresAt sql.NullInt64
 	var contributedAP, requiredAP int
 	err = tx.QueryRow(`
-SELECT b.location_id, b.status, b.durability_expires_at, e.contributed_ap, e.required_ap
+SELECT b.id, b.location_id, b.status, b.durability_expires_at, e.status, e.contributed_ap, e.required_ap
 FROM building_extensions e
 JOIN buildings b ON b.id = e.building_id
-WHERE e.id = ? AND e.status = 'under_construction'`, extensionID).Scan(&buildingLocation, &buildingStatus, &durabilityExpiresAt, &contributedAP, &requiredAP)
+WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStatus, &durabilityExpiresAt, &extensionStatus, &contributedAP, &requiredAP)
 	if errors.Is(err, sql.ErrNoRows) {
-		var status string
-		if scanErr := tx.QueryRow(`SELECT status FROM building_extensions WHERE id = ?`, extensionID).Scan(&status); scanErr == nil && status == "completed" {
-			_ = tx.Rollback()
-			return PlayerState{}, ErrExtensionCompleted
-		}
 		_ = tx.Rollback()
-		return PlayerState{}, ErrExtensionNotFound
+		return failure(ErrExtensionNotFound)
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get extension construction target: %w", err)
+		return failure(fmt.Errorf("get extension construction target: %w", err))
+	}
+	computation.BuildingID = buildingID
+	computation.ResultingProgress = contributedAP
+	computation.RequiredAP = requiredAP
+	computation.ResultingStatus = extensionStatus
+	if extensionStatus == "completed" {
+		_ = tx.Rollback()
+		return failure(ErrExtensionCompleted)
+	}
+	if extensionStatus != "under_construction" {
+		_ = tx.Rollback()
+		return failure(ErrExtensionNotFound)
 	}
 	if contributorLocation != buildingLocation {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrBuildingRemote
+		return failure(ErrBuildingRemote)
 	}
 	if buildingStatus != "completed" {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrBuildingUnderConstruction
+		return failure(ErrBuildingUnderConstruction)
 	}
 	if !durabilityExpiresAt.Valid || durabilityExpiresAt.Int64 <= now.Unix() {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrBuildingDisabled
+		return failure(ErrBuildingDisabled)
 	}
 	remainingAP := requiredAP - contributedAP
 	actualAP := requestedAP
@@ -3198,14 +3221,14 @@ WHERE e.id = ? AND e.status = 'under_construction'`, extensionID).Scan(&building
 	var fullTimestamp int64
 	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrIdentityNotFound
+		return failure(ErrIdentityNotFound)
 	} else if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get extension contributor AP: %w", err)
+		return failure(fmt.Errorf("get extension contributor AP: %w", err))
 	}
 	if calculateAP(unixSeconds(fullTimestamp), now) < actualAP {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrInsufficientAP
+		return failure(ErrInsufficientAP)
 	}
 	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
@@ -3214,14 +3237,14 @@ WHERE e.id = ? AND e.status = 'under_construction'`, extensionID).Scan(&building
 	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("consume extension construction AP: %w", err)
+		return failure(fmt.Errorf("consume extension construction AP: %w", err))
 	}
 	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
 		_ = tx.Rollback()
 		if rowsErr != nil {
-			return PlayerState{}, fmt.Errorf("check extension construction AP: %w", rowsErr)
+			return failure(fmt.Errorf("check extension construction AP: %w", rowsErr))
 		}
-		return PlayerState{}, ErrInsufficientAP
+		return failure(ErrInsufficientAP)
 	}
 	newProgress := contributedAP + actualAP
 	newStatus := "under_construction"
@@ -3233,24 +3256,28 @@ UPDATE building_extensions SET contributed_ap = ?, status = ?
 WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, extensionID, contributedAP)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("update extension construction progress: %w", err)
+		return failure(fmt.Errorf("update extension construction progress: %w", err))
 	}
 	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
 		_ = tx.Rollback()
 		if rowsErr != nil {
-			return PlayerState{}, fmt.Errorf("check extension construction progress: %w", rowsErr)
+			return failure(fmt.Errorf("check extension construction progress: %w", rowsErr))
 		}
-		return PlayerState{}, ErrExtensionCompleted
+		return failure(ErrExtensionCompleted)
 	}
+	computation.EffectiveAP = actualAP
+	computation.ResultingProgress = newProgress
+	computation.ResultingStatus = newStatus
 	state, err := s.getPlayerStateTx(tx, userID, now)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return failure(err)
 	}
 	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
-		return PlayerState{}, fmt.Errorf("commit extension construction contribution: %w", err)
+		return failure(fmt.Errorf("commit extension construction contribution: %w", err))
 	}
+	state.ExtensionConstructionComputation = computation
 	return state, nil
 }
 

@@ -646,12 +646,18 @@ VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if computation := state.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 10 || computation.EffectiveAP != 10 || computation.ResultingProgress != 10 || computation.RequiredAP != 30 || computation.ResultingStatus != "under_construction" {
+		t.Fatalf("first extension computation = %+v", state.ExtensionConstructionComputation)
+	}
 	if state.AP != maxAP-10 || state.Buildings[0].Extensions[0].ContributedAP != 10 || state.Buildings[0].Extensions[0].Status != "under_construction" {
 		t.Fatalf("first extension contribution = %+v", state.Buildings[0].Extensions[0])
 	}
 	state, err = store.ContributeExtensionConstruction(owner.ID, 1, 100)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if computation := state.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 100 || computation.EffectiveAP != 20 || computation.ResultingProgress != 30 || computation.RequiredAP != 30 || computation.ResultingStatus != "completed" {
+		t.Fatalf("completed extension computation = %+v", state.ExtensionConstructionComputation)
 	}
 	if state.AP != maxAP-20 || state.Buildings[0].Extensions[0].ContributedAP != 30 || state.Buildings[0].Extensions[0].Status != "completed" {
 		t.Fatalf("completed extension contribution = %+v", state.Buildings[0].Extensions[0])
@@ -660,8 +666,12 @@ VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ContributeExtensionConstruction(owner.ID, 1, 1); !errors.Is(err, ErrExtensionCompleted) {
+	failed, err := store.ContributeExtensionConstruction(owner.ID, 1, 1)
+	if !errors.Is(err, ErrExtensionCompleted) {
 		t.Fatalf("completed extension error = %v, want ErrExtensionCompleted", err)
+	}
+	if computation := failed.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 1 || computation.EffectiveAP != 0 || computation.ResultingProgress != 30 || computation.RequiredAP != 30 || computation.ResultingStatus != "completed" {
+		t.Fatalf("failed extension computation = %+v", failed.ExtensionConstructionComputation)
 	}
 	after, err := store.GetPlayerState(owner.ID)
 	if err != nil {
@@ -669,6 +679,83 @@ VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour)
 	}
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("completed extension contribution changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestContributeExtensionConstructionReturnsAtomicComputationPerConcurrentRequest(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		state PlayerState
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, userID := range []int64{first.ID, second.ID} {
+		go func(userID int64) {
+			<-start
+			state, err := store.ContributeExtensionConstruction(userID, 1, 30)
+			results <- result{state: state, err: err}
+		}(userID)
+	}
+	close(start)
+	computations := make([]*ExtensionConstructionComputation, 0, 2)
+	var successes, failures int
+	for range 2 {
+		outcome := <-results
+		if outcome.err != nil && !errors.Is(outcome.err, ErrExtensionCompleted) {
+			t.Fatalf("concurrent extension contribution error = %v", outcome.err)
+		}
+		if outcome.err == nil {
+			successes++
+		} else {
+			failures++
+		}
+		computations = append(computations, outcome.state.ExtensionConstructionComputation)
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("concurrent extension outcomes = %d successes, %d failures", successes, failures)
+	}
+	seen := map[int]bool{}
+	for _, computation := range computations {
+		if computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 30 || computation.ResultingStatus == "" {
+			t.Fatalf("concurrent extension computation = %+v", computation)
+		}
+		if computation.EffectiveAP == 30 && computation.ResultingProgress == 30 && computation.ResultingStatus == "completed" {
+			seen[computation.EffectiveAP] = true
+			continue
+		}
+		if computation.EffectiveAP == 0 && (computation.ResultingProgress == 0 || computation.ResultingProgress == 30) {
+			seen[computation.EffectiveAP] = true
+			continue
+		}
+		t.Fatalf("concurrent extension computation = %+v", computation)
+	}
+	if !seen[0] || !seen[30] || len(seen) != 2 {
+		t.Fatalf("concurrent effective APs = %v, want 0 and 30", seen)
 	}
 }
 

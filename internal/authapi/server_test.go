@@ -1224,7 +1224,7 @@ func TestContributeExtensionAPILogUsesEffectiveAPWhenRequestIsClamped(t *testing
 	response := httptest.NewRecorder()
 	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
 	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=5 outcome=success request_id=" + requestID
-	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) || !strings.Contains(logOutput, "requested_ap=30 effective_ap=5 resulting_progress=30/30 status=completed") {
 		t.Fatalf("clamped contribution status/log = %d/%q", response.Code, logOutput)
 	}
 }
@@ -1258,7 +1258,7 @@ func TestContributeExtensionAPILogUsesAuthoritativeBuildingOnDomainFailure(t *te
 	response := httptest.NewRecorder()
 	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
 	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=0 outcome=error request_id=" + requestID
-	if response.Code != http.StatusConflict || !strings.Contains(logOutput, want) {
+	if response.Code != http.StatusConflict || !strings.Contains(logOutput, want) || !strings.Contains(logOutput, "requested_ap=1 effective_ap=0 resulting_progress=0/30 status=under_construction") {
 		t.Fatalf("domain failure status/log = %d/%q", response.Code, logOutput)
 	}
 }
