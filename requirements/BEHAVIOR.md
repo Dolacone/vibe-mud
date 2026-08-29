@@ -1,17 +1,18 @@
 - 單一 Fly.io application 提供靜態前端、安全的 Google SSO、應用程式 session 與 JSON 身分回應 -> REQ-001
 - Fly.io 前端透過同源後端 session 確認並顯示 Google 登入身分 -> REQ-002
 - 玩家登入時取得依完整分鐘恢復且上限為 3000 的目前 AP -> REQ-003
-- 已登入玩家可透過前端 `rest` 行動消耗 1 AP 並保留結果 -> REQ-004
-- 已登入玩家可沿後端允許的 Route 執行 `move`，依 Route 成本原子更新 AP 與目前位置 -> REQ-005
-- 已登入玩家可在 `forest_edge` 執行 `gather`，原子消耗 AP 並累加持久化 Inventory -> REQ-006
+- 已登入玩家可在後端回傳 `rest` 時消耗 1 AP 並保留結果 -> REQ-004
+- 已登入玩家可沿後端依目前狀態回傳的 Route 執行 `move`，原子更新 AP 與位置 -> REQ-005
+- 已登入玩家可在後端回傳 `gather` 時原子消耗 AP 並累加持久化 Inventory -> REQ-006
 - 玩家分別持有 8 種 typed Resource，並能查看各自的持久化 quantity -> REQ-007
-- 已登入玩家可在任何 Location 使用後端定義的 Convert method，原子轉換 Active Item 並判定 Essence -> REQ-008
-- 已登入玩家可在任何 Location 執行後端定義的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
-- 玩家可建立 Building Lv1，並由同地點玩家共同投入 AP 完成本體施工 -> REQ-010
-- 完成的 Building 會自然耗損，Disabled 後停用 extension 並保留 7 天，所有同地點玩家都能維修 -> REQ-011
+- 已登入玩家可使用後端依目前狀態回傳的 Convert method，原子轉換 Active Item 並判定 Essence -> REQ-008
+- 已登入玩家可執行後端依目前狀態回傳的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
+- 玩家可依後端回傳的 recipe 建立 Building Lv1，並由同地點玩家共同投入 AP 完成本體施工 -> REQ-010
+- 完成的 Building 會自然耗損，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
 - 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
 - 玩家可在目前 Location 免費 Transfer 資產，Item 必須指定狀態，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
 - 每種 Item 與 Resource 具有獨立重量，玩家可超重持有資產，但超重時不能 Move -> REQ-014
 - 所有操作產生的 Item 於 1 小時後失效，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
 - Building owner 可安裝或拆除 extension，同地點玩家可共同施工並使用 completed extension -> REQ-016
-- 玩家可製作並建造 Sawmill T1，以相同 AP 工作單位提高 Wood Convert capacity -> REQ-017
+- 玩家可使用後端依目前狀態回傳的選項製作並建造 Sawmill T1，以相同 AP 工作單位提高 Wood Convert capacity -> REQ-017
+- 後端只向前端回傳玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe -> REQ-018
