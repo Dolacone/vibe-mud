@@ -62,6 +62,7 @@ export type ConversionMethod = {
   essence_item: Item | null;
   essence_chance_bps: number;
   essence_quantity: number;
+  provider_extension_ids: number[];
 };
 
 export type BuildingExtension = {
@@ -73,6 +74,12 @@ export type BuildingExtension = {
   required_ap: number;
   contributed_ap: number;
   status: "under_construction" | "completed";
+  available_actions: string[];
+};
+
+export type ExtensionInstallationTarget = {
+  building_id: number;
+  slot_index: number;
 };
 
 export type BuildingExtensionDefinition = {
@@ -81,6 +88,7 @@ export type BuildingExtensionDefinition = {
   tier: number;
   package_item: Item;
   required_ap: number;
+  installation_targets: ExtensionInstallationTarget[];
 };
 
 export type Resource = {
@@ -141,9 +149,11 @@ export type Building = {
   durability_status: "active" | "disabled" | null;
   durability_remaining_seconds: number | null;
   extensions?: BuildingExtension[];
+  available_actions: string[];
 };
 
 export type PlayerState = {
+  available_actions: string[];
   location: Location;
   routes: Route[];
   ap: number;
@@ -174,8 +184,8 @@ export type AuthResult =
   | { status: "error"; error: Error };
 
 export type RestResult =
-  | { status: "success"; ap: number }
-  | { status: "insufficient"; error: string; ap: number }
+  | ({ status: "success" } & PlayerState)
+  | ({ status: "insufficient"; error: string } & PlayerState)
   | { status: "unauthenticated" }
   | { status: "error"; error: Error };
 
@@ -422,6 +432,7 @@ function isBuilding(value: unknown): value is Building {
     Number.isInteger(building.extension_slot_count) &&
     building.extension_slot_count >= 0 &&
     isPositiveInteger(building.max_durability_seconds) &&
+    isAvailableActions(building.available_actions) &&
     (building.extensions === undefined || (Array.isArray(building.extensions) && building.extensions.every(isBuildingExtension)))
   ) {
     if (building.status === "under_construction") {
@@ -519,7 +530,7 @@ function isConversionOption(value: unknown): value is ConversionOption {
 function isConversionMethod(value: unknown): value is ConversionMethod {
   if (typeof value !== "object" || value === null) return false;
   const method = value as Record<string, unknown>;
-  return isString(method.id) && isString(method.display_name) && isPositiveInteger(method.ap_cost) && isItem(method.input) && isPositiveInteger(method.max_input_quantity) && isItem(method.output_resource) && isPositiveInteger(method.resource_quantity_per_input) && (method.essence_item === null || isItem(method.essence_item)) && isNonNegativeInteger(method.essence_chance_bps) && method.essence_chance_bps <= 10000 && isNonNegativeInteger(method.essence_quantity);
+  return isString(method.id) && isString(method.display_name) && isPositiveInteger(method.ap_cost) && isItem(method.input) && isPositiveInteger(method.max_input_quantity) && isItem(method.output_resource) && isPositiveInteger(method.resource_quantity_per_input) && (method.essence_item === null || isItem(method.essence_item)) && isNonNegativeInteger(method.essence_chance_bps) && method.essence_chance_bps <= 10000 && isNonNegativeInteger(method.essence_quantity) && Array.isArray(method.provider_extension_ids) && method.provider_extension_ids.every(isPositiveInteger);
 }
 
 function isConversionMethods(value: unknown): value is ConversionMethod[] {
@@ -529,13 +540,25 @@ function isConversionMethods(value: unknown): value is ConversionMethod[] {
 function isBuildingExtension(value: unknown): value is BuildingExtension {
   if (typeof value !== "object" || value === null) return false;
   const extension = value as Record<string, unknown>;
-  return isPositiveInteger(extension.id) && isNonNegativeInteger(extension.slot_index) && isString(extension.definition_id) && isString(extension.display_name) && isPositiveInteger(extension.tier) && isPositiveInteger(extension.required_ap) && isNonNegativeInteger(extension.contributed_ap) && extension.contributed_ap <= extension.required_ap && (extension.status === "under_construction" || extension.status === "completed");
+  return isPositiveInteger(extension.id) && isNonNegativeInteger(extension.slot_index) && isString(extension.definition_id) && isString(extension.display_name) && isPositiveInteger(extension.tier) && isPositiveInteger(extension.required_ap) && isNonNegativeInteger(extension.contributed_ap) && extension.contributed_ap <= extension.required_ap && (extension.status === "under_construction" || extension.status === "completed") && isAvailableActions(extension.available_actions);
 }
 
 function isBuildingExtensionDefinition(value: unknown): value is BuildingExtensionDefinition {
   if (typeof value !== "object" || value === null) return false;
   const definition = value as Record<string, unknown>;
-  return isString(definition.id) && isString(definition.display_name) && isPositiveInteger(definition.tier) && isItem(definition.package_item) && isPositiveInteger(definition.required_ap);
+  return isString(definition.id) && isString(definition.display_name) && isPositiveInteger(definition.tier) && isItem(definition.package_item) && isPositiveInteger(definition.required_ap) && Array.isArray(definition.installation_targets) && definition.installation_targets.every(isExtensionInstallationTarget);
+}
+
+function isExtensionInstallationTarget(value: unknown): value is ExtensionInstallationTarget {
+  if (typeof value !== "object" || value === null) return false;
+  const target = value as Record<string, unknown>;
+  return isPositiveInteger(target.building_id) && isNonNegativeInteger(target.slot_index);
+}
+
+const gameplayActions = new Set(["rest", "move", "gather", "convert", "craft", "build", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"]);
+
+function isAvailableActions(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((action) => typeof action === "string" && gameplayActions.has(action)) && new Set(value).size === value.length;
 }
 
 function isPlayerState(value: unknown): value is PlayerState {
@@ -544,6 +567,7 @@ function isPlayerState(value: unknown): value is PlayerState {
   const location = state.location;
   const routes = state.routes;
   return (
+    isAvailableActions(state.available_actions) &&
     isLocation(location) &&
     Array.isArray(routes) &&
     routes.every(isRoute) &&
@@ -577,14 +601,14 @@ function isCurrentUser(value: unknown): value is CurrentUser {
   );
 }
 
-function isRestResponse(value: unknown): value is { ap: number } {
-  return typeof value === "object" && value !== null && isAP((value as Record<string, unknown>).ap);
+function isRestResponse(value: unknown): value is PlayerState {
+  return isPlayerState(value);
 }
 
-function isRestConflict(value: unknown): value is { error: string; ap: number } {
+function isRestConflict(value: unknown): value is { error: string } & PlayerState {
   if (typeof value !== "object" || value === null) return false;
   const body = value as Record<string, unknown>;
-  return typeof body.error === "string" && isAP(body.ap);
+  return typeof body.error === "string" && isPlayerState(value);
 }
 
 function isMoveError(value: unknown): value is { error: string } {
@@ -671,6 +695,7 @@ export async function getCurrentUser(
         id: body.id,
         display_name: body.display_name,
         email: body.email,
+        available_actions: body.available_actions,
         ap: body.ap,
         carried_weight: body.carried_weight,
         movement_weight_threshold: body.movement_weight_threshold,
@@ -681,6 +706,8 @@ export async function getCurrentUser(
         ground_resources: body.ground_resources,
         gathering_option: body.gathering_option,
         conversion_option: body.conversion_option,
+        conversion_methods: body.conversion_methods,
+        building_extension_definitions: body.building_extension_definitions,
         resources: body.resources,
         crafting_recipes: body.crafting_recipes,
         building_recipes: body.building_recipes,
@@ -710,7 +737,7 @@ export async function rest(fetcher: typeof fetch = fetch): Promise<RestResult> {
       if (!isRestConflict(body)) {
         return { status: "error", error: new Error("rest response is invalid") };
       }
-      return { status: "insufficient", error: body.error, ap: body.ap };
+      return { ...body, status: "insufficient", error: body.error };
     }
 
     if (response.status !== 200) {
@@ -724,7 +751,7 @@ export async function rest(fetcher: typeof fetch = fetch): Promise<RestResult> {
     if (!isRestResponse(body)) {
       return { status: "error", error: new Error("rest response is invalid") };
     }
-    return { status: "success", ap: body.ap };
+    return { ...body, status: "success" };
   } catch (error) {
     return {
       status: "error",

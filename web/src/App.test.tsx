@@ -56,6 +56,20 @@ const woodComponentRecipe = {
   output_quantity: 1,
 };
 
+const handWoodMethod = {
+  id: "hand_wood_t1",
+  display_name: "Hand Wood Convert",
+  ap_cost: 1,
+  input: { id: "wood", display_name: "Wood" },
+  max_input_quantity: 1,
+  output_resource: { id: "wood", display_name: "Wood" },
+  resource_quantity_per_input: 1,
+  essence_item: null,
+  essence_chance_bps: 0,
+  essence_quantity: 0,
+  provider_extension_ids: [],
+};
+
 const buildingRecipe = {
   id: "building_lv1",
   display_name: "Building Lv1",
@@ -78,6 +92,7 @@ const underConstruction = {
   max_durability_seconds: 604800,
   durability_status: null,
   durability_remaining_seconds: null,
+  available_actions: ["contribute-construction"],
 };
 
 const completedActive = {
@@ -86,6 +101,7 @@ const completedActive = {
   status: "completed" as const,
   durability_status: "active" as const,
   durability_remaining_seconds: 604700,
+  available_actions: ["repair-building"],
 };
 
 const completedDisabled = {
@@ -95,6 +111,7 @@ const completedDisabled = {
 };
 
 const campState = {
+  available_actions: ["rest", "move", "convert", "craft", "build"],
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
@@ -111,6 +128,8 @@ const campState = {
     resource_yield: 1,
     ap_cost: 1,
   },
+  conversion_methods: [handWoodMethod],
+  building_extension_definitions: [],
   resources,
   crafting_recipes: [woodComponentRecipe],
   building_recipes: [buildingRecipe],
@@ -118,6 +137,7 @@ const campState = {
 };
 
 const forestState = {
+  available_actions: ["rest", "move", "gather", "craft", "build"],
   location: { id: "forest_edge", display_name: "Forest edge" },
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
@@ -128,6 +148,8 @@ const forestState = {
   ground_resources: [],
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
   conversion_option: null,
+  conversion_methods: [],
+  building_extension_definitions: [],
   resources,
   crafting_recipes: [woodComponentRecipe],
   building_recipes: [buildingRecipe],
@@ -187,7 +209,7 @@ describe("App", () => {
   });
 
   it("keeps empty gameplay sections as explicit table rows", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, routes: [], gathering_option: null, conversion_option: null, crafting_recipes: [], building_recipes: [], buildings: [] } });
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, routes: [], gathering_option: null, conversion_option: null, conversion_methods: [], crafting_recipes: [], building_recipes: [], buildings: [] } });
     render(<App />);
 
     expect(await screen.findByRole("table", { name: "Available routes" })).toHaveTextContent("No available routes.");
@@ -201,6 +223,29 @@ describe("App", () => {
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
   });
 
+  it("does not reconstruct gameplay controls when the backend omits their actions", async () => {
+    const stateWithFilteredActions = {
+      ...campState,
+      available_actions: ["rest"],
+      gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
+      building_extension_definitions: [{ id: "sawmill_t1", display_name: "Sawmill T1", tier: 1, package_item: { id: "sawmill_package_t1", display_name: "Sawmill package T1" }, required_ap: 30, installation_targets: [{ building_id: 1, slot_index: 0 }] }],
+    };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...stateWithFilteredActions } });
+    render(<App />);
+
+    expect(await screen.findByRole("table", { name: "Resources" })).toHaveTextContent("Arcane: 0");
+    expect(screen.getByRole("table", { name: "Resources" }).querySelectorAll("tbody > tr")).toHaveLength(8);
+    expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("No available routes.");
+    expect(screen.getByRole("table", { name: "Gather" })).toHaveTextContent("No gathering action available.");
+    expect(screen.getByRole("table", { name: "Convert" })).toHaveTextContent("No conversion action available.");
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("No crafting recipes available.");
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("No building recipes available.");
+    expect(screen.queryByRole("table", { name: "Building extension definitions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move to forest_edge" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Gather" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Hand Wood Convert")).not.toBeInTheDocument();
+  });
+
   it("shows carrying weight and threshold so players can judge movement availability", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1000 } });
     render(<App />);
@@ -212,12 +257,13 @@ describe("App", () => {
     expect(screen.queryByRole("alert", { name: "Cannot move while overweight." })).not.toBeInTheDocument();
   });
 
-  it("blocks route controls while overweight so players cannot start a move the backend must reject", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1001 } });
+  it("keeps the backend-filtered route list authoritative while overweight", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1001, routes: [], available_actions: ["rest", "convert", "craft", "build"] } });
     render(<App />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot move while overweight.");
-    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Move to forest_edge" })).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("No available routes.");
     expect(move).not.toHaveBeenCalled();
   });
 
@@ -471,7 +517,7 @@ describe("App", () => {
 
   it("allows same-location contribution and caps oversized AP at completion", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 100, buildings: [underConstruction] } });
-    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [{ ...underConstruction, contributed_ap: 60, status: "completed" as const }] });
+    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [{ ...underConstruction, contributed_ap: 60, status: "completed" as const, available_actions: [] }] });
     render(<App />);
 
     const input = await screen.findByRole("spinbutton", { name: "Contribution AP for building 1" });
@@ -534,7 +580,7 @@ describe("App", () => {
     expect(screen.getByText("Output: Wood Component: 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
     expect(screen.getByText("No gathering action available.")).toBeInTheDocument();
-    expect(screen.getByText("Input: 1 Wood; Yield: 1 Wood Resource; Cost: 1 AP")).toBeInTheDocument();
+    expect(screen.getByText("Hand Wood Convert")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
   });
@@ -710,18 +756,9 @@ describe("App", () => {
   it("applies the authoritative state after a successful move", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
     move.mockResolvedValue({
+      ...forestState,
       status: "success",
-      location: { id: "forest_edge", display_name: "Forest edge" },
-      routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
-      carried_weight: 0,
-      movement_weight_threshold: 1000,
-      inventory: [],
-      ground_items: [],
-      ground_resources: [],
-      gathering_option: null,
-      conversion_option: null,
-      resources,
     });
     render(<App />);
 
@@ -766,18 +803,9 @@ describe("App", () => {
     expect(move).toHaveBeenCalledTimes(1);
 
     resolveMove?.({
+      ...forestState,
       status: "success",
-      location: { id: "forest_edge", display_name: "Forest edge" },
-      routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
       ap: 2980,
-      carried_weight: 0,
-      movement_weight_threshold: 1000,
-      inventory: [],
-      ground_items: [],
-      ground_resources: [],
-      gathering_option: null,
-      conversion_option: null,
-      resources,
     });
     await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();
@@ -785,7 +813,7 @@ describe("App", () => {
 
   it("updates the displayed AP after a successful rest", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 2 } });
-    rest.mockResolvedValue({ status: "success", ap: 1 });
+    rest.mockResolvedValue({ ...campState, status: "success", ap: 1 });
     render(<App />);
 
     const button = await screen.findByRole("button", { name: "Rest" });
@@ -795,20 +823,19 @@ describe("App", () => {
     expect(rest).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the known AP and shows the rejection when AP is insufficient", async () => {
-    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 0 } });
-    rest.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ap: 0 });
+  it("hides rest when the backend does not return it", async () => {
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 0, available_actions: ["move"] } });
     render(<App />);
 
-    const button = await screen.findByRole("button", { name: "Rest" });
-    button.click();
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(await screen.findByText("No actions available.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rest" })).not.toBeInTheDocument();
     expect(apRow(0)).toBeInTheDocument();
+    expect(rest).not.toHaveBeenCalled();
   });
 
   it("updates stale AP from an insufficient rest response", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 1 } });
-    rest.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ap: 0 });
+    rest.mockResolvedValue({ ...campState, status: "insufficient", error: "insufficient action points", ap: 0, available_actions: ["move"] });
     render(<App />);
 
     const button = await screen.findByRole("button", { name: "Rest" });
@@ -832,7 +859,7 @@ describe("App", () => {
     button.click();
     expect(rest).toHaveBeenCalledTimes(1);
 
-    resolveRest?.({ status: "success", ap: 1 });
+    resolveRest?.({ ...campState, status: "success", ap: 1 });
     await waitFor(() => expect(apRow(1)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
   });

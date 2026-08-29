@@ -10,7 +10,9 @@ source_paths:
   - internal/authapi/server_test.go
   - docs/architecture.md
   - web/src/App.tsx
+  - web/src/App.test.tsx
   - web/src/auth.ts
+  - web/src/auth.test.ts
 req_ref: REQ-018
 base_branch: main
 scope: "Only expose gameplay options that the authenticated player can currently execute."
@@ -63,6 +65,6 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
   - REQ-018.15: 此規則不得隱藏玩家狀態。前端必須繼續取得全部 8 種 Resource、Inventory、目前 Location、Buildings 與其他既有可見狀態。
   - REQ-018.16: Pickup 與 Drop 屬於 Transfer，不屬於此 REQ 的 Action 或 recipe filtering。
   - REQ-018.17: 未回傳的 Action、target、method 或 recipe 仍必須由後端拒絕直接提交，且不得修改任何狀態。
-- [ ] Task 2 [parallel: no]: Consume only backend-provided Actions and targets in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit.
+- [x] Task 2 [parallel: no]: Consume only backend-provided Actions and targets in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit.
   - REQ-018.5: 前端只能顯示後端回傳的 Action、target、method 與 recipe，不得自行推定或補回未回傳的選項。
   - REQ-018.15: 此規則不得隱藏玩家狀態。前端必須繼續取得全部 8 種 Resource、Inventory、目前 Location、Buildings 與其他既有可見狀態。
