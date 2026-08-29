@@ -1,6 +1,6 @@
 ---
 title: "Backend-filtered gameplay options"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -68,3 +68,10 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
 - [x] Task 2 [parallel: no]: Consume only backend-provided Actions and targets in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit.
   - REQ-018.5: 前端只能顯示後端回傳的 Action、target、method 與 recipe，不得自行推定或補回未回傳的選項。
   - REQ-018.15: 此規則不得隱藏玩家狀態。前端必須繼續取得全部 8 種 Resource、Inventory、目前 Location、Buildings 與其他既有可見狀態。
+
+## Review Issues
+
+- [ ] [Major] The full Go suite fails `TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState`, `TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState`, and `TestRestInsufficientAPReturnsConflictWithoutChangingState` under `go test -ldflags=-linkmode=external ./...`.
+- [ ] [Major] The frontend hides a backend-returned legacy Convert option when `conversion_option` is available but `conversion_methods` is empty. The backend returns `convert` for that state, while `App.tsx` renders no control unless a method exists.
+- [ ] [Major] A remote owned extension is omitted from the current-Location response but remains removable by direct submission. `RemoveExtension` checks ownership only, then deletes the extension without checking the player's current Location.
+- [ ] [Major] `source_paths` does not match `main...HEAD`. The actual 27-file diff includes the earlier sawmill change, schema and terminology documents, store tests, changelog, and requirement files beyond the declared eight paths.
