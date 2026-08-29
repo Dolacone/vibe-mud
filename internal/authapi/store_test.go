@@ -259,28 +259,166 @@ func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollba
 
 func TestItemDefinitionsUseOneHourDurability(t *testing.T) {
 	_, db := newTestStore(t)
-	rows, err := db.Query(`SELECT id, max_durability_seconds FROM items ORDER BY id`)
+	rows, err := db.Query(`SELECT id, weight_units, max_durability_seconds FROM items ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	want := map[string]int{"wood": int(time.Hour / time.Second), "wood_component": int(time.Hour / time.Second)}
+	wantWeights := map[string]int{"wood": 100, "wood_component": 10, "wood_essence_t1": 1, "sawmill_package_t1": 10}
 	for rows.Next() {
 		var id string
-		var maxDurabilitySeconds int
-		if err := rows.Scan(&id, &maxDurabilitySeconds); err != nil {
+		var weightUnits, maxDurabilitySeconds int
+		if err := rows.Scan(&id, &weightUnits, &maxDurabilitySeconds); err != nil {
 			t.Fatal(err)
 		}
 		if maxDurabilitySeconds != int(time.Hour/time.Second) {
 			t.Fatalf("item %q durability = %d, want one hour", id, maxDurabilitySeconds)
 		}
-		delete(want, id)
+		if weightUnits != wantWeights[id] {
+			t.Fatalf("item %q weight = %d, want %d", id, weightUnits, wantWeights[id])
+		}
+		delete(wantWeights, id)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != 0 {
-		t.Fatalf("missing one-hour item definitions: %v", want)
+	if len(wantWeights) != 0 {
+		t.Fatalf("missing item definitions: %v", wantWeights)
+	}
+}
+
+func TestSawmillDefinitionsExposeTypedBalanceValuesToPlayerState(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-sawmill-definitions", "sawmill@example.com", "Sawmill Player")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ConversionMethods) != 2 {
+		t.Fatalf("conversion methods = %+v, want hand and sawmill methods", state.ConversionMethods)
+	}
+	methods := make(map[string]ConversionMethod, len(state.ConversionMethods))
+	for _, method := range state.ConversionMethods {
+		methods[method.ID] = method
+	}
+	hand := methods["hand_wood_t1"]
+	if hand.DisplayName != "Hand Wood Convert" || hand.APCost != 30 || hand.Input.ID != "wood" || hand.MaxInputQuantity != 3 || hand.OutputResource.ID != "wood" || hand.ResourceQuantityPerInput != 1 || hand.EssenceItem == nil || hand.EssenceItem.ID != "wood_essence_t1" || hand.EssenceChanceBPS != 1000 || hand.EssenceQuantity != 1 {
+		t.Fatalf("hand conversion definition = %+v", hand)
+	}
+	sawmill := methods["sawmill_wood_t1"]
+	if sawmill.MaxInputQuantity != 6 || sawmill.EssenceItem == nil || sawmill.EssenceItem.ID != "wood_essence_t1" {
+		t.Fatalf("sawmill conversion definition = %+v", sawmill)
+	}
+	if len(state.BuildingExtensionDefinitions) != 1 {
+		t.Fatalf("extension definitions = %+v, want Sawmill T1", state.BuildingExtensionDefinitions)
+	}
+	definition := state.BuildingExtensionDefinitions[0]
+	if definition.ID != "sawmill_t1" || definition.DisplayName != "Sawmill T1" || definition.Tier != 1 || definition.PackageItem.ID != "sawmill_package_t1" || definition.RequiredAP != 30 {
+		t.Fatalf("sawmill extension definition = %+v", definition)
+	}
+	var resourceInputs, itemInputs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM crafting_recipe_resource_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&resourceInputs); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM crafting_recipe_item_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&itemInputs); err != nil {
+		t.Fatal(err)
+	}
+	if resourceInputs != 1 || itemInputs != 1 {
+		t.Fatalf("sawmill package inputs = resources %d, items %d; want one each", resourceInputs, itemInputs)
+	}
+	var recipeAP int
+	var recipeOutput string
+	var recipeOutputQuantity int
+	if err := db.QueryRow(`SELECT base_ap_cost, output_item_id, output_quantity FROM crafting_recipes WHERE id = 'sawmill_package_t1'`).Scan(&recipeAP, &recipeOutput, &recipeOutputQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if recipeAP != 30 || recipeOutput != "sawmill_package_t1" || recipeOutputQuantity != 1 {
+		t.Fatalf("sawmill package recipe = AP %d, output %q x%d", recipeAP, recipeOutput, recipeOutputQuantity)
+	}
+	var resourceID, itemID string
+	var resourceQuantity, itemQuantity int
+	if err := db.QueryRow(`SELECT resource_id, quantity FROM crafting_recipe_resource_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&resourceID, &resourceQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT item_id, quantity FROM crafting_recipe_item_inputs WHERE recipe_id = 'sawmill_package_t1'`).Scan(&itemID, &itemQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if resourceID != "wood" || resourceQuantity != 10 || itemID != "wood_essence_t1" || itemQuantity != 1 {
+		t.Fatalf("sawmill package inputs = resource %q x%d, item %q x%d", resourceID, resourceQuantity, itemID, itemQuantity)
+	}
+	var durabilityCost int
+	if err := db.QueryRow(`SELECT building_durability_cost_seconds FROM extension_conversion_capabilities WHERE extension_definition_id = 'sawmill_t1' AND conversion_method_id = 'sawmill_wood_t1'`).Scan(&durabilityCost); err != nil {
+		t.Fatal(err)
+	}
+	if durabilityCost != 60 {
+		t.Fatalf("sawmill durability cost = %d, want 60", durabilityCost)
+	}
+}
+
+func TestStoreReinitializationPreservesDirectBalanceEdits(t *testing.T) {
+	_, db := newTestStore(t)
+	if _, err := db.Exec(`
+UPDATE items SET display_name = 'Edited Wood', weight_units = 77, max_durability_seconds = 1234 WHERE id = 'wood';
+UPDATE resource_types SET display_name = 'Edited Wood Resource', weight_units = 8 WHERE id = 'wood';
+UPDATE conversion_methods SET display_name = 'Edited Hand Convert', ap_cost = 17, max_input_quantity = 2 WHERE id = 'hand_wood_t1';
+UPDATE building_extension_definitions SET display_name = 'Edited Sawmill', required_ap = 44 WHERE id = 'sawmill_t1';
+UPDATE crafting_recipes SET display_name = 'Edited Package', base_ap_cost = 31 WHERE id = 'sawmill_package_t1';`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var itemName string
+	var itemWeight, itemDurability int
+	if err := db.QueryRow(`SELECT display_name, weight_units, max_durability_seconds FROM items WHERE id = 'wood'`).Scan(&itemName, &itemWeight, &itemDurability); err != nil {
+		t.Fatal(err)
+	}
+	if itemName != "Edited Wood" || itemWeight != 77 || itemDurability != 1234 {
+		t.Fatalf("direct item edit after reinitialization = %q, %d, %d", itemName, itemWeight, itemDurability)
+	}
+	var resourceName string
+	var resourceWeight int
+	if err := db.QueryRow(`SELECT display_name, weight_units FROM resource_types WHERE id = 'wood'`).Scan(&resourceName, &resourceWeight); err != nil {
+		t.Fatal(err)
+	}
+	if resourceName != "Edited Wood Resource" || resourceWeight != 8 {
+		t.Fatalf("direct resource edit after reinitialization = %q, %d", resourceName, resourceWeight)
+	}
+	var methodName string
+	var methodAP, methodCapacity int
+	if err := db.QueryRow(`SELECT display_name, ap_cost, max_input_quantity FROM conversion_methods WHERE id = 'hand_wood_t1'`).Scan(&methodName, &methodAP, &methodCapacity); err != nil {
+		t.Fatal(err)
+	}
+	if methodName != "Edited Hand Convert" || methodAP != 17 || methodCapacity != 2 {
+		t.Fatalf("direct conversion edit after reinitialization = %q, %d, %d", methodName, methodAP, methodCapacity)
+	}
+	var extensionName string
+	var extensionAP int
+	if err := db.QueryRow(`SELECT display_name, required_ap FROM building_extension_definitions WHERE id = 'sawmill_t1'`).Scan(&extensionName, &extensionAP); err != nil {
+		t.Fatal(err)
+	}
+	if extensionName != "Edited Sawmill" || extensionAP != 44 {
+		t.Fatalf("direct extension edit after reinitialization = %q, %d", extensionName, extensionAP)
+	}
+}
+
+func TestStoreReinitializationSeedsOnlyMissingBalanceRows(t *testing.T) {
+	_, db := newTestStore(t)
+	if _, err := db.Exec(`DELETE FROM global_conversion_methods WHERE conversion_method_id = 'hand_wood_t1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM global_conversion_methods WHERE conversion_method_id = 'hand_wood_t1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("missing global method seed count = %d, want one", count)
 	}
 }
 
@@ -383,6 +521,366 @@ VALUES (?, 'camp', 'building_lv1', 1, 60, 12, 'under_construction', 1),
 		if candidate.ID == "empty" {
 			t.Fatal("building recipe without inputs was exposed")
 		}
+	}
+}
+
+func TestInstallExtensionConsumesPackageAndPersistsSlotSnapshot(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventoryQuantity(state, "sawmill_package_t1") != 0 || len(state.Buildings) != 1 || len(state.Buildings[0].Extensions) != 1 {
+		t.Fatalf("installed extension state = %+v", state)
+	}
+	extension := state.Buildings[0].Extensions[0]
+	if extension.SlotIndex != 0 || extension.DefinitionID != "sawmill_t1" || extension.DisplayName != "Sawmill T1" || extension.Tier != 1 || extension.RequiredAP != 30 || extension.ContributedAP != 0 || extension.Status != "under_construction" {
+		t.Fatalf("installed extension snapshot = %+v", extension)
+	}
+	if _, err := db.Exec(`UPDATE building_extension_definitions SET display_name = 'Edited Sawmill', tier = 2, required_ap = 99 WHERE id = 'sawmill_t1'`); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Buildings[0].Extensions[0]; got.DisplayName != "Sawmill T1" || got.Tier != 1 || got.RequiredAP != 30 {
+		t.Fatalf("extension snapshot changed after definition edit = %+v", got)
+	}
+}
+
+func TestInstallExtensionRejectsOwnerSlotAndPackageFailuresWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install-fail-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-install-fail-other", "other@example.com", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 2, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(other.ID, 1, 0, "sawmill_t1"); !errors.Is(err, ErrBuildingNotOwner) {
+		t.Fatalf("non-owner installation error = %v, want ErrBuildingNotOwner", err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 2, "sawmill_t1"); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("out-of-range slot error = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "unknown"); !errors.Is(err, ErrExtensionDefinitionNotFound) {
+		t.Fatalf("unknown definition error = %v, want ErrExtensionDefinitionNotFound", err)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed extension installations changed state: before=%+v after=%+v", before, after)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	before, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 1, "sawmill_t1"); !errors.Is(err, ErrInsufficientItem) {
+		t.Fatalf("second package installation error = %v, want ErrInsufficientItem", err)
+	}
+	after, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) || len(after.Buildings[0].Extensions) != 1 {
+		t.Fatalf("insufficient package changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestRemoveExtensionRejectsRemoteOwnedExtensionWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-remove-remote", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'forest_edge', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 30, 'completed');`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Buildings) != 0 {
+		t.Fatalf("remote building was exposed in current-location state = %+v", before.Buildings)
+	}
+	if _, err := store.RemoveExtension(owner.ID, 1); !errors.Is(err, ErrBuildingRemote) {
+		t.Fatalf("remote extension removal error = %v, want ErrBuildingRemote", err)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("remote extension removal changed player state: before=%+v after=%+v", before, after)
+	}
+	var extensionCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM building_extensions WHERE id = 1`).Scan(&extensionCount); err != nil {
+		t.Fatal(err)
+	}
+	if extensionCount != 1 {
+		t.Fatalf("remote extension count = %d, want 1", extensionCount)
+	}
+}
+
+func TestExtensionConstructionSharesAPAndCompletesAtRequiredProgress(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-construction-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributor, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-construction-contributor", "contributor@example.com", "Contributor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeExtensionConstruction(contributor.ID, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if computation := state.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 10 || computation.EffectiveAP != 10 || computation.ResultingProgress != 10 || computation.RequiredAP != 30 || computation.ResultingStatus != "under_construction" {
+		t.Fatalf("first extension computation = %+v", state.ExtensionConstructionComputation)
+	}
+	if state.AP != maxAP-10 || state.Buildings[0].Extensions[0].ContributedAP != 10 || state.Buildings[0].Extensions[0].Status != "under_construction" {
+		t.Fatalf("first extension contribution = %+v", state.Buildings[0].Extensions[0])
+	}
+	state, err = store.ContributeExtensionConstruction(owner.ID, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if computation := state.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 100 || computation.EffectiveAP != 20 || computation.ResultingProgress != 30 || computation.RequiredAP != 30 || computation.ResultingStatus != "completed" {
+		t.Fatalf("completed extension computation = %+v", state.ExtensionConstructionComputation)
+	}
+	if state.AP != maxAP-20 || state.Buildings[0].Extensions[0].ContributedAP != 30 || state.Buildings[0].Extensions[0].Status != "completed" {
+		t.Fatalf("completed extension contribution = %+v", state.Buildings[0].Extensions[0])
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.ContributeExtensionConstruction(owner.ID, 1, 1)
+	if !errors.Is(err, ErrExtensionCompleted) {
+		t.Fatalf("completed extension error = %v, want ErrExtensionCompleted", err)
+	}
+	if computation := failed.ExtensionConstructionComputation; computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 1 || computation.EffectiveAP != 0 || computation.ResultingProgress != 30 || computation.RequiredAP != 30 || computation.ResultingStatus != "completed" {
+		t.Fatalf("failed extension computation = %+v", failed.ExtensionConstructionComputation)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("completed extension contribution changed state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestContributeExtensionConstructionReturnsAtomicComputationPerConcurrentRequest(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-owner", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-concurrent-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
+VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour).Unix(), owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		state PlayerState
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, userID := range []int64{first.ID, second.ID} {
+		go func(userID int64) {
+			<-start
+			state, err := store.ContributeExtensionConstruction(userID, 1, 30)
+			results <- result{state: state, err: err}
+		}(userID)
+	}
+	close(start)
+	computations := make([]*ExtensionConstructionComputation, 0, 2)
+	var successes, failures int
+	for range 2 {
+		outcome := <-results
+		if outcome.err != nil && !errors.Is(outcome.err, ErrExtensionCompleted) {
+			t.Fatalf("concurrent extension contribution error = %v", outcome.err)
+		}
+		if outcome.err == nil {
+			successes++
+		} else {
+			failures++
+		}
+		computations = append(computations, outcome.state.ExtensionConstructionComputation)
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("concurrent extension outcomes = %d successes, %d failures", successes, failures)
+	}
+	seen := map[int]bool{}
+	for _, computation := range computations {
+		if computation == nil || computation.BuildingID != 1 || computation.ExtensionID != 1 || computation.RequestedAP != 30 || computation.ResultingStatus == "" {
+			t.Fatalf("concurrent extension computation = %+v", computation)
+		}
+		if computation.EffectiveAP == 30 && computation.ResultingProgress == 30 && computation.ResultingStatus == "completed" {
+			seen[computation.EffectiveAP] = true
+			continue
+		}
+		if computation.EffectiveAP == 0 && (computation.ResultingProgress == 0 || computation.ResultingProgress == 30) {
+			seen[computation.EffectiveAP] = true
+			continue
+		}
+		t.Fatalf("concurrent extension computation = %+v", computation)
+	}
+	if !seen[0] || !seen[30] || len(seen) != 2 {
+		t.Fatalf("concurrent effective APs = %v, want 0 and 30", seen)
+	}
+}
+
+func TestDisabledBuildingBlocksExtensionProgressUntilRepairAndRemovalDoesNotRefund(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-disabled", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?)`, owner.ID, now.Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'sawmill_package_t1', 'active', ?, 1)`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); !errors.Is(err, ErrBuildingDisabled) {
+		t.Fatalf("disabled installation error = %v, want ErrBuildingDisabled", err)
+	}
+	if _, err := db.Exec(`UPDATE buildings SET durability_expires_at = ?`, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE buildings SET durability_expires_at = ?`, now.Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ContributeExtensionConstruction(owner.ID, 1, 1); !errors.Is(err, ErrBuildingDisabled) {
+		t.Fatalf("disabled contribution error = %v, want ErrBuildingDisabled", err)
+	}
+	if _, err := store.RepairBuilding(owner.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ContributeExtensionConstruction(owner.ID, 1, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Buildings[0].Extensions[0].Status != "completed" {
+		t.Fatalf("repaired extension state = %+v", state.Buildings[0].Extensions[0])
+	}
+	if _, err := store.RemoveExtension(owner.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings[0].Extensions) != 0 || inventoryQuantity(state, "sawmill_package_t1") != 0 {
+		t.Fatalf("removed extension state = %+v", state)
+	}
+}
+
+func TestExpiredBuildingCascadesItsExtensions(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-cascade", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 0, 'under_construction');`, owner.ID, now.Add(-buildingDisabledRetention-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetPlayerState(owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	var buildings, extensions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM buildings`).Scan(&buildings); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM building_extensions`).Scan(&extensions); err != nil {
+		t.Fatal(err)
+	}
+	if buildings != 0 || extensions != 0 {
+		t.Fatalf("expired cascade counts = buildings %d, extensions %d; want zero", buildings, extensions)
 	}
 }
 
@@ -944,8 +1442,15 @@ INSERT INTO player_locations VALUES (41, 'legacy-location');`, createdAt, create
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Location.ID != "legacy-location" || state.AP != maxAP || len(state.CraftingRecipes) != 1 || state.CraftingRecipes[0].ID != "wood_component" {
-		t.Fatalf("schema upgrade changed existing player state or omitted recipe: %+v", state)
+	if state.Location.ID != "legacy-location" || state.AP != maxAP || len(state.CraftingRecipes) != 2 {
+		t.Fatalf("schema upgrade changed existing player state or omitted recipes: %+v", state)
+	}
+	seen := map[string]bool{}
+	for _, recipe := range state.CraftingRecipes {
+		seen[recipe.ID] = true
+	}
+	if !seen["wood_component"] || !seen["sawmill_package_t1"] {
+		t.Fatalf("schema upgrade omitted seeded recipes: %+v", state.CraftingRecipes)
 	}
 	var buildingTableCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('building_recipes', 'building_recipe_resource_inputs', 'building_recipe_item_inputs', 'buildings')").Scan(&buildingTableCount); err != nil {
@@ -2072,6 +2577,97 @@ END;`); err != nil {
 	}
 	if state.AP != maxAP || len(state.Inventory) != 1 || state.Inventory[0].Quantity != 1 || resourceQuantity(state, "wood") != 0 {
 		t.Fatalf("rolled-back convert state = %+v, want original state", state)
+	}
+}
+
+func TestConvertSelectsHandMethodAtAnyLocationAndRollsEssencePerInput(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	store.essenceRoll = func() int { return 0 }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-method", "method@example.com", "Method")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 3)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Convert(identity.ID, "hand_wood_t1", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-20-30 || resourceQuantity(state, "wood") != 3 || inventoryQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood_essence_t1") != 3 {
+		t.Fatalf("method conversion state = %+v", state)
+	}
+}
+
+func TestConvertSawmillRequiresProviderAndAtomicallyUsesBuildingDurability(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	store.essenceRoll = func() int { return 10000 }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-sawmill", "sawmill@example.com", "Sawmill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 1, 60, 60, 'completed', 1, 604800, ?); INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status) VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 30, 'completed'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 6)`, identity.ID, now.Add(100*time.Second).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Convert(identity.ID, "sawmill_wood_t1", 7, int64(1)); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	state, err := store.Convert(identity.ID, "sawmill_wood_t1", 6, int64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-30 || resourceQuantity(state, "wood") != 6 || inventoryQuantity(state, "wood") != 0 {
+		t.Fatalf("sawmill state = %+v", state)
+	}
+	var expiry int64
+	if err := db.QueryRow("SELECT durability_expires_at FROM buildings WHERE id = 1").Scan(&expiry); err != nil {
+		t.Fatal(err)
+	}
+	if expiry != now.Add(40*time.Second).Unix() {
+		t.Fatalf("sawmill durability expiry = %d, want %d", expiry, now.Add(40*time.Second).Unix())
+	}
+}
+
+func TestConvertUsesGlobalMethodTableForProviderEligibility(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-convert-global", "global@example.com", "Global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES ('global_wood', 'Global Wood', 5, 'wood', 1, 'wood', 2, NULL, 0, 0); INSERT INTO global_conversion_methods (conversion_method_id) VALUES ('global_wood'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, providerID := range []int64{0, 42} {
+		before, err := store.GetPlayerState(identity.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Convert(identity.ID, "global_wood", 1, providerID); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("global method provider %d error = %v, want ErrInvalidArgument", providerID, err)
+		}
+		after, err := store.GetPlayerState(identity.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.AP != before.AP || resourceQuantity(after, "wood") != resourceQuantity(before, "wood") || inventoryQuantity(after, "wood") != inventoryQuantity(before, "wood") {
+			t.Fatalf("global method provider %d changed state: before=%+v after=%+v", providerID, before, after)
+		}
+	}
+	state, err := store.Convert(identity.ID, "global_wood", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-5 || resourceQuantity(state, "wood") != 2 || inventoryQuantity(state, "wood") != 0 {
+		t.Fatalf("global method state = %+v", state)
 	}
 }
 

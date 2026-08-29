@@ -26,6 +26,28 @@ func sortedMapKeys(values map[string]any) []string {
 	return keys
 }
 
+func TestDecodeConvertRequestStrictContract(t *testing.T) {
+	legacy, reason := decodeConvertRequest(strings.NewReader(`{}`))
+	if reason != "" || !legacy.Legacy || legacy.MethodID != "" || legacy.Quantity != 0 {
+		t.Fatalf("legacy convert request = %#v, %q", legacy, reason)
+	}
+	request, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2}`))
+	if reason != "" || request.MethodID != "hand_wood_t1" || request.Quantity != 2 {
+		t.Fatalf("valid convert request = %#v, %q", request, reason)
+	}
+	for _, body := range []string{`{"method_id":"hand_wood_t1"}`, `{"quantity":2}`, `{"provider_extension_id":7}`} {
+		if _, reason := decodeConvertRequest(strings.NewReader(body)); reason != convertReasonInvalidQuantity {
+			t.Fatalf("partial convert request %s reason = %q", body, reason)
+		}
+	}
+	if _, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2,"secret":"x"}`)); reason != convertReasonUnknownField {
+		t.Fatalf("unknown field reason = %q", reason)
+	}
+	if _, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":0}`)); reason != convertReasonInvalidQuantity {
+		t.Fatalf("invalid quantity reason = %q", reason)
+	}
+}
+
 type fakeProvider struct {
 	authorizationURL string
 	authorization    struct {
@@ -111,6 +133,86 @@ func responseResourceQuantities(t *testing.T, body map[string]any) map[string]fl
 		quantities[id] = quantity
 	}
 	return quantities
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState(t *testing.T) {
+	const userID int64 = 42
+	state := PlayerState{
+		Location:                     Location{ID: "camp", DisplayName: "Camp"},
+		AP:                           20,
+		CarriedWeight:                movementWeightThreshold,
+		MovementWeightThreshold:      movementWeightThreshold,
+		Routes:                       []Route{{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}, {OriginID: "camp", DestinationID: "mine", APCost: 21}},
+		Inventory:                    []InventoryItem{{Item: Item{ID: "wood"}, Quantity: 10, DurabilityStatus: activeItemStatus}, {Item: Item{ID: "wood_component"}, Quantity: 1, DurabilityStatus: activeItemStatus}, {Item: Item{ID: "sawmill_package_t1"}, Quantity: 1, DurabilityStatus: activeItemStatus}},
+		Resources:                    []PlayerResource{{Resource: ResourceType{ID: woodResourceIdentifier}, Quantity: 10}},
+		GatheringOption:              &GatheringOption{Item: Item{ID: "wood"}, Quantity: 1, APCost: 20},
+		ConversionOption:             &ConversionOption{Item: Item{ID: "wood"}, Resource: ResourceType{ID: "wood"}, InputQuantity: 1, ResourceYield: 1, APCost: 20},
+		ConversionMethods:            []ConversionMethod{{ID: "hand", APCost: 20, Input: Item{ID: "wood"}, MaxInputQuantity: 1, IsGlobal: true}, {ID: "sawmill", APCost: 20, Input: Item{ID: "wood"}, MaxInputQuantity: 1, ProviderDefinitionIDs: []string{"sawmill_t1"}}, {ID: "too-expensive", APCost: 21, Input: Item{ID: "wood"}, MaxInputQuantity: 1, IsGlobal: true}},
+		CraftingRecipes:              []CraftingRecipe{{ID: "craftable", BaseAPCost: 20, ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "wood"}, Quantity: 10}}, ItemInputs: []CraftingItemInput{{Item: Item{ID: "wood_component"}, Quantity: 1}}}, {ID: "missing-resource", BaseAPCost: 20, ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "stone"}, Quantity: 1}}}},
+		BuildingRecipes:              []BuildingRecipe{{ID: "buildable", ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "wood"}, Quantity: 10}}, ItemInputs: []CraftingItemInput{{Item: Item{ID: "wood_component"}, Quantity: 1}}}},
+		BuildingExtensionDefinitions: []BuildingExtensionDefinition{{ID: "sawmill_t1", PackageItem: Item{ID: "sawmill_package_t1"}}, {ID: "missing-package", PackageItem: Item{ID: "missing_package"}}},
+		Buildings: []Building{
+			{ID: 1, Owner: BuildingOwner{ID: userID}, Status: "under_construction"},
+			{ID: 2, Owner: BuildingOwner{ID: userID}, Status: "completed", DurabilityStatus: activeBuildingDurabilityStatus, ExtensionSlotCount: 2, Extensions: []BuildingExtension{{ID: 101, SlotIndex: 0, DefinitionID: "sawmill_t1", Status: "completed"}}},
+			{ID: 3, Owner: BuildingOwner{ID: userID}, Status: "completed", DurabilityStatus: activeBuildingDurabilityStatus, ExtensionSlotCount: 1, Extensions: []BuildingExtension{{ID: 102, SlotIndex: 0, DefinitionID: "sawmill_t1", Status: "under_construction"}}},
+		},
+	}
+	original := state
+	filtered, availability := filterAvailableGameplayOptions(state, userID)
+
+	if !reflect.DeepEqual(state, original) {
+		t.Fatalf("availability calculation mutated authoritative state: before=%+v after=%+v", original, state)
+	}
+	if !reflect.DeepEqual(filtered.Routes, []Route{{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}}) {
+		t.Fatalf("routes = %+v, want only the affordable route", filtered.Routes)
+	}
+	if len(filtered.CraftingRecipes) != 1 || filtered.CraftingRecipes[0].ID != "craftable" {
+		t.Fatalf("crafting recipes = %+v, want only the recipe with all inputs", filtered.CraftingRecipes)
+	}
+	if len(filtered.BuildingRecipes) != 0 {
+		t.Fatalf("building recipes = %+v, want none when the location limit is occupied", filtered.BuildingRecipes)
+	}
+	if filtered.ConversionOption == nil || len(filtered.ConversionMethods) != 2 {
+		t.Fatalf("conversion options = %+v/%+v, want available legacy option and methods", filtered.ConversionOption, filtered.ConversionMethods)
+	}
+	if got := availability.ConversionProviders["sawmill"]; !reflect.DeepEqual(got, []int64{101}) {
+		t.Fatalf("sawmill providers = %v, want completed local extension 101", got)
+	}
+	if got := availability.InstallationTargets["sawmill_t1"]; !reflect.DeepEqual(got, []extensionInstallationTargetResponse{{BuildingID: 2, SlotIndex: 1}}) {
+		t.Fatalf("installation targets = %+v, want the one empty slot", got)
+	}
+	if len(filtered.BuildingExtensionDefinitions) != 1 || filtered.BuildingExtensionDefinitions[0].ID != "sawmill_t1" {
+		t.Fatalf("extension definitions = %+v, want only the package-backed definition", filtered.BuildingExtensionDefinitions)
+	}
+	wantActions := []string{"rest", "move", "gather", "convert", "craft", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"}
+	gotActions := append([]string(nil), availability.Actions...)
+	sort.Strings(gotActions)
+	sort.Strings(wantActions)
+	if !reflect.DeepEqual(gotActions, wantActions) {
+		t.Fatalf("available actions = %v, want %v", availability.Actions, wantActions)
+	}
+	if !reflect.DeepEqual(availability.BuildingActions[1], []string{"contribute-construction"}) || !reflect.DeepEqual(availability.BuildingActions[2], []string{"repair-building", "install-extension"}) {
+		t.Fatalf("building action metadata = %+v", availability.BuildingActions)
+	}
+	if !reflect.DeepEqual(availability.ExtensionActions[102], []string{"contribute-extension-construction", "remove-extension"}) {
+		t.Fatalf("extension action metadata = %+v", availability.ExtensionActions[102])
+	}
+
+	noBuilding := state
+	noBuilding.Buildings = nil
+	filtered, availability = filterAvailableGameplayOptions(noBuilding, userID)
+	if len(filtered.BuildingRecipes) != 1 || filtered.BuildingRecipes[0].ID != "buildable" || !containsString(availability.Actions, buildAction) {
+		t.Fatalf("build availability = recipes %+v/actions %v, want buildable recipe and action", filtered.BuildingRecipes, availability.Actions)
+	}
 }
 
 func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
@@ -476,8 +578,15 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 17 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 20 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
+	}
+	if actions, ok := meBody["available_actions"].([]any); !ok || !reflect.DeepEqual(actions, []any{"rest", "move"}) {
+		t.Fatalf("available actions = %#v, want rest and move only", meBody["available_actions"])
+	}
+	definitions, ok := meBody["building_extension_definitions"].([]any)
+	if !ok || len(definitions) != 0 {
+		t.Fatalf("extension definitions = %#v", meBody["building_extension_definitions"])
 	}
 	if meBody["carried_weight"] != float64(0) || meBody["movement_weight_threshold"] != float64(movementWeightThreshold) {
 		t.Fatalf("GET /api/me carrying weight = %#v/%#v, want 0/%d", meBody["carried_weight"], meBody["movement_weight_threshold"], movementWeightThreshold)
@@ -489,7 +598,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me ground resources = %#v", meBody["ground_resources"])
 	}
 	buildingRecipes, ok := meBody["building_recipes"].([]any)
-	if !ok || len(buildingRecipes) != 1 {
+	if !ok || len(buildingRecipes) != 0 {
 		t.Fatalf("GET /api/me building recipes = %#v", meBody["building_recipes"])
 	}
 	buildings, ok := meBody["buildings"].([]any)
@@ -497,7 +606,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me buildings = %#v", meBody["buildings"])
 	}
 	recipes, ok := meBody["crafting_recipes"].([]any)
-	if !ok || len(recipes) != 1 {
+	if !ok || len(recipes) != 0 {
 		t.Fatalf("GET /api/me crafting recipes = %#v", meBody["crafting_recipes"])
 	}
 	resources := responseResourceQuantities(t, meBody)
@@ -526,9 +635,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if meBody["gathering_option"] != nil {
 		t.Fatalf("GET /api/me camp gathering option = %#v", meBody["gathering_option"])
 	}
-	conversion, ok := meBody["conversion_option"].(map[string]any)
-	outputResource, outputResourceOK := conversion["resource"].(map[string]any)
-	if !outputResourceOK || outputResource["id"] != "wood" || outputResource["display_name"] != "Wood" || conversion["input_quantity"] != float64(1) || conversion["resource_yield"] != float64(1) || conversion["ap_cost"] != float64(1) {
+	if meBody["conversion_option"] != nil {
 		t.Fatalf("GET /api/me camp conversion option = %#v", meBody["conversion_option"])
 	}
 
@@ -545,7 +652,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(restResponse.Body.Bytes(), &restBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(restBody) != 1 || restBody["ap"] != float64(maxAP-1) {
+	if len(restBody) != 17 || restBody["ap"] != float64(maxAP-1) {
 		t.Fatalf("POST /api/actions/rest JSON = %#v", restBody)
 	}
 	if ap, err := store.GetAP(identity.ID); err != nil || ap != maxAP-1 {
@@ -599,7 +706,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		t.Fatalf("buildings response = %#v", body["buildings"])
 	}
 	building := buildings[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
 		t.Fatalf("building response = %#v", building)
 	}
 	recipe := building["recipe"].(map[string]any)
@@ -757,7 +864,7 @@ func buildingFromResponse(t *testing.T, body []byte) map[string]any {
 
 func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
 	t.Helper()
-	wantKeys := []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
+	wantKeys := []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
 	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
 		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
 	}
@@ -1128,6 +1235,105 @@ func prepareCompletedBuilding(t *testing.T, fixture buildingAPIFixture, expiresA
 	return buildingID
 }
 
+func prepareExtensionActionFixture(t *testing.T, subject string) (buildingAPIFixture, int64, int64) {
+	t.Helper()
+	fixture := newBuildingAPIFixture(t, subject)
+	buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(time.Hour))
+	if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'sawmill_package_t1', 1)`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.store.InstallExtension(fixture.identity.ID, buildingID, 0, "sawmill_t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Buildings) != 1 || len(state.Buildings[0].Extensions) != 1 {
+		t.Fatalf("installed extension state = %#v", state.Buildings)
+	}
+	return fixture, buildingID, state.Buildings[0].Extensions[0].ID
+}
+
+func TestInstallExtensionAPILogUsesRequestBuildingAndCreatedExtension(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "extension-api-install-log")
+	buildingID := prepareCompletedBuilding(t, fixture, fixture.now.Add(time.Hour))
+	if _, err := fixture.store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'sawmill_package_t1', 1)`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-install-success"
+	body := `{"building_id":` + strconv.FormatInt(buildingID, 10) + `,"slot_index":0,"definition_id":"sawmill_t1"}`
+	request := fixture.request(http.MethodPost, "/api/actions/install-extension", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=install-extension building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=1 ap=0 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("install status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestContributeExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-contribute-log")
+	requestID := "extension-contribute-success"
+	body := `{"extension_id":1,"ap":10}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=10 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("contribute status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestContributeExtensionAPILogUsesEffectiveAPWhenRequestIsClamped(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-contribute-clamped-log")
+	if _, err := fixture.store.db.Exec(`UPDATE building_extensions SET contributed_ap = 25 WHERE id = ?`, extensionID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-contribute-clamped-success"
+	body := `{"extension_id":1,"ap":30}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=5 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) || !strings.Contains(logOutput, "requested_ap=30 effective_ap=5 resulting_progress=30/30 status=completed") {
+		t.Fatalf("clamped contribution status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestRemoveExtensionAPILogUsesRequestValuesAndParentBuilding(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-remove-log")
+	requestID := "extension-remove-success"
+	body := `{"extension_id":1}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/remove-extension", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=remove-extension building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=0 outcome=success request_id=" + requestID
+	if response.Code != http.StatusOK || !strings.Contains(logOutput, want) {
+		t.Fatalf("remove status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
+func TestContributeExtensionAPILogUsesAuthoritativeBuildingOnDomainFailure(t *testing.T) {
+	fixture, buildingID, extensionID := prepareExtensionActionFixture(t, "extension-api-domain-log")
+	if _, err := fixture.store.db.Exec(`INSERT INTO locations (id, display_name) VALUES ('remote-extension-location', 'Remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE player_locations SET location_id = 'remote-extension-location' WHERE user_id = ?`, fixture.identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := "extension-contribute-domain-failure"
+	body := `{"extension_id":1,"ap":1}`
+	body = strings.Replace(body, "1", strconv.FormatInt(extensionID, 10), 1)
+	request := fixture.request(http.MethodPost, "/api/actions/contribute-extension-construction", body, requestID)
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { fixture.server.Routes().ServeHTTP(response, request) })
+	want := "user_id=1 action=contribute-extension-construction building_id=" + strconv.FormatInt(buildingID, 10) + " extension_id=" + strconv.FormatInt(extensionID, 10) + " ap=0 outcome=error request_id=" + requestID
+	if response.Code != http.StatusConflict || !strings.Contains(logOutput, want) || !strings.Contains(logOutput, "requested_ap=1 effective_ap=0 resulting_progress=0/30 status=under_construction") {
+		t.Fatalf("domain failure status/log = %d/%q", response.Code, logOutput)
+	}
+}
+
 func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1383,8 +1589,12 @@ func TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-10) || len(body["crafting_recipes"].([]any)) != 1 {
+	if body["ap"] != float64(maxAP-10) {
 		t.Fatalf("craft response state = %#v", body)
+	}
+	craftingRecipes, ok := body["crafting_recipes"].([]any)
+	if !ok || len(craftingRecipes) != 0 {
+		t.Fatalf("craft response recipes = %#v, want no recipes after consuming all inputs", body["crafting_recipes"])
 	}
 	inventory, ok := body["inventory"].([]any)
 	if !ok || len(inventory) != 1 || inventory[0].(map[string]any)["quantity"] != float64(1) {
@@ -1641,6 +1851,7 @@ func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
 func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)
+	store.essenceRoll = func() int { return 10000 }
 	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-convert", "person@example.com", "Person")
 	if err != nil {
 		t.Fatal(err)
@@ -1651,7 +1862,7 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"hand_wood_t1","quantity":1}`))
 	request.Header.Set("Origin", "https://game.example.test")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Request-ID", "convert-request")
@@ -1665,7 +1876,7 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-1) || body["error"] != nil {
+	if body["ap"] != float64(maxAP-30) || body["error"] != nil {
 		t.Fatalf("convert response = %#v", body)
 	}
 	resources := responseResourceQuantities(t, body)
@@ -1700,6 +1911,95 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	}
 }
 
+func TestConvertAPIRejectsProviderForGlobalMethodWithoutChangingState(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-global-provider", "global-provider@example.com", "Global Provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES ('global_wood', 'Global Wood', 5, 'wood', 1, 'wood', 2, NULL, 0, 0); INSERT INTO global_conversion_methods (conversion_method_id) VALUES ('global_wood'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"global_wood","quantity":1,"provider_extension_id":0}`))
+	request.Header.Set("X-Request-ID", "global-provider-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"error":"invalid provider extension"`) {
+		t.Fatalf("global provider response = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP) || responseResourceQuantities(t, body)["wood"] != 0 {
+		t.Fatalf("global provider response state = %#v", body)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=convert outcome=error reason=invalid_provider request_id=global-provider-request") {
+		t.Fatalf("global provider log = %q", logOutput)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP || playerResourceQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood") != 1 {
+		t.Fatalf("global provider changed state = %+v", state)
+	}
+}
+
+func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-legacy-convert", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request.Header.Set("X-Request-ID", "legacy-convert-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("legacy convert status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-1) || body["error"] != nil || body["method_id"] != "legacy" || body["quantity"] != float64(1) || body["resource_quantity"] != float64(1) || body["essence_quantity"] != float64(0) {
+		t.Fatalf("legacy convert response = %#v", body)
+	}
+	if resources := responseResourceQuantities(t, body); len(resources) != 8 || resources["wood"] != 1 {
+		t.Fatalf("legacy convert resources = %#v", resources)
+	}
+	if inventory, ok := body["inventory"].([]any); !ok || len(inventory) != 0 {
+		t.Fatalf("legacy convert inventory = %#v", body["inventory"])
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=convert method_id=legacy quantity=1 resource_quantity=1 essence_quantity=0 essence_result=reported outcome=success request_id=legacy-convert-request") {
+		t.Fatalf("legacy convert log = %q", logOutput)
+	}
+	if strings.Contains(logOutput, "session-secret") || strings.Contains(logOutput, "{}") {
+		t.Fatalf("legacy convert log leaked credentials or raw input: %q", logOutput)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-1 || playerResourceQuantity(state, "wood") != 1 || len(state.Inventory) != 0 {
+		t.Fatalf("legacy convert persisted state = %+v", state)
+	}
+}
+
 func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)
@@ -1718,8 +2018,8 @@ func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 		{name: "malformed", body: `{`, reason: convertReasonInvalidJSON},
 		{name: "empty field", body: `{"":1}`, reason: convertReasonUnknownField},
 		{name: "unknown field", body: `{"resource_yield":99}`, reason: convertReasonUnknownField},
-		{name: "duplicate field", body: `{"resource_yield":1,"resource_yield":1}`, reason: convertReasonDuplicate},
-		{name: "trailing value", body: `{}{}`, reason: convertReasonExtraValue},
+		{name: "duplicate field", body: `{"method_id":"hand_wood_t1","method_id":"hand_wood_t1","quantity":1}`, reason: convertReasonDuplicate},
+		{name: "trailing value", body: `{"method_id":"hand_wood_t1","quantity":1}{}`, reason: convertReasonExtraValue},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -1773,12 +2073,12 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if _, err := store.Move(identity.ID, "forest_edge"); err != nil {
 		t.Fatal(err)
 	}
-	locationRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	locationRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"hand_wood_t1","quantity":1}`))
 	locationRequest.Header.Set("X-Request-ID", "convert-location-request")
 	locationRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	locationResponse := httptest.NewRecorder()
 	locationLog := captureStdout(t, func() { server.Routes().ServeHTTP(locationResponse, locationRequest) })
-	if locationResponse.Code != http.StatusBadRequest || !strings.Contains(locationResponse.Body.String(), `"error":"conversion not found"`) {
+	if locationResponse.Code != http.StatusConflict || !strings.Contains(locationResponse.Body.String(), `"error":"insufficient item"`) {
 		t.Fatalf("location convert response = %d: %s", locationResponse.Code, locationResponse.Body.String())
 	}
 	var locationBody map[string]any
@@ -1788,7 +2088,7 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if resources := responseResourceQuantities(t, locationBody); len(resources) != 8 || resources["wood"] != 0 {
 		t.Fatalf("location convert resources = %#v", resources)
 	}
-	if !strings.Contains(locationLog, "action=convert outcome=error reason="+convertReasonInvalidLocation+" request_id=convert-location-request") {
+	if !strings.Contains(locationLog, "action=convert outcome=error reason="+convertReasonInsufficientItem+" request_id=convert-location-request") {
 		t.Fatalf("location convert log = %q", locationLog)
 	}
 	state, err := store.GetPlayerState(identity.ID)
@@ -1802,7 +2102,7 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if _, err := store.Move(identity.ID, "camp"); err != nil {
 		t.Fatal(err)
 	}
-	itemRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	itemRequest := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"hand_wood_t1","quantity":1}`))
 	itemRequest.Header.Set("X-Request-ID", "convert-item-request")
 	itemRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	itemResponse := httptest.NewRecorder()
@@ -1845,7 +2145,7 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"hand_wood_t1","quantity":1}`))
 	request.Header.Set("X-Request-ID", "convert-low-ap-request")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response := httptest.NewRecorder()
@@ -2134,8 +2434,12 @@ func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) != 2 || body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
+	if body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
 		t.Fatalf("insufficient AP JSON = %#v", body)
+	}
+	availableActions, ok := body["available_actions"].([]any)
+	if !ok || len(availableActions) != 0 {
+		t.Fatalf("insufficient AP available actions = %#v, want none", body["available_actions"])
 	}
 	var after int64
 	if err := store.db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {

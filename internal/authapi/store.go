@@ -16,33 +16,40 @@ import (
 )
 
 var (
-	ErrInvalidArgument           = errors.New("invalid argument")
-	ErrIdentityNotFound          = errors.New("identity not found")
-	ErrOAuthAttemptNotFound      = errors.New("oauth attempt not found")
-	ErrOAuthAttemptExpired       = errors.New("oauth attempt expired")
-	ErrOAuthAttemptConsumed      = errors.New("oauth attempt already consumed")
-	ErrSessionNotFound           = errors.New("session not found")
-	ErrSessionExpired            = errors.New("session expired")
-	ErrInsufficientAP            = errors.New("insufficient action points")
-	ErrOverweight                = errors.New("player is overweight")
-	ErrRouteNotFound             = errors.New("route not found")
-	ErrGatheringNotFound         = errors.New("gathering not found")
-	ErrConversionNotFound        = errors.New("conversion not found")
-	ErrInsufficientItem          = errors.New("insufficient item")
-	ErrCraftingNotFound          = errors.New("crafting recipe not found")
-	ErrInsufficientResource      = errors.New("insufficient resource")
-	ErrBuildingNotFound          = errors.New("building not found")
-	ErrBuildingOccupied          = errors.New("building location already occupied")
-	ErrBuildingRemote            = errors.New("building is at another location")
-	ErrBuildingCompleted         = errors.New("building is already completed")
-	ErrBuildingUnderConstruction = errors.New("building is under construction")
-	ErrTransferAssetNotFound     = errors.New("transfer asset not found")
-	ErrInsufficientTransferAsset = errors.New("insufficient transfer asset")
+	ErrInvalidArgument             = errors.New("invalid argument")
+	ErrIdentityNotFound            = errors.New("identity not found")
+	ErrOAuthAttemptNotFound        = errors.New("oauth attempt not found")
+	ErrOAuthAttemptExpired         = errors.New("oauth attempt expired")
+	ErrOAuthAttemptConsumed        = errors.New("oauth attempt already consumed")
+	ErrSessionNotFound             = errors.New("session not found")
+	ErrSessionExpired              = errors.New("session expired")
+	ErrInsufficientAP              = errors.New("insufficient action points")
+	ErrOverweight                  = errors.New("player is overweight")
+	ErrRouteNotFound               = errors.New("route not found")
+	ErrGatheringNotFound           = errors.New("gathering not found")
+	ErrConversionNotFound          = errors.New("conversion not found")
+	ErrInsufficientItem            = errors.New("insufficient item")
+	ErrCraftingNotFound            = errors.New("crafting recipe not found")
+	ErrInsufficientResource        = errors.New("insufficient resource")
+	ErrBuildingNotFound            = errors.New("building not found")
+	ErrBuildingOccupied            = errors.New("building location already occupied")
+	ErrBuildingRemote              = errors.New("building is at another location")
+	ErrBuildingCompleted           = errors.New("building is already completed")
+	ErrBuildingUnderConstruction   = errors.New("building is under construction")
+	ErrBuildingDisabled            = errors.New("building is disabled")
+	ErrBuildingNotOwner            = errors.New("building owner required")
+	ErrExtensionNotFound           = errors.New("extension not found")
+	ErrExtensionDefinitionNotFound = errors.New("extension definition not found")
+	ErrExtensionOccupied           = errors.New("extension slot already occupied")
+	ErrExtensionCompleted          = errors.New("extension is already completed")
+	ErrTransferAssetNotFound       = errors.New("transfer asset not found")
+	ErrInsufficientTransferAsset   = errors.New("insufficient transfer asset")
 )
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db          *sql.DB
+	now         func() time.Time
+	essenceRoll func() int
 }
 
 type Identity struct {
@@ -80,6 +87,7 @@ type Route struct {
 type Item struct {
 	ID                   string
 	DisplayName          string
+	WeightUnits          int
 	MaxDurabilitySeconds int
 }
 
@@ -103,6 +111,35 @@ type ConversionOption struct {
 	InputQuantity int
 	ResourceYield int
 	APCost        int
+}
+
+type ConversionMethod struct {
+	ID                       string
+	DisplayName              string
+	APCost                   int
+	Input                    Item
+	MaxInputQuantity         int
+	OutputResource           ResourceType
+	ResourceQuantityPerInput int
+	EssenceItem              *Item
+	EssenceChanceBPS         int
+	EssenceQuantity          int
+	IsGlobal                 bool
+	ProviderDefinitionIDs    []string
+}
+
+type BuildingExtensionDefinition struct {
+	ID          string
+	DisplayName string
+	Tier        int
+	PackageItem Item
+	RequiredAP  int
+}
+
+type ExtensionConversionCapability struct {
+	ExtensionDefinitionID         string
+	ConversionMethodID            string
+	BuildingDurabilityCostSeconds int
 }
 
 type ResourceType struct {
@@ -194,6 +231,18 @@ type Building struct {
 	MaxDurabilitySeconds       int
 	DurabilityStatus           string
 	DurabilityRemainingSeconds int
+	Extensions                 []BuildingExtension
+}
+
+type BuildingExtension struct {
+	ID            int64
+	SlotIndex     int
+	DefinitionID  string
+	DisplayName   string
+	Tier          int
+	RequiredAP    int
+	ContributedAP int
+	Status        string
 }
 
 type ConstructionComputation struct {
@@ -202,6 +251,16 @@ type ConstructionComputation struct {
 	ResultingProgress int
 	RequiredAP        int
 	CompletionOutcome string
+}
+
+type ExtensionConstructionComputation struct {
+	BuildingID        int64
+	ExtensionID       int64
+	RequestedAP       int
+	EffectiveAP       int
+	ResultingProgress int
+	RequiredAP        int
+	ResultingStatus   string
 }
 
 type RepairComputation struct {
@@ -214,24 +273,27 @@ type RepairComputation struct {
 }
 
 type PlayerState struct {
-	Location                   Location
-	Routes                     []Route
-	AP                         int
-	Inventory                  []InventoryItem
-	GroundItems                []GroundItem
-	GroundResources            []GroundResource
-	GatheringOption            *GatheringOption
-	ConversionOption           *ConversionOption
-	Resources                  []PlayerResource
-	CraftingRecipes            []CraftingRecipe
-	BuildingRecipes            []BuildingRecipe
-	Buildings                  []Building
-	ConstructionComputation    *ConstructionComputation
-	RepairComputation          *RepairComputation
-	CarriedWeight              int
-	MovementWeightThreshold    int
-	ItemDurabilityComputations []ItemDurabilityComputation `json:"-"`
-	ItemDurabilityCleanups     []ItemDurabilityCleanup     `json:"-"`
+	Location                         Location
+	Routes                           []Route
+	AP                               int
+	Inventory                        []InventoryItem
+	GroundItems                      []GroundItem
+	GroundResources                  []GroundResource
+	GatheringOption                  *GatheringOption
+	ConversionOption                 *ConversionOption
+	ConversionMethods                []ConversionMethod
+	Resources                        []PlayerResource
+	CraftingRecipes                  []CraftingRecipe
+	BuildingRecipes                  []BuildingRecipe
+	BuildingExtensionDefinitions     []BuildingExtensionDefinition
+	Buildings                        []Building
+	ConstructionComputation          *ConstructionComputation
+	ExtensionConstructionComputation *ExtensionConstructionComputation
+	RepairComputation                *RepairComputation
+	CarriedWeight                    int
+	MovementWeightThreshold          int
+	ItemDurabilityComputations       []ItemDurabilityComputation `json:"-"`
+	ItemDurabilityCleanups           []ItemDurabilityCleanup     `json:"-"`
 }
 
 const (
@@ -342,6 +404,22 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
 	resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
 	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
 );
+CREATE TABLE IF NOT EXISTS conversion_methods (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL,
+	ap_cost INTEGER NOT NULL CHECK (ap_cost > 0),
+	input_item_id TEXT NOT NULL REFERENCES items(id),
+	max_input_quantity INTEGER NOT NULL CHECK (max_input_quantity > 0),
+	output_resource_id TEXT NOT NULL REFERENCES resource_types(id),
+	resource_quantity_per_input INTEGER NOT NULL CHECK (resource_quantity_per_input > 0),
+	essence_item_id TEXT REFERENCES items(id),
+	essence_chance_bps INTEGER NOT NULL CHECK (essence_chance_bps BETWEEN 0 AND 10000),
+	essence_quantity INTEGER NOT NULL CHECK (essence_quantity >= 0),
+	CHECK ((essence_item_id IS NULL AND essence_chance_bps = 0 AND essence_quantity = 0) OR (essence_item_id IS NOT NULL AND essence_chance_bps > 0 AND essence_quantity > 0))
+);
+CREATE TABLE IF NOT EXISTS global_conversion_methods (
+	conversion_method_id TEXT PRIMARY KEY REFERENCES conversion_methods(id)
+);
 CREATE TABLE IF NOT EXISTS player_resources (
 	user_id INTEGER NOT NULL REFERENCES identities(id),
 	resource_id TEXT NOT NULL REFERENCES resource_types(id),
@@ -401,6 +479,19 @@ CREATE TABLE IF NOT EXISTS building_recipe_item_inputs (
 	quantity INTEGER NOT NULL CHECK (quantity > 0),
 	PRIMARY KEY (recipe_id, item_id)
 );
+CREATE TABLE IF NOT EXISTS building_extension_definitions (
+	id TEXT PRIMARY KEY,
+	display_name TEXT NOT NULL,
+	tier INTEGER NOT NULL CHECK (tier > 0),
+	package_item_id TEXT NOT NULL REFERENCES items(id),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0)
+);
+CREATE TABLE IF NOT EXISTS extension_conversion_capabilities (
+	extension_definition_id TEXT NOT NULL REFERENCES building_extension_definitions(id),
+	conversion_method_id TEXT NOT NULL REFERENCES conversion_methods(id),
+	building_durability_cost_seconds INTEGER NOT NULL CHECK (building_durability_cost_seconds > 0),
+	PRIMARY KEY (extension_definition_id, conversion_method_id)
+);
 CREATE TABLE IF NOT EXISTS buildings (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	owner_id INTEGER NOT NULL REFERENCES identities(id),
@@ -418,6 +509,22 @@ CREATE TABLE IF NOT EXISTS buildings (
 );`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("initialize auth store: %w", err)
+	}
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS building_extensions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	building_id INTEGER NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+	slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
+	definition_id TEXT NOT NULL REFERENCES building_extension_definitions(id),
+	display_name TEXT NOT NULL,
+	tier INTEGER NOT NULL CHECK (tier > 0),
+	required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+	contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+	status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+	UNIQUE (building_id, slot_index)
+);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("initialize building extensions: %w", err)
 	}
 	migrationNow := time.Now().UTC()
 	migratedTimestampValues, err := migrateTimestampsToUnixSeconds(tx)
@@ -446,8 +553,7 @@ INSERT OR IGNORE INTO resource_types (id, display_name, weight_units) VALUES
 	('fiber', 'Fiber', 1),
 	('hide', 'Hide', 1),
 	('medicinal', 'Medicinal', 1),
-	('arcane', 'Arcane', 1);
-UPDATE resource_types SET weight_units = 1;`); err != nil {
+	('arcane', 'Arcane', 1);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed resource types: %w", err)
 	}
@@ -465,13 +571,18 @@ INSERT OR IGNORE INTO routes (origin_id, destination_id, ap_cost) VALUES
 INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES
 	('wood', 'Wood', 100),
 	('wood_component', 'Wood Component', 10);
-UPDATE items SET weight_units = 100 WHERE id = 'wood';
-UPDATE items SET weight_units = 10 WHERE id = 'wood_component';
-UPDATE items SET max_durability_seconds = 3600 WHERE id IN ('wood', 'wood_component');
+INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
+	('wood_essence_t1', 'Wood Essence T1', 1, 3600),
+	('sawmill_package_t1', 'Sawmill Package T1', 10, 3600);
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
 	('camp', 'wood', 1, 'wood', 1, 1);
+INSERT OR IGNORE INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES
+	('hand_wood_t1', 'Hand Wood Convert', 30, 'wood', 3, 'wood', 1, 'wood_essence_t1', 1000, 1),
+	('sawmill_wood_t1', 'Sawmill Wood Convert', 30, 'wood', 6, 'wood', 1, 'wood_essence_t1', 1000, 1);
+INSERT OR IGNORE INTO global_conversion_methods (conversion_method_id) VALUES
+	('hand_wood_t1');
 INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity) VALUES
 	('wood_component', 'Wood Component', 10, 'wood_component', 1);
 INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity) VALUES
@@ -490,6 +601,20 @@ INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, q
 		return nil, fmt.Errorf("seed building state: %w", err)
 	}
 	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
+VALUES ('sawmill_package_t1', 'Sawmill Package T1', 30, 'sawmill_package_t1', 1);
+INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
+VALUES ('sawmill_package_t1', 'wood', 10);
+INSERT OR IGNORE INTO crafting_recipe_item_inputs (recipe_id, item_id, quantity)
+VALUES ('sawmill_package_t1', 'wood_essence_t1', 1);
+INSERT OR IGNORE INTO building_extension_definitions (id, display_name, tier, package_item_id, required_ap)
+VALUES ('sawmill_t1', 'Sawmill T1', 1, 'sawmill_package_t1', 30);
+INSERT OR IGNORE INTO extension_conversion_capabilities (extension_definition_id, conversion_method_id, building_durability_cost_seconds)
+VALUES ('sawmill_t1', 'sawmill_wood_t1', 60);`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed sawmill definitions: %w", err)
+	}
+	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
 SELECT id, ? FROM identities`, time.Now().UTC().Unix()); err != nil {
 		_ = tx.Rollback()
@@ -505,7 +630,7 @@ SELECT id, 'camp' FROM identities`); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }}, nil
 }
 
 func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
@@ -549,7 +674,8 @@ func ensureWeightSchema(tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	if !itemColumns["weight_units"] {
+	itemWeightAdded := !itemColumns["weight_units"]
+	if itemWeightAdded {
 		if _, err := tx.Exec(`ALTER TABLE items ADD COLUMN weight_units INTEGER NOT NULL DEFAULT 1 CHECK (weight_units > 0)`); err != nil {
 			return fmt.Errorf("add item weight: %w", err)
 		}
@@ -558,9 +684,20 @@ func ensureWeightSchema(tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	if !resourceColumns["weight_units"] {
+	resourceWeightAdded := !resourceColumns["weight_units"]
+	if resourceWeightAdded {
 		if _, err := tx.Exec(`ALTER TABLE resource_types ADD COLUMN weight_units INTEGER NOT NULL DEFAULT 1 CHECK (weight_units > 0)`); err != nil {
 			return fmt.Errorf("add resource weight: %w", err)
+		}
+	}
+	if itemWeightAdded {
+		if _, err := tx.Exec(`UPDATE items SET weight_units = CASE id WHEN 'wood' THEN 100 WHEN 'wood_component' THEN 10 ELSE weight_units END`); err != nil {
+			return fmt.Errorf("backfill item weights: %w", err)
+		}
+	}
+	if resourceWeightAdded {
+		if _, err := tx.Exec(`UPDATE resource_types SET weight_units = 1`); err != nil {
+			return fmt.Errorf("backfill resource weights: %w", err)
 		}
 	}
 	return nil
@@ -883,7 +1020,7 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
-	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), Buildings: make([]Building, 0), ItemDurabilityComputations: make([]ItemDurabilityComputation, 0), ItemDurabilityCleanups: make([]ItemDurabilityCleanup, 0), MovementWeightThreshold: movementWeightThreshold}
+	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), ConversionMethods: make([]ConversionMethod, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), BuildingExtensionDefinitions: make([]BuildingExtensionDefinition, 0), Buildings: make([]Building, 0), ItemDurabilityComputations: make([]ItemDurabilityComputation, 0), ItemDurabilityCleanups: make([]ItemDurabilityCleanup, 0), MovementWeightThreshold: movementWeightThreshold}
 	cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		return PlayerState{}, err
@@ -905,11 +1042,11 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 	}
 	var gathering GatheringOption
 	err = tx.QueryRow(`
-SELECT i.id, i.display_name, i.max_durability_seconds, gr.quantity, gr.ap_cost
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, gr.quantity, gr.ap_cost
 FROM gathering_rules gr
 JOIN items i ON i.id = gr.item_id
 WHERE gr.location_id = ?`, state.Location.ID).Scan(
-		&gathering.Item.ID, &gathering.Item.DisplayName, &gathering.Item.MaxDurabilitySeconds, &gathering.Quantity, &gathering.APCost,
+		&gathering.Item.ID, &gathering.Item.DisplayName, &gathering.Item.WeightUnits, &gathering.Item.MaxDurabilitySeconds, &gathering.Quantity, &gathering.APCost,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		state.GatheringOption = nil
@@ -926,8 +1063,14 @@ WHERE gr.location_id = ?`, state.Location.ID).Scan(
 	} else {
 		state.ConversionOption = &conversion
 	}
+	if err := loadConversionMethodsTx(tx, &state); err != nil {
+		return PlayerState{}, err
+	}
+	if err := loadBuildingExtensionDefinitionsTx(tx, &state); err != nil {
+		return PlayerState{}, err
+	}
 	inventoryRows, err := tx.Query(`
-SELECT i.id, i.display_name, i.max_durability_seconds, pi.quantity, pi.durability_status, pi.status_expires_at
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, pi.quantity, pi.durability_status, pi.status_expires_at
 FROM player_inventory pi
 JOIN items i ON i.id = pi.item_id
 WHERE pi.user_id = ?
@@ -939,7 +1082,7 @@ ORDER BY pi.item_id, pi.durability_status`, userID)
 	for inventoryRows.Next() {
 		var inventoryItem InventoryItem
 		var expiresAt int64
-		if err := inventoryRows.Scan(&inventoryItem.Item.ID, &inventoryItem.Item.DisplayName, &inventoryItem.Item.MaxDurabilitySeconds, &inventoryItem.Quantity, &inventoryItem.DurabilityStatus, &expiresAt); err != nil {
+		if err := inventoryRows.Scan(&inventoryItem.Item.ID, &inventoryItem.Item.DisplayName, &inventoryItem.Item.WeightUnits, &inventoryItem.Item.MaxDurabilitySeconds, &inventoryItem.Quantity, &inventoryItem.DurabilityStatus, &expiresAt); err != nil {
 			return PlayerState{}, fmt.Errorf("scan player inventory: %w", err)
 		}
 		setItemDurability(&inventoryItem.DurabilityStatus, &inventoryItem.DurabilityRemainingSeconds, &inventoryItem.RetentionRemainingSeconds, expiresAt, now)
@@ -979,7 +1122,7 @@ ORDER BY rt.id`, userID)
 		return PlayerState{}, fmt.Errorf("read player resources: %w", err)
 	}
 	groundItemRows, err := tx.Query(`
-SELECT i.id, i.display_name, i.max_durability_seconds, gi.quantity, gi.durability_status, gi.status_expires_at
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, gi.quantity, gi.durability_status, gi.status_expires_at
 FROM ground_items gi
 JOIN items i ON i.id = gi.item_id
 WHERE gi.location_id = ?
@@ -991,7 +1134,7 @@ ORDER BY gi.item_id, gi.durability_status`, state.Location.ID)
 	for groundItemRows.Next() {
 		var groundItem GroundItem
 		var expiresAt int64
-		if err := groundItemRows.Scan(&groundItem.Item.ID, &groundItem.Item.DisplayName, &groundItem.Item.MaxDurabilitySeconds, &groundItem.Quantity, &groundItem.DurabilityStatus, &expiresAt); err != nil {
+		if err := groundItemRows.Scan(&groundItem.Item.ID, &groundItem.Item.DisplayName, &groundItem.Item.WeightUnits, &groundItem.Item.MaxDurabilitySeconds, &groundItem.Quantity, &groundItem.DurabilityStatus, &expiresAt); err != nil {
 			return PlayerState{}, fmt.Errorf("scan ground item: %w", err)
 		}
 		setItemDurability(&groundItem.DurabilityStatus, &groundItem.DurabilityRemainingSeconds, &groundItem.RetentionRemainingSeconds, expiresAt, now)
@@ -1022,7 +1165,7 @@ ORDER BY gr.resource_id`, state.Location.ID)
 		return PlayerState{}, fmt.Errorf("read ground resources: %w", err)
 	}
 	recipeRows, err := tx.Query(`
-SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, i.max_durability_seconds, cr.output_quantity
+SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, i.weight_units, i.max_durability_seconds, cr.output_quantity
 FROM crafting_recipes cr
 JOIN items i ON i.id = cr.output_item_id
 WHERE EXISTS (SELECT 1 FROM crafting_recipe_resource_inputs ri WHERE ri.recipe_id = cr.id)
@@ -1033,7 +1176,7 @@ ORDER BY cr.id`)
 	defer recipeRows.Close()
 	for recipeRows.Next() {
 		var recipe CraftingRecipe
-		if err := recipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.Output.MaxDurabilitySeconds, &recipe.OutputQuantity); err != nil {
+		if err := recipeRows.Scan(&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.Output.WeightUnits, &recipe.Output.MaxDurabilitySeconds, &recipe.OutputQuantity); err != nil {
 			return PlayerState{}, fmt.Errorf("scan crafting recipe: %w", err)
 		}
 		if err := loadCraftingInputsTx(tx, &recipe); err != nil {
@@ -1081,13 +1224,16 @@ ORDER BY b.id`, state.Location.ID)
 	}
 	defer buildingRows.Close()
 	for buildingRows.Next() {
-		var building Building
+		building := Building{Extensions: make([]BuildingExtension, 0)}
 		var durabilityExpiresAt sql.NullInt64
 		if err := buildingRows.Scan(&building.ID, &building.Owner.ID, &building.Owner.DisplayName, &building.Recipe.ID, &building.Recipe.DisplayName, &building.BuildingLevel, &building.RequiredAP, &building.ContributedAP, &building.Status, &building.ExtensionSlotCount, &building.MaxDurabilitySeconds, &durabilityExpiresAt); err != nil {
 			return PlayerState{}, fmt.Errorf("scan building: %w", err)
 		}
 		building.Recipe.MaxDurabilitySeconds = building.MaxDurabilitySeconds
 		setBuildingDurability(&building, durabilityExpiresAt, now)
+		if err := loadBuildingExtensionsTx(tx, &building); err != nil {
+			return PlayerState{}, err
+		}
 		state.Buildings = append(state.Buildings, building)
 	}
 	if err := buildingRows.Err(); err != nil {
@@ -1335,7 +1481,7 @@ WHERE ri.recipe_id = ? ORDER BY ri.resource_id`, recipe.ID)
 		return fmt.Errorf("close building resource inputs: %w", err)
 	}
 	itemRows, err := tx.Query(`
-SELECT i.id, i.display_name, i.max_durability_seconds, ii.quantity
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, ii.quantity
 FROM building_recipe_item_inputs ii
 JOIN items i ON i.id = ii.item_id
 WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
@@ -1344,7 +1490,7 @@ WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
 	}
 	for itemRows.Next() {
 		var input CraftingItemInput
-		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Item.MaxDurabilitySeconds, &input.Quantity); err != nil {
+		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Item.WeightUnits, &input.Item.MaxDurabilitySeconds, &input.Quantity); err != nil {
 			_ = itemRows.Close()
 			return fmt.Errorf("scan building item input: %w", err)
 		}
@@ -1385,7 +1531,7 @@ WHERE ri.recipe_id = ? ORDER BY ri.resource_id`, recipe.ID)
 		return fmt.Errorf("close crafting resource inputs: %w", err)
 	}
 	itemRows, err := tx.Query(`
-SELECT i.id, i.display_name, i.max_durability_seconds, ii.quantity
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, ii.quantity
 FROM crafting_recipe_item_inputs ii
 JOIN items i ON i.id = ii.item_id
 WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
@@ -1394,7 +1540,7 @@ WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
 	}
 	for itemRows.Next() {
 		var input CraftingItemInput
-		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Item.MaxDurabilitySeconds, &input.Quantity); err != nil {
+		if err := itemRows.Scan(&input.Item.ID, &input.Item.DisplayName, &input.Item.WeightUnits, &input.Item.MaxDurabilitySeconds, &input.Quantity); err != nil {
 			_ = itemRows.Close()
 			return fmt.Errorf("scan crafting item input: %w", err)
 		}
@@ -1413,11 +1559,11 @@ WHERE ii.recipe_id = ? ORDER BY ii.item_id`, recipe.ID)
 func craftingRecipeForID(tx *sql.Tx, recipeID string) (CraftingRecipe, error) {
 	var recipe CraftingRecipe
 	err := tx.QueryRow(`
-	SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, i.max_durability_seconds, cr.output_quantity
+	SELECT cr.id, cr.display_name, cr.base_ap_cost, i.id, i.display_name, i.weight_units, i.max_durability_seconds, cr.output_quantity
 FROM crafting_recipes cr
 JOIN items i ON i.id = cr.output_item_id
 WHERE cr.id = ? AND EXISTS (SELECT 1 FROM crafting_recipe_resource_inputs ri WHERE ri.recipe_id = cr.id)`, recipeID).Scan(
-		&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.Output.MaxDurabilitySeconds, &recipe.OutputQuantity)
+		&recipe.ID, &recipe.DisplayName, &recipe.BaseAPCost, &recipe.Output.ID, &recipe.Output.DisplayName, &recipe.Output.WeightUnits, &recipe.Output.MaxDurabilitySeconds, &recipe.OutputQuantity)
 	if err != nil {
 		return CraftingRecipe{}, err
 	}
@@ -1430,15 +1576,131 @@ WHERE cr.id = ? AND EXISTS (SELECT 1 FROM crafting_recipe_resource_inputs ri WHE
 func conversionOptionForLocation(tx *sql.Tx, locationID string) (ConversionOption, error) {
 	var conversion ConversionOption
 	err := tx.QueryRow(`
-SELECT i.id, i.display_name, i.max_durability_seconds, rt.id, rt.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, rt.id, rt.display_name, cr.input_quantity, cr.resource_yield, cr.ap_cost
 FROM conversion_rules cr
 JOIN items i ON i.id = cr.input_item_id
 JOIN resource_types rt ON rt.id = cr.output_resource_id
 WHERE cr.location_id = ?`, locationID).Scan(
-		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.Item.MaxDurabilitySeconds, &conversion.Resource.ID, &conversion.Resource.DisplayName, &conversion.InputQuantity,
+		&conversion.Item.ID, &conversion.Item.DisplayName, &conversion.Item.WeightUnits, &conversion.Item.MaxDurabilitySeconds, &conversion.Resource.ID, &conversion.Resource.DisplayName, &conversion.InputQuantity,
 		&conversion.ResourceYield, &conversion.APCost,
 	)
 	return conversion, err
+}
+
+func loadConversionMethodsTx(tx *sql.Tx, state *PlayerState) error {
+	rows, err := tx.Query(`
+SELECT cm.id, cm.display_name, cm.ap_cost, ii.id, ii.display_name, ii.weight_units, ii.max_durability_seconds,
+       cm.max_input_quantity, output.id, output.display_name, cm.resource_quantity_per_input,
+       essence.id, essence.display_name, essence.weight_units, essence.max_durability_seconds,
+       cm.essence_chance_bps, cm.essence_quantity,
+       EXISTS (SELECT 1 FROM global_conversion_methods gm WHERE gm.conversion_method_id = cm.id)
+FROM conversion_methods cm
+JOIN items ii ON ii.id = cm.input_item_id
+JOIN resource_types output ON output.id = cm.output_resource_id
+LEFT JOIN items essence ON essence.id = cm.essence_item_id
+ORDER BY cm.id`)
+	if err != nil {
+		return fmt.Errorf("get conversion methods: %w", err)
+	}
+	for rows.Next() {
+		method := ConversionMethod{ProviderDefinitionIDs: make([]string, 0)}
+		var essenceID, essenceDisplay sql.NullString
+		var essenceWeight, essenceDurability sql.NullInt64
+		if err := rows.Scan(
+			&method.ID, &method.DisplayName, &method.APCost,
+			&method.Input.ID, &method.Input.DisplayName, &method.Input.WeightUnits, &method.Input.MaxDurabilitySeconds,
+			&method.MaxInputQuantity, &method.OutputResource.ID, &method.OutputResource.DisplayName,
+			&method.ResourceQuantityPerInput, &essenceID, &essenceDisplay, &essenceWeight, &essenceDurability,
+			&method.EssenceChanceBPS, &method.EssenceQuantity, &method.IsGlobal,
+		); err != nil {
+			return fmt.Errorf("scan conversion method: %w", err)
+		}
+		if essenceID.Valid {
+			method.EssenceItem = &Item{ID: essenceID.String, DisplayName: essenceDisplay.String, WeightUnits: int(essenceWeight.Int64), MaxDurabilitySeconds: int(essenceDurability.Int64)}
+		}
+		state.ConversionMethods = append(state.ConversionMethods, method)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read conversion methods: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close conversion methods: %w", err)
+	}
+	providerRows, err := tx.Query(`
+SELECT conversion_method_id, extension_definition_id
+FROM extension_conversion_capabilities
+ORDER BY conversion_method_id, extension_definition_id`)
+	if err != nil {
+		return fmt.Errorf("get conversion method providers: %w", err)
+	}
+	defer providerRows.Close()
+	for providerRows.Next() {
+		var methodID, definitionID string
+		if err := providerRows.Scan(&methodID, &definitionID); err != nil {
+			return fmt.Errorf("scan conversion method provider: %w", err)
+		}
+		for index := range state.ConversionMethods {
+			if state.ConversionMethods[index].ID == methodID {
+				state.ConversionMethods[index].ProviderDefinitionIDs = append(state.ConversionMethods[index].ProviderDefinitionIDs, definitionID)
+				break
+			}
+		}
+	}
+	if err := providerRows.Err(); err != nil {
+		return fmt.Errorf("read conversion method providers: %w", err)
+	}
+	return nil
+}
+
+func loadBuildingExtensionDefinitionsTx(tx *sql.Tx, state *PlayerState) error {
+	rows, err := tx.Query(`
+SELECT ed.id, ed.display_name, ed.tier, i.id, i.display_name, i.weight_units, i.max_durability_seconds, ed.required_ap
+FROM building_extension_definitions ed
+JOIN items i ON i.id = ed.package_item_id
+ORDER BY ed.id`)
+	if err != nil {
+		return fmt.Errorf("get building extension definitions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var definition BuildingExtensionDefinition
+		if err := rows.Scan(
+			&definition.ID, &definition.DisplayName, &definition.Tier,
+			&definition.PackageItem.ID, &definition.PackageItem.DisplayName, &definition.PackageItem.WeightUnits,
+			&definition.PackageItem.MaxDurabilitySeconds, &definition.RequiredAP,
+		); err != nil {
+			return fmt.Errorf("scan building extension definition: %w", err)
+		}
+		state.BuildingExtensionDefinitions = append(state.BuildingExtensionDefinitions, definition)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read building extension definitions: %w", err)
+	}
+	return nil
+}
+
+func loadBuildingExtensionsTx(tx *sql.Tx, building *Building) error {
+	rows, err := tx.Query(`
+SELECT id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status
+FROM building_extensions
+WHERE building_id = ?
+ORDER BY slot_index`, building.ID)
+	if err != nil {
+		return fmt.Errorf("get building extensions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var extension BuildingExtension
+		if err := rows.Scan(&extension.ID, &extension.SlotIndex, &extension.DefinitionID, &extension.DisplayName, &extension.Tier, &extension.RequiredAP, &extension.ContributedAP, &extension.Status); err != nil {
+			return fmt.Errorf("scan building extension: %w", err)
+		}
+		building.Extensions = append(building.Extensions, extension)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read building extensions: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Gather(userID int64) (PlayerState, error) {
@@ -1467,11 +1729,11 @@ func (s *Store) Gather(userID int64) (PlayerState, error) {
 	}
 	var option GatheringOption
 	err = tx.QueryRow(`
-SELECT i.id, i.display_name, i.max_durability_seconds, gr.quantity, gr.ap_cost
+	SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, gr.quantity, gr.ap_cost
 FROM gathering_rules gr
 JOIN items i ON i.id = gr.item_id
 WHERE gr.location_id = ?`, locationID).Scan(
-		&option.Item.ID, &option.Item.DisplayName, &option.Item.MaxDurabilitySeconds, &option.Quantity, &option.APCost,
+		&option.Item.ID, &option.Item.DisplayName, &option.Item.WeightUnits, &option.Item.MaxDurabilitySeconds, &option.Quantity, &option.APCost,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
@@ -1979,7 +2241,33 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 	return state, nil
 }
 
-func (s *Store) Convert(userID int64) (PlayerState, error) {
+func conversionMethodForID(tx *sql.Tx, methodID string) (ConversionMethod, error) {
+	var method ConversionMethod
+	var essenceID, essenceDisplay sql.NullString
+	var essenceWeight, essenceDurability sql.NullInt64
+	err := tx.QueryRow(`
+SELECT cm.id, cm.display_name, cm.ap_cost, ii.id, ii.display_name, ii.weight_units, ii.max_durability_seconds,
+       cm.max_input_quantity, output.id, output.display_name, cm.resource_quantity_per_input,
+       essence.id, essence.display_name, essence.weight_units, essence.max_durability_seconds,
+       cm.essence_chance_bps, cm.essence_quantity
+FROM conversion_methods cm JOIN items ii ON ii.id = cm.input_item_id
+JOIN resource_types output ON output.id = cm.output_resource_id
+LEFT JOIN items essence ON essence.id = cm.essence_item_id WHERE cm.id = ?`, methodID).Scan(
+		&method.ID, &method.DisplayName, &method.APCost, &method.Input.ID, &method.Input.DisplayName,
+		&method.Input.WeightUnits, &method.Input.MaxDurabilitySeconds, &method.MaxInputQuantity,
+		&method.OutputResource.ID, &method.OutputResource.DisplayName, &method.ResourceQuantityPerInput,
+		&essenceID, &essenceDisplay, &essenceWeight, &essenceDurability, &method.EssenceChanceBPS, &method.EssenceQuantity)
+	if err != nil {
+		return ConversionMethod{}, err
+	}
+	if essenceID.Valid {
+		method.EssenceItem = &Item{ID: essenceID.String, DisplayName: essenceDisplay.String, WeightUnits: int(essenceWeight.Int64), MaxDurabilitySeconds: int(essenceDurability.Int64)}
+	}
+	return method, nil
+}
+
+// Convert accepts the legacy no-argument call and the methodID, quantity, providerExtensionID form.
+func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error) {
 	if userID <= 0 {
 		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
 	}
@@ -2003,14 +2291,105 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get player location for convert: %w", err)
 	}
-	option, err := conversionOptionForLocation(tx, locationID)
+	methodID, quantity, providerID := "hand_wood_t1", 1, int64(0)
+	providerIDProvided := false
+	legacy := len(params) == 0
+	durabilityCost := 0
+	var legacyOption ConversionOption
+	if legacy {
+		legacyOption, err = conversionOptionForLocation(tx, locationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrConversionNotFound
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get conversion rule: %w", err)
+		}
+		methodID, quantity = "legacy", legacyOption.InputQuantity
+	}
+	if len(params) > 0 {
+		if len(params) < 2 {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: method and quantity are required", ErrInvalidArgument)
+		}
+		var ok bool
+		methodID, ok = params[0].(string)
+		if !ok {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: method ID is required", ErrInvalidArgument)
+		}
+		quantity, ok = params[1].(int)
+		if !ok || quantity <= 0 {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("%w: quantity must be positive", ErrInvalidArgument)
+		}
+		if len(params) > 2 && params[2] != nil {
+			providerIDProvided = true
+			switch v := params[2].(type) {
+			case int64:
+				providerID = v
+			case int:
+				providerID = int64(v)
+			default:
+				_ = tx.Rollback()
+				return PlayerState{}, fmt.Errorf("%w: provider extension ID is invalid", ErrInvalidArgument)
+			}
+		}
+	}
+	method, err := conversionMethodForID(tx, methodID)
+	if legacy {
+		method = ConversionMethod{ID: methodID, APCost: legacyOption.APCost, Input: legacyOption.Item, MaxInputQuantity: legacyOption.InputQuantity, OutputResource: legacyOption.Resource, ResourceQuantityPerInput: legacyOption.ResourceYield}
+		err = nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrConversionNotFound
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get conversion rule: %w", err)
+		return PlayerState{}, fmt.Errorf("get conversion method: %w", err)
+	}
+	if quantity > method.MaxInputQuantity {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: quantity exceeds method capacity", ErrInvalidArgument)
+	}
+	isGlobalMethod := false
+	if !legacy {
+		err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM global_conversion_methods WHERE conversion_method_id = ?)`, methodID).Scan(&isGlobalMethod)
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("check global conversion method: %w", err)
+		}
+	}
+	if !legacy && isGlobalMethod && providerIDProvided {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: global conversion methods do not accept provider extensions", ErrInvalidArgument)
+	}
+	if !legacy && !isGlobalMethod {
+		if providerID <= 0 {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrExtensionNotFound
+		}
+		var capability, buildingLocation, buildingStatus string
+		var expiry sql.NullInt64
+		err = tx.QueryRow(`SELECT c.conversion_method_id, b.location_id, b.status, b.durability_expires_at, c.building_durability_cost_seconds FROM building_extensions e JOIN extension_conversion_capabilities c ON c.extension_definition_id=e.definition_id AND c.conversion_method_id=? JOIN buildings b ON b.id=e.building_id WHERE e.id=? AND e.status='completed'`, methodID, providerID).Scan(&capability, &buildingLocation, &buildingStatus, &expiry, &durabilityCost)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrExtensionNotFound
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("get conversion provider: %w", err)
+		}
+		if buildingLocation != locationID {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingRemote
+		}
+		if buildingStatus != "completed" || !expiry.Valid || expiry.Int64 <= now.Unix() {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingDisabled
+		}
 	}
 	var fullTimestamp int64
 	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
@@ -2023,8 +2402,8 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		return PlayerState{}, fmt.Errorf("get player AP for convert: %w", err)
 	}
 	var itemQuantity int
-	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID).Scan(&itemQuantity)
-	if errors.Is(err, sql.ErrNoRows) || itemQuantity < option.InputQuantity {
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, method.Input.ID).Scan(&itemQuantity)
+	if errors.Is(err, sql.ErrNoRows) || itemQuantity < quantity {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientItem
 	}
@@ -2032,7 +2411,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("get conversion item: %w", err)
 	}
-	if calculateAP(unixSeconds(fullTimestamp), now) < option.APCost {
+	if calculateAP(unixSeconds(fullTimestamp), now) < method.APCost {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
@@ -2040,7 +2419,7 @@ func (s *Store) Convert(userID int64) (PlayerState, error) {
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	nextFullTimestamp := fullAt.Add(time.Duration(option.APCost) * apRecoveryTime).Unix()
+	nextFullTimestamp := fullAt.Add(time.Duration(method.APCost) * apRecoveryTime).Unix()
 	result, err := tx.Exec(`
 UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
@@ -2057,10 +2436,10 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 		_ = tx.Rollback()
 		return PlayerState{}, ErrInsufficientAP
 	}
-	if itemQuantity == option.InputQuantity {
-		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, option.Item.ID)
+	if itemQuantity == quantity {
+		_, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, method.Input.ID)
 	} else {
-		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, option.InputQuantity, userID, option.Item.ID)
+		_, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, quantity, userID, method.Input.ID)
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -2068,11 +2447,36 @@ WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimest
 	}
 	_, err = tx.Exec(`
 INSERT INTO player_resources (user_id, resource_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, option.Resource.ID, option.ResourceYield)
+	VALUES (?, ?, ?)
+	ON CONFLICT (user_id, resource_id) DO UPDATE SET quantity = player_resources.quantity + excluded.quantity`, userID, method.OutputResource.ID, quantity*method.ResourceQuantityPerInput)
 	if err != nil {
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("add conversion resources: %w", err)
+	}
+	if method.EssenceItem != nil && s.essenceRoll != nil {
+		essenceCount := 0
+		for i := 0; i < quantity; i++ {
+			if s.essenceRoll() < method.EssenceChanceBPS {
+				essenceCount += method.EssenceQuantity
+			}
+		}
+		if essenceCount > 0 {
+			if err := addActiveItemHoldingTx(tx, "player_inventory", "user_id", userID, method.EssenceItem.ID, essenceCount, now.Unix()+int64(method.EssenceItem.MaxDurabilitySeconds)); err != nil {
+				_ = tx.Rollback()
+				return PlayerState{}, err
+			}
+		}
+	}
+	if !legacy && !isGlobalMethod {
+		result, err := tx.Exec(`UPDATE buildings SET durability_expires_at = CASE WHEN durability_expires_at - ? > ? THEN durability_expires_at - ? ELSE ? END WHERE id = (SELECT building_id FROM building_extensions WHERE id = ?) AND durability_expires_at > ?`, durabilityCost, now.Unix(), durabilityCost, now.Unix(), providerID, now.Unix())
+		if err != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, fmt.Errorf("consume building durability: %w", err)
+		}
+		if rows, _ := result.RowsAffected(); rows != 1 {
+			_ = tx.Rollback()
+			return PlayerState{}, ErrBuildingDisabled
+		}
 	}
 	state, err := s.getPlayerStateTx(tx, userID, now)
 	if err != nil {
@@ -2635,6 +3039,352 @@ WHERE id = ? AND status = 'completed' AND durability_expires_at = ?`, newExpiry,
 		ResultingRemainingSeconds: int(newExpiry - nowSeconds),
 		APCost:                    buildingRepairAPCost,
 		WoodCost:                  buildingRepairWoodCost,
+	}
+	return state, nil
+}
+
+func (s *Store) InstallExtension(userID, buildingID int64, slotIndex int, definitionID string) (PlayerState, error) {
+	if userID <= 0 || buildingID <= 0 || slotIndex < 0 || strings.TrimSpace(definitionID) == "" {
+		return PlayerState{}, fmt.Errorf("%w: user ID, building ID, slot index, and definition ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin extension installation: %w", err)
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var playerLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&playerLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension installer location: %w", err)
+	}
+	var ownerID int64
+	var buildingLocation, buildingStatus string
+	var durabilityExpiresAt sql.NullInt64
+	var slotCount int
+	err = tx.QueryRow(`
+SELECT owner_id, location_id, status, extension_slot_count, durability_expires_at
+FROM buildings WHERE id = ?`, buildingID).Scan(&ownerID, &buildingLocation, &buildingStatus, &slotCount, &durabilityExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension building: %w", err)
+	}
+	if ownerID != userID {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotOwner
+	}
+	if playerLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	if buildingStatus != "completed" {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingUnderConstruction
+	}
+	if !durabilityExpiresAt.Valid || durabilityExpiresAt.Int64 <= now.Unix() {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingDisabled
+	}
+	if slotIndex >= slotCount {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: slot index is outside building capacity", ErrInvalidArgument)
+	}
+	var definition BuildingExtensionDefinition
+	err = tx.QueryRow(`
+SELECT ed.id, ed.display_name, ed.tier, ed.package_item_id, i.display_name, i.weight_units, i.max_durability_seconds, ed.required_ap
+FROM building_extension_definitions ed
+JOIN items i ON i.id = ed.package_item_id
+WHERE ed.id = ?`, definitionID).Scan(
+		&definition.ID, &definition.DisplayName, &definition.Tier, &definition.PackageItem.ID,
+		&definition.PackageItem.DisplayName, &definition.PackageItem.WeightUnits,
+		&definition.PackageItem.MaxDurabilitySeconds, &definition.RequiredAP,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionDefinitionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension definition: %w", err)
+	}
+	var occupied int
+	err = tx.QueryRow(`SELECT 1 FROM building_extensions WHERE building_id = ? AND slot_index = ?`, buildingID, slotIndex).Scan(&occupied)
+	if err == nil {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionOccupied
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("check extension slot: %w", err)
+	}
+	var packageQuantity int
+	err = tx.QueryRow(`SELECT quantity FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, definition.PackageItem.ID).Scan(&packageQuantity)
+	if errors.Is(err, sql.ErrNoRows) || packageQuantity < 1 {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrInsufficientItem
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension package: %w", err)
+	}
+	var result sql.Result
+	if packageQuantity == 1 {
+		result, err = tx.Exec(`DELETE FROM player_inventory WHERE user_id = ? AND item_id = ? AND durability_status = 'active'`, userID, definition.PackageItem.ID)
+	} else {
+		result, err = tx.Exec(`UPDATE player_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ? AND durability_status = 'active' AND quantity >= 1`, userID, definition.PackageItem.ID)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("consume extension package: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension package: %w", rowsErr)
+		}
+		return PlayerState{}, ErrInsufficientItem
+	}
+	if _, err := tx.Exec(`
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (?, ?, ?, ?, ?, ?, 0, 'under_construction')`, buildingID, slotIndex, definition.ID, definition.DisplayName, definition.Tier, definition.RequiredAP); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("create building extension: %w", err)
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit extension installation: %w", err)
+	}
+	return state, nil
+}
+
+func (s *Store) ContributeExtensionConstruction(userID, extensionID int64, requestedAP int) (PlayerState, error) {
+	if userID <= 0 || extensionID <= 0 || requestedAP <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID, extension ID, and AP are required", ErrInvalidArgument)
+	}
+	computation := &ExtensionConstructionComputation{ExtensionID: extensionID, RequestedAP: requestedAP}
+	failure := func(err error) (PlayerState, error) {
+		return PlayerState{ExtensionConstructionComputation: computation}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return failure(fmt.Errorf("begin extension construction contribution: %w", err))
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return failure(err)
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return failure(err)
+	}
+	var contributorLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&contributorLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return failure(ErrIdentityNotFound)
+	} else if err != nil {
+		_ = tx.Rollback()
+		return failure(fmt.Errorf("get extension contributor location: %w", err))
+	}
+	var buildingID int64
+	var buildingLocation, buildingStatus, extensionStatus string
+	var durabilityExpiresAt sql.NullInt64
+	var contributedAP, requiredAP int
+	err = tx.QueryRow(`
+SELECT b.id, b.location_id, b.status, b.durability_expires_at, e.status, e.contributed_ap, e.required_ap
+FROM building_extensions e
+JOIN buildings b ON b.id = e.building_id
+WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStatus, &durabilityExpiresAt, &extensionStatus, &contributedAP, &requiredAP)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return failure(ErrExtensionNotFound)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return failure(fmt.Errorf("get extension construction target: %w", err))
+	}
+	computation.BuildingID = buildingID
+	computation.ResultingProgress = contributedAP
+	computation.RequiredAP = requiredAP
+	computation.ResultingStatus = extensionStatus
+	if extensionStatus == "completed" {
+		_ = tx.Rollback()
+		return failure(ErrExtensionCompleted)
+	}
+	if extensionStatus != "under_construction" {
+		_ = tx.Rollback()
+		return failure(ErrExtensionNotFound)
+	}
+	if contributorLocation != buildingLocation {
+		_ = tx.Rollback()
+		return failure(ErrBuildingRemote)
+	}
+	if buildingStatus != "completed" {
+		_ = tx.Rollback()
+		return failure(ErrBuildingUnderConstruction)
+	}
+	if !durabilityExpiresAt.Valid || durabilityExpiresAt.Int64 <= now.Unix() {
+		_ = tx.Rollback()
+		return failure(ErrBuildingDisabled)
+	}
+	remainingAP := requiredAP - contributedAP
+	effectiveAP := requestedAP
+	if effectiveAP > remainingAP {
+		effectiveAP = remainingAP
+	}
+	var fullTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return failure(ErrIdentityNotFound)
+	} else if err != nil {
+		_ = tx.Rollback()
+		return failure(fmt.Errorf("get extension contributor AP: %w", err))
+	}
+	if calculateAP(unixSeconds(fullTimestamp), now) < effectiveAP {
+		_ = tx.Rollback()
+		return failure(ErrInsufficientAP)
+	}
+	fullAt := unixSeconds(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(effectiveAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
+	if err != nil {
+		_ = tx.Rollback()
+		return failure(fmt.Errorf("consume extension construction AP: %w", err))
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return failure(fmt.Errorf("check extension construction AP: %w", rowsErr))
+		}
+		return failure(ErrInsufficientAP)
+	}
+	newProgress := contributedAP + effectiveAP
+	newStatus := "under_construction"
+	if newProgress == requiredAP {
+		newStatus = "completed"
+	}
+	result, err = tx.Exec(`
+UPDATE building_extensions SET contributed_ap = ?, status = ?
+WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgress, newStatus, extensionID, contributedAP)
+	if err != nil {
+		_ = tx.Rollback()
+		return failure(fmt.Errorf("update extension construction progress: %w", err))
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return failure(fmt.Errorf("check extension construction progress: %w", rowsErr))
+		}
+		return failure(ErrExtensionCompleted)
+	}
+	computation.EffectiveAP = effectiveAP
+	computation.ResultingProgress = newProgress
+	computation.ResultingStatus = newStatus
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return failure(err)
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return failure(fmt.Errorf("commit extension construction contribution: %w", err))
+	}
+	state.ExtensionConstructionComputation = computation
+	return state, nil
+}
+
+func (s *Store) RemoveExtension(userID, extensionID int64) (PlayerState, error) {
+	if userID <= 0 || extensionID <= 0 {
+		return PlayerState{}, fmt.Errorf("%w: user ID and extension ID are required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, fmt.Errorf("begin extension removal: %w", err)
+	}
+	now := s.now().UTC()
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	var playerLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&playerLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension remover location: %w", err)
+	}
+	var ownerID int64
+	var buildingLocation string
+	err = tx.QueryRow(`
+SELECT b.owner_id, b.location_id
+FROM building_extensions e
+JOIN buildings b ON b.id = e.building_id
+WHERE e.id = ?`, extensionID).Scan(&ownerID, &buildingLocation)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrExtensionNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension removal target: %w", err)
+	}
+	if ownerID != userID {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingNotOwner
+	}
+	if playerLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
+	}
+	result, err := tx.Exec(`DELETE FROM building_extensions WHERE id = ?`, extensionID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("remove building extension: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		_ = tx.Rollback()
+		if rowsErr != nil {
+			return PlayerState{}, fmt.Errorf("check extension removal: %w", rowsErr)
+		}
+		return PlayerState{}, ErrExtensionNotFound
+	}
+	state, err := s.getPlayerStateTx(tx, userID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, err
+	}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, fmt.Errorf("commit extension removal: %w", err)
 	}
 	return state, nil
 }

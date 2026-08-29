@@ -32,9 +32,12 @@ scope: "Canonical game terms used by the application."
 | [Building](#building) | - | 建築 | [REQ-010](../requirements/REQ-010.md) |
 | [Building recipe](#building-recipe) | - | 建築配方 | [REQ-010](../requirements/REQ-010.md) |
 | [Building durability](#building-durability) | - | 建築耐久度 | [REQ-011](../requirements/REQ-011.md) |
+| [Building extension](#building-extension) | - | 建築擴充 | [REQ-016](../requirements/REQ-016.md) |
 | [Carrying weight](#carrying-weight) | - | 攜帶重量 | [REQ-014](../requirements/REQ-014.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
-| [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-010](../requirements/REQ-010.md) |
+| [Convert method](#convert-method) | - | 轉換方式 | [REQ-008](../requirements/REQ-008.md) |
+| [Essence](#essence) | - | 精華 | [REQ-008](../requirements/REQ-008.md) |
+| [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-016](../requirements/REQ-016.md) |
 | [Expired Item](#expired-item) | - | 失效物品 | [REQ-015](../requirements/REQ-015.md) |
 | [Ground assets](#ground-assets) | - | 地面資產 | [REQ-013](../requirements/REQ-013.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md)、[REQ-015](../requirements/REQ-015.md) |
@@ -43,8 +46,11 @@ scope: "Canonical game terms used by the application."
 | [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Movement weight threshold](#movement-weight-threshold) | - | 移動負重門檻 | [REQ-014](../requirements/REQ-014.md) |
+| [Package Item](#package-item) | - | 擴充套件物品 | [REQ-016](../requirements/REQ-016.md) |
 | [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
 | [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
+| [Sawmill T1](#sawmill-t1) | - | 鋸木廠 T1 | [REQ-017](../requirements/REQ-017.md) |
+| [Sawmill Package T1](#sawmill-package-t1) | - | 鋸木廠套件 T1 | [REQ-017](../requirements/REQ-017.md) |
 | [Transfer](#transfer) | - | 轉移 | [REQ-013](../requirements/REQ-013.md) |
 | [Transfer: Drop](#transfer-drop) | - | 放置 | [REQ-013](../requirements/REQ-013.md) |
 | [Transfer: Pickup](#transfer-pickup) | - | 撿取 | [REQ-013](../requirements/REQ-013.md) |
@@ -53,6 +59,14 @@ scope: "Canonical game terms used by the application."
 | [Wood Component](#wood-component) | - | 木質加工品 | [REQ-009](../requirements/REQ-009.md) |
 
 ## 名詞定義
+
+### Sawmill Package T1
+
+- 正式英文名稱：Sawmill Package T1
+- 中文名稱：鋸木廠套件 T1
+- 定義：由配方產出的 Active Package Item，用於安裝 Sawmill T1。
+- 對應行為：[REQ-017 - Sawmill T1](../requirements/REQ-017.md)
+- 與相似名詞的差異：Package Item 是可安裝的物品。Sawmill T1 是安裝後提供 Convert 功能的 Building extension。
 
 ### Action
 
@@ -90,9 +104,9 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Action: convert
 - 中文名稱：轉換行動
-- 定義：玩家在 `camp` 消耗後端指定的 AP 與 Inventory item，取得 Resource 的 Action。
+- 定義：玩家在任何 Location 選擇後端提供的 Convert method 與 quantity，消耗一個 AP 工作單位及 Active Item，取得 Resource 並判定 Essence 的 Action。
 - 對應行為：[REQ-008 - Action: convert](../requirements/REQ-008.md)
-- 與相似名詞的差異：`convert` 消耗 Item 並產出 Resource。`gather` 產出 Item。
+- 與相似名詞的差異：`convert` 是玩家執行的 Action。Convert method 定義成本、capacity 與產出。
 
 ### Action: craft
 
@@ -159,6 +173,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
 - 與相似名詞的差異：Building durability 隨現實時間降低。Construction progress 只隨玩家投入 AP 增加。
 
+### Building extension
+
+- 正式英文名稱：Building extension
+- 中文名稱：建築擴充
+- 定義：安裝在 Building extension slot 的持久化功能物件。它具有 definition、tier、施工 AP 快照、progress 與施工狀態。
+- 對應行為：[REQ-016 - Building extension lifecycle](../requirements/REQ-016.md)
+- 與相似名詞的差異：Building extension 是已安裝狀態。Package Item 是安裝時消耗的 Inventory Item。
+
 ### Construction progress
 
 - 正式英文名稱：Construction progress
@@ -167,13 +189,29 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-010 - Building construction](../requirements/REQ-010.md)
 - 與相似名詞的差異：Construction progress 屬於 Building。玩家 AP 屬於貢獻者。
 
+### Convert method
+
+- 正式英文名稱：Convert method
+- 中文名稱：轉換方式
+- 定義：後端定義的一個 Convert 工作單位。它包含 AP 成本、input Item、capacity、Resource 產量與 Essence 規則。
+- 對應行為：[REQ-008 - Action: convert](../requirements/REQ-008.md)
+- 與相似名詞的差異：Convert method 是可調整的規則。Action: convert 是玩家使用規則的操作。
+
+### Essence
+
+- 正式英文名稱：Essence
+- 中文名稱：精華
+- 定義：Convert 每個 input Item 時依 method 機率產出的 Item。Wood Essence T1 是 Sawmill Package T1 的 Item input。
+- 對應行為：[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-017 - Sawmill T1](../requirements/REQ-017.md)
+- 與相似名詞的差異：Essence 是具有耐久與重量的 Item。Resource 是不會失效的累積 quantity。
+
 ### Extension slot
 
 - 正式英文名稱：Extension slot
 - 中文名稱：擴充建築欄位
-- 定義：完成 Building 後可安裝 extension 的欄位。Building Lv1 具有一個空欄位。
-- 對應行為：[REQ-010 - Building construction](../requirements/REQ-010.md)
-- 與相似名詞的差異：Extension slot 是容量。Extension 是未來安裝的功能物件。
+- 定義：Completed Building 依建立時保存的 slot 數量提供的 extension 安裝位置。每個 slot 最多保存一個 extension。
+- 對應行為：[REQ-016 - Building extension lifecycle](../requirements/REQ-016.md)
+- 與相似名詞的差異：Extension slot 是容量。Building extension 是 slot 內的持久化物件。
 
 ### Inventory
 
@@ -255,6 +293,14 @@ scope: "Canonical game terms used by the application."
 - 對應行為：[REQ-014 - 玩家攜帶重量](../requirements/REQ-014.md)
 - 與相似名詞的差異：Movement weight threshold 不限制玩家持有資產。Carrying weight 超過門檻時只禁止 Move。
 
+### Package Item
+
+- 正式英文名稱：Package Item
+- 中文名稱：擴充套件物品
+- 定義：Craft 產生並保存在 Inventory 的 Active Item。Building owner 安裝 extension 時消耗它。
+- 對應行為：[REQ-016 - Building extension lifecycle](../requirements/REQ-016.md)
+- 與相似名詞的差異：Package Item 可以持有與 Transfer。安裝後的 Building extension 屬於 Building。
+
 ### Resource
 
 - 正式英文名稱：Resource
@@ -271,6 +317,14 @@ scope: "Canonical game terms used by the application."
 - 定義：後端定義的 crafting 規則。它包含穩定 identifier、顯示名稱、基本 AP 成本、Resource inputs、Item inputs 與明確 output Item。
 - 對應行為：[REQ-009 - Action: craft](../requirements/REQ-009.md)
 - 與相似名詞的差異：Recipe 定義 `craft` 的成本與結果。Action 是玩家要求執行 recipe 的行為。
+
+### Sawmill T1
+
+- 正式英文名稱：Sawmill T1
+- 中文名稱：鋸木廠 T1
+- 定義：第一種 Building extension。它完成施工後提供 Sawmill Wood Convert method，並在每次成功使用時消耗 parent Building 耐久。
+- 對應行為：[REQ-017 - Sawmill T1](../requirements/REQ-017.md)
+- 與相似名詞的差異：Sawmill T1 是已安裝的功能物件。Sawmill Package T1 是安裝時消耗的 Package Item。
 
 ### Wood item
 

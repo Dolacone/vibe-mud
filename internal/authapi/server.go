@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -45,12 +46,8 @@ type currentUserResponse struct {
 }
 
 type restResponse struct {
-	AP int `json:"ap"`
-}
-
-type restConflictResponse struct {
-	Error string `json:"error"`
-	AP    int    `json:"ap"`
+	Error string `json:"error,omitempty"`
+	playerStateResponse
 }
 
 type locationResponse struct {
@@ -65,20 +62,23 @@ type routeResponse struct {
 }
 
 type playerStateResponse struct {
-	Location                locationResponse          `json:"location"`
-	Routes                  []routeResponse           `json:"routes"`
-	AP                      int                       `json:"ap"`
-	CarriedWeight           int                       `json:"carried_weight"`
-	MovementWeightThreshold int                       `json:"movement_weight_threshold"`
-	Inventory               []inventoryItemResponse   `json:"inventory"`
-	GroundItems             []groundItemResponse      `json:"ground_items"`
-	GroundResources         []groundResourceResponse  `json:"ground_resources"`
-	GatheringOption         *gatheringOptionResponse  `json:"gathering_option"`
-	ConversionOption        *conversionOptionResponse `json:"conversion_option"`
-	Resources               []resourceResponse        `json:"resources"`
-	CraftingRecipes         []craftingRecipeResponse  `json:"crafting_recipes"`
-	BuildingRecipes         []buildingRecipeResponse  `json:"building_recipes"`
-	Buildings               []buildingResponse        `json:"buildings"`
+	AvailableActions             []string                              `json:"available_actions"`
+	Location                     locationResponse                      `json:"location"`
+	Routes                       []routeResponse                       `json:"routes"`
+	AP                           int                                   `json:"ap"`
+	CarriedWeight                int                                   `json:"carried_weight"`
+	MovementWeightThreshold      int                                   `json:"movement_weight_threshold"`
+	Inventory                    []inventoryItemResponse               `json:"inventory"`
+	GroundItems                  []groundItemResponse                  `json:"ground_items"`
+	GroundResources              []groundResourceResponse              `json:"ground_resources"`
+	GatheringOption              *gatheringOptionResponse              `json:"gathering_option"`
+	ConversionOption             *conversionOptionResponse             `json:"conversion_option"`
+	ConversionMethods            []conversionMethodResponse            `json:"conversion_methods"`
+	BuildingExtensionDefinitions []buildingExtensionDefinitionResponse `json:"building_extension_definitions"`
+	Resources                    []resourceResponse                    `json:"resources"`
+	CraftingRecipes              []craftingRecipeResponse              `json:"crafting_recipes"`
+	BuildingRecipes              []buildingRecipeResponse              `json:"building_recipes"`
+	Buildings                    []buildingResponse                    `json:"buildings"`
 }
 
 type moveResponse struct {
@@ -128,7 +128,11 @@ type gatherResponse struct {
 }
 
 type convertResponse struct {
-	Error string `json:"error,omitempty"`
+	Error            string `json:"error,omitempty"`
+	MethodID         string `json:"method_id,omitempty"`
+	Quantity         int    `json:"quantity,omitempty"`
+	ResourceQuantity int    `json:"resource_quantity,omitempty"`
+	EssenceQuantity  int    `json:"essence_quantity"`
 	playerStateResponse
 }
 
@@ -150,6 +154,39 @@ type repairBuildingResponse struct {
 type contributeConstructionResponse struct {
 	Error string `json:"error,omitempty"`
 	playerStateResponse
+}
+
+type extensionActionResponse struct {
+	Error string `json:"error,omitempty"`
+	playerStateResponse
+}
+
+type conversionMethodResponse struct {
+	ID                       string        `json:"id"`
+	DisplayName              string        `json:"display_name"`
+	APCost                   int           `json:"ap_cost"`
+	Input                    itemResponse  `json:"input"`
+	MaxInputQuantity         int           `json:"max_input_quantity"`
+	OutputResource           itemResponse  `json:"output_resource"`
+	ResourceQuantityPerInput int           `json:"resource_quantity_per_input"`
+	EssenceItem              *itemResponse `json:"essence_item"`
+	EssenceChanceBPS         int           `json:"essence_chance_bps"`
+	EssenceQuantity          int           `json:"essence_quantity"`
+	ProviderExtensionIDs     []int64       `json:"provider_extension_ids"`
+}
+
+type buildingExtensionDefinitionResponse struct {
+	ID                  string                                `json:"id"`
+	DisplayName         string                                `json:"display_name"`
+	Tier                int                                   `json:"tier"`
+	PackageItem         itemResponse                          `json:"package_item"`
+	RequiredAP          int                                   `json:"required_ap"`
+	InstallationTargets []extensionInstallationTargetResponse `json:"installation_targets"`
+}
+
+type extensionInstallationTargetResponse struct {
+	BuildingID int64 `json:"building_id"`
+	SlotIndex  int   `json:"slot_index"`
 }
 
 type transferResponse struct {
@@ -196,6 +233,7 @@ const (
 	transferReasonExpiredItem        = "expired_item"
 
 	moveAction                       = "move"
+	restAction                       = "rest"
 	moveReasonInvalidJSON            = "invalid_json"
 	moveReasonUnknownField           = "unknown_field"
 	moveReasonDuplicate              = "duplicate_field"
@@ -215,6 +253,7 @@ const (
 	convertReasonUnknownField        = "unknown_field"
 	convertReasonDuplicate           = "duplicate_field"
 	convertReasonExtraValue          = "extra_json_value"
+	convertReasonInvalidQuantity     = "invalid_quantity"
 	convertReasonInsufficientAP      = "insufficient_ap"
 	convertReasonInvalidLocation     = "invalid_location"
 	convertReasonInsufficientItem    = "insufficient_item"
@@ -241,6 +280,9 @@ const (
 	buildReasonInsufficientItem      = "insufficient_item"
 	buildReasonOccupied              = "building_occupied"
 	contributeConstructionAction     = "contribute-construction"
+	installExtensionAction           = "install-extension"
+	contributeExtensionAction        = "contribute-extension-construction"
+	removeExtensionAction            = "remove-extension"
 	contributeReasonInvalidJSON      = "invalid_json"
 	contributeReasonUnknownField     = "unknown_field"
 	contributeReasonDuplicate        = "duplicate_field"
@@ -265,6 +307,9 @@ const (
 	repairReasonUnderConstruction    = "under_construction"
 	repairReasonInsufficientAP       = "insufficient_ap"
 	repairReasonInsufficientResource = "insufficient_resource"
+	activeItemStatus                 = "active"
+	activeBuildingDurabilityStatus   = "active"
+	woodResourceIdentifier           = "wood"
 )
 
 type Config struct {
@@ -334,6 +379,9 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Post("/api/actions/craft", s.craft)
 	r.Post("/api/actions/build", s.build)
 	r.Post("/api/actions/contribute-construction", s.contributeConstruction)
+	r.Post("/api/actions/install-extension", s.installExtension)
+	r.Post("/api/actions/contribute-extension-construction", s.contributeExtensionConstruction)
+	r.Post("/api/actions/remove-extension", s.removeExtension)
 	r.Post("/api/actions/repair-building", s.repairBuilding)
 	r.Post("/api/transfers/drop", s.drop)
 	r.Post("/api/transfers/pickup", s.pickup)
@@ -466,7 +514,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		ID:                  identity.ID,
 		DisplayName:         identity.DisplayName,
 		Email:               identity.Email,
-		playerStateResponse: playerStateResponseFromStore(state),
+		playerStateResponse: playerStateResponseFromStore(state, identity.ID),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -477,7 +525,8 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if reason := decodeConvertRequest(r.Body); reason != "" {
+	request, reason := decodeConvertRequest(r.Body)
+	if reason != "" {
 		s.logRejection(r, session.UserID, convertAction, reason)
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
@@ -487,7 +536,29 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid action input", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
-	state, err := s.store.Convert(session.UserID)
+	before, err := s.store.GetPlayerState(session.UserID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	if request.Legacy {
+		if before.ConversionOption == nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		request.MethodID = "legacy"
+		request.Quantity = before.ConversionOption.InputQuantity
+	}
+	var state PlayerState
+	if request.Legacy {
+		state, err = s.store.Convert(session.UserID)
+	} else {
+		if request.ProviderExtensionIDSet {
+			state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, request.ProviderExtensionID)
+		} else {
+			state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, nil)
+		}
+	}
 	if errors.Is(err, ErrInsufficientAP) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
@@ -519,13 +590,39 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
+	if errors.Is(err, ErrInvalidArgument) && strings.Contains(err.Error(), "capacity") {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logRejection(r, session.UserID, convertAction, convertReasonInvalidQuantity)
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid action input", MethodID: request.MethodID, Quantity: request.Quantity, playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
+	if errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrExtensionNotFound) || errors.Is(err, ErrBuildingRemote) || errors.Is(err, ErrBuildingDisabled) {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logRejection(r, session.UserID, convertAction, "invalid_provider")
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid provider extension", playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
+	resourceQuantity := resourceDelta(before, state, request.MethodID, request.Quantity)
+	if request.Legacy {
+		resourceQuantity = before.ConversionOption.ResourceYield * request.Quantity
+	}
+	essenceQuantity := itemDelta(before, state, request.MethodID)
+	s.logConvertComputation(r, session.UserID, request, resourceQuantity, essenceQuantity, "success")
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, convertAction, "success")
-	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
+	s.writeJSON(w, http.StatusOK, convertResponse{MethodID: request.MethodID, Quantity: request.Quantity, ResourceQuantity: resourceQuantity, EssenceQuantity: essenceQuantity, playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
 func (s *Server) craft(w http.ResponseWriter, r *http.Request) {
@@ -632,6 +729,205 @@ func (s *Server) writeBuildingState(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	s.writeJSON(w, status, buildResponse{Error: message, playerStateResponse: s.playerStateResponse(r, userID, state)})
+}
+
+type installExtensionRequest struct {
+	BuildingID   int64
+	SlotIndex    int
+	DefinitionID string
+}
+type extensionIDRequest struct {
+	ExtensionID int64
+	AP          int
+}
+
+type extensionActionMetadata struct {
+	BuildingID  int64
+	ExtensionID int64
+	AP          int
+	Computation *ExtensionConstructionComputation
+}
+
+func (s *Server) installExtension(w http.ResponseWriter, r *http.Request) {
+	request, reason := decodeInstallExtensionRequest(r.Body)
+	s.extensionActionWithMeta(w, r, "install-extension", func(userID int64) (PlayerState, extensionActionMetadata, error) {
+		if reason != "" {
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
+		}
+		metadata := extensionActionMetadata{BuildingID: request.BuildingID}
+		state, err := s.store.InstallExtension(userID, request.BuildingID, request.SlotIndex, request.DefinitionID)
+		if err != nil {
+			return PlayerState{}, metadata, err
+		}
+		metadata.ExtensionID = extensionIDAtSlot(state, request.BuildingID, request.SlotIndex)
+		return state, metadata, nil
+	})
+}
+
+func (s *Server) contributeExtensionConstruction(w http.ResponseWriter, r *http.Request) {
+	request, reason := decodeExtensionIDRequest(r.Body, true)
+	s.extensionActionWithMeta(w, r, "contribute-extension-construction", func(userID int64) (PlayerState, extensionActionMetadata, error) {
+		if reason != "" {
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
+		}
+		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID}
+		state, err := s.store.ContributeExtensionConstruction(userID, request.ExtensionID, request.AP)
+		if computation := state.ExtensionConstructionComputation; computation != nil {
+			metadata.BuildingID = computation.BuildingID
+			metadata.ExtensionID = computation.ExtensionID
+			metadata.AP = computation.EffectiveAP
+			metadata.Computation = computation
+		}
+		return state, metadata, err
+	})
+}
+
+func (s *Server) removeExtension(w http.ResponseWriter, r *http.Request) {
+	request, reason := decodeExtensionIDRequest(r.Body, false)
+	s.extensionActionWithMeta(w, r, "remove-extension", func(userID int64) (PlayerState, extensionActionMetadata, error) {
+		if reason != "" {
+			return PlayerState{}, extensionActionMetadata{}, fmt.Errorf("%s", reason)
+		}
+		metadata := extensionActionMetadata{ExtensionID: request.ExtensionID}
+		var err error
+		metadata.BuildingID, err = s.extensionBuildingID(request.ExtensionID)
+		if err != nil {
+			return PlayerState{}, metadata, err
+		}
+		state, err := s.store.RemoveExtension(userID, request.ExtensionID)
+		return state, metadata, err
+	})
+}
+
+func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request, action string, execute func(int64) (PlayerState, extensionActionMetadata, error)) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	state, metadata, err := execute(session.UserID)
+	if err != nil {
+		s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "error", metadata.Computation)
+		current, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.writeJSON(w, http.StatusConflict, extensionActionResponse{Error: "invalid action", playerStateResponse: s.playerStateResponse(r, session.UserID, current)})
+		return
+	}
+	s.logExtensionAction(r, session.UserID, action, metadata.BuildingID, metadata.ExtensionID, metadata.AP, "success", metadata.Computation)
+	s.writeJSON(w, http.StatusOK, extensionActionResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+}
+
+func extensionIDAtSlot(state PlayerState, buildingID int64, slotIndex int) int64 {
+	for _, building := range state.Buildings {
+		if building.ID != buildingID {
+			continue
+		}
+		for _, extension := range building.Extensions {
+			if extension.SlotIndex == slotIndex {
+				return extension.ID
+			}
+		}
+	}
+	return 0
+}
+
+func (s *Server) extensionBuildingID(extensionID int64) (int64, error) {
+	var buildingID int64
+	err := s.store.db.QueryRow(`SELECT building_id FROM building_extensions WHERE id = ?`, extensionID).Scan(&buildingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get extension building: %w", err)
+	}
+	return buildingID, nil
+}
+
+func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, string) {
+	var value installExtensionRequest
+	seenSlot := false
+	if err := decodeStrictFields(body, map[string]bool{"building_id": true, "slot_index": true, "definition_id": true}, func(field string, decoder *json.Decoder) error {
+		switch field {
+		case "building_id":
+			return decoder.Decode(&value.BuildingID)
+		case "slot_index":
+			seenSlot = true
+			return decoder.Decode(&value.SlotIndex)
+		case "definition_id":
+			return decoder.Decode(&value.DefinitionID)
+		}
+		return nil
+	}); err != nil {
+		return value, convertReasonInvalidJSON
+	}
+	if !seenSlot || value.BuildingID <= 0 || value.SlotIndex < 0 || strings.TrimSpace(value.DefinitionID) == "" {
+		return value, convertReasonInvalidQuantity
+	}
+	return value, ""
+}
+
+func decodeExtensionIDRequest(body io.Reader, withAP bool) (extensionIDRequest, string) {
+	var value extensionIDRequest
+	allowed := map[string]bool{"extension_id": true}
+	if withAP {
+		allowed["ap"] = true
+	}
+	if err := decodeStrictFields(body, allowed, func(field string, decoder *json.Decoder) error {
+		switch field {
+		case "extension_id":
+			return decoder.Decode(&value.ExtensionID)
+		case "ap":
+			return decoder.Decode(&value.AP)
+		}
+		return nil
+	}); err != nil {
+		return value, convertReasonInvalidJSON
+	}
+	if value.ExtensionID <= 0 || (withAP && value.AP <= 0) {
+		return value, convertReasonInvalidQuantity
+	}
+	return value, ""
+}
+
+func decodeStrictFields(body io.Reader, allowed map[string]bool, decode func(string, *json.Decoder) error) error {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '{' {
+		return errors.New("object required")
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		field, ok := key.(string)
+		if !ok || !allowed[field] || seen[field] {
+			return errors.New("invalid field")
+		}
+		seen[field] = true
+		if err := decode(field, decoder); err != nil {
+			return err
+		}
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '}' {
+		return errors.New("object required")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("extra value")
+	}
+	return nil
 }
 
 type repairBuildingRequest struct {
@@ -895,25 +1191,30 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	ap, err := s.store.Rest(session.UserID)
+	_, err = s.store.Rest(session.UserID)
 	if errors.Is(err, ErrInsufficientAP) {
-		ap, apErr := s.store.GetAP(session.UserID)
-		if apErr != nil {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
 			return
 		}
-		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", ap)
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logAction(r, session.UserID, "rest", "insufficient_ap")
-		s.writeJSON(w, http.StatusConflict, restConflictResponse{Error: err.Error(), AP: ap})
+		s.writeJSON(w, http.StatusConflict, restResponse{Error: err.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.logComputation(r, session.UserID, "ap_calculation", "success", ap)
+	state, err := s.store.GetPlayerState(session.UserID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, "rest", "success")
-	s.writeJSON(w, http.StatusOK, restResponse{AP: ap})
+	s.writeJSON(w, http.StatusOK, restResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
 func (s *Server) move(w http.ResponseWriter, r *http.Request) {
@@ -1177,49 +1478,122 @@ func decodeGatherRequest(body io.Reader) string {
 	return reason
 }
 
-func decodeConvertRequest(body io.Reader) string {
+type convertRequest struct {
+	MethodID               string
+	Quantity               int
+	ProviderExtensionID    int64
+	ProviderExtensionIDSet bool
+	Legacy                 bool
+}
+
+func decodeConvertRequest(body io.Reader) (convertRequest, string) {
 	decoder := json.NewDecoder(body)
 	token, err := decoder.Token()
 	if err != nil {
-		return convertReasonInvalidJSON
+		return convertRequest{}, convertReasonInvalidJSON
 	}
 	delim, ok := token.(json.Delim)
 	if !ok || delim != '{' {
-		return convertReasonInvalidJSON
+		return convertRequest{}, convertReasonInvalidJSON
 	}
-	seen := make(map[string]struct{})
-	reason := ""
+	var request convertRequest
+	seen := make(map[string]bool)
 	for decoder.More() {
 		key, err := decoder.Token()
 		if err != nil {
-			return convertReasonInvalidJSON
+			return convertRequest{}, convertReasonInvalidJSON
 		}
 		field, ok := key.(string)
 		if !ok {
-			return convertReasonInvalidJSON
+			return convertRequest{}, convertReasonInvalidJSON
 		}
-		if _, exists := seen[field]; exists {
-			return convertReasonDuplicate
+		if seen[field] {
+			return convertRequest{}, convertReasonDuplicate
 		}
-		seen[field] = struct{}{}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return convertReasonInvalidJSON
-		}
-		if reason == "" {
-			reason = convertReasonUnknownField
+		seen[field] = true
+		switch field {
+		case "method_id":
+			if err := decoder.Decode(&request.MethodID); err != nil {
+				return convertRequest{}, convertReasonInvalidJSON
+			}
+		case "quantity":
+			if err := decoder.Decode(&request.Quantity); err != nil {
+				return convertRequest{}, convertReasonInvalidJSON
+			}
+		case "provider_extension_id":
+			if err := decoder.Decode(&request.ProviderExtensionID); err != nil {
+				return convertRequest{}, convertReasonInvalidJSON
+			}
+			request.ProviderExtensionIDSet = true
+		default:
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return convertRequest{}, convertReasonInvalidJSON
+			}
+			return convertRequest{}, convertReasonUnknownField
 		}
 	}
 	if token, err = decoder.Token(); err != nil {
-		return convertReasonInvalidJSON
+		return convertRequest{}, convertReasonInvalidJSON
 	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
-		return convertReasonInvalidJSON
+		return convertRequest{}, convertReasonInvalidJSON
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return convertReasonExtraValue
+		return convertRequest{}, convertReasonExtraValue
 	}
-	return reason
+	if len(seen) == 0 {
+		return convertRequest{Legacy: true}, ""
+	}
+	if !seen["method_id"] || strings.TrimSpace(request.MethodID) == "" || !seen["quantity"] || request.Quantity <= 0 {
+		return convertRequest{}, convertReasonInvalidQuantity
+	}
+	if request.ProviderExtensionID < 0 {
+		return convertRequest{}, convertReasonInvalidQuantity
+	}
+	return request, ""
+}
+
+func resourceDelta(before, after PlayerState, methodID string, quantity int) int {
+	for _, method := range after.ConversionMethods {
+		if method.ID == methodID {
+			beforeQ, afterQ := 0, 0
+			for _, value := range before.Resources {
+				if value.Resource.ID == method.OutputResource.ID {
+					beforeQ = value.Quantity
+				}
+			}
+			for _, value := range after.Resources {
+				if value.Resource.ID == method.OutputResource.ID {
+					afterQ = value.Quantity
+				}
+			}
+			return afterQ - beforeQ
+		}
+	}
+	return quantity
+}
+
+func itemDelta(before, after PlayerState, methodID string) int {
+	var itemID string
+	for _, method := range after.ConversionMethods {
+		if method.ID == methodID && method.EssenceItem != nil {
+			itemID = method.EssenceItem.ID
+		}
+	}
+	if itemID == "" {
+		return 0
+	}
+	quantity := func(state PlayerState) int {
+		total := 0
+		for _, item := range state.Inventory {
+			if item.Item.ID == itemID && item.DurabilityStatus == "active" {
+				total += item.Quantity
+			}
+		}
+		return total
+	}
+	return quantity(after) - quantity(before)
 }
 
 type craftRequest struct {
@@ -1454,30 +1828,290 @@ func routeResponsesFromStore(routes []Route) []routeResponse {
 	return responses
 }
 
-func playerStateResponseFromStore(state PlayerState) playerStateResponse {
+type playerAvailability struct {
+	Actions             []string
+	ConversionProviders map[string][]int64
+	InstallationTargets map[string][]extensionInstallationTargetResponse
+	BuildingActions     map[int64][]string
+	ExtensionActions    map[int64][]string
+}
+
+func playerStateResponseFromStore(state PlayerState, userID int64) playerStateResponse {
+	state, availability := filterAvailableGameplayOptions(state, userID)
 	return playerStateResponse{
-		Location:                locationResponseFromStore(state.Location),
-		Routes:                  routeResponsesFromStore(state.Routes),
-		AP:                      state.AP,
-		CarriedWeight:           state.CarriedWeight,
-		MovementWeightThreshold: state.MovementWeightThreshold,
-		Inventory:               inventoryResponsesFromStore(state.Inventory),
-		GroundItems:             groundItemResponsesFromStore(state.GroundItems),
-		GroundResources:         groundResourceResponsesFromStore(state.GroundResources),
-		GatheringOption:         gatheringOptionResponseFromStore(state.GatheringOption),
-		ConversionOption:        conversionOptionResponseFromStore(state.ConversionOption),
-		Resources:               resourceResponsesFromStore(state.Resources),
-		CraftingRecipes:         craftingRecipeResponsesFromStore(state.CraftingRecipes),
-		BuildingRecipes:         buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:               buildingResponsesFromStore(state.Buildings),
+		AvailableActions:             availability.Actions,
+		Location:                     locationResponseFromStore(state.Location),
+		Routes:                       routeResponsesFromStore(state.Routes),
+		AP:                           state.AP,
+		CarriedWeight:                state.CarriedWeight,
+		MovementWeightThreshold:      state.MovementWeightThreshold,
+		Inventory:                    inventoryResponsesFromStore(state.Inventory),
+		GroundItems:                  groundItemResponsesFromStore(state.GroundItems),
+		GroundResources:              groundResourceResponsesFromStore(state.GroundResources),
+		GatheringOption:              gatheringOptionResponseFromStore(state.GatheringOption),
+		ConversionOption:             conversionOptionResponseFromStore(state.ConversionOption),
+		ConversionMethods:            conversionMethodResponsesFromStore(state.ConversionMethods, availability.ConversionProviders),
+		BuildingExtensionDefinitions: buildingExtensionDefinitionResponsesFromStore(state.BuildingExtensionDefinitions, availability.InstallationTargets),
+		Resources:                    resourceResponsesFromStore(state.Resources),
+		CraftingRecipes:              craftingRecipeResponsesFromStore(state.CraftingRecipes),
+		BuildingRecipes:              buildingRecipeResponsesFromStore(state.BuildingRecipes),
+		Buildings:                    buildingResponsesFromStore(state.Buildings, availability),
 	}
+}
+
+func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerState, playerAvailability) {
+	availability := newPlayerAvailability()
+	activeItems := activeItemQuantities(state.Inventory)
+	resources := resourceQuantities(state.Resources)
+
+	if state.AP > 0 {
+		availability.Actions = append(availability.Actions, restAction)
+	}
+	availableRoutes := make([]Route, 0, len(state.Routes))
+	if state.CarriedWeight <= state.MovementWeightThreshold {
+		for _, route := range state.Routes {
+			if state.AP >= route.APCost {
+				availableRoutes = append(availableRoutes, route)
+			}
+		}
+	}
+	state.Routes = availableRoutes
+	if len(state.Routes) > 0 {
+		availability.Actions = append(availability.Actions, moveAction)
+	}
+	if state.GatheringOption != nil && state.AP >= state.GatheringOption.APCost {
+		availability.Actions = append(availability.Actions, gatherAction)
+	} else {
+		state.GatheringOption = nil
+	}
+	if state.ConversionOption != nil && (state.AP < state.ConversionOption.APCost || activeItems[state.ConversionOption.Item.ID] < state.ConversionOption.InputQuantity) {
+		state.ConversionOption = nil
+	}
+
+	availableMethods := make([]ConversionMethod, 0, len(state.ConversionMethods))
+	for _, method := range state.ConversionMethods {
+		if state.AP < method.APCost || activeItems[method.Input.ID] < 1 {
+			continue
+		}
+		providers := conversionProviderIDs(method, state.Buildings)
+		if !method.IsGlobal && len(providers) == 0 {
+			continue
+		}
+		availability.ConversionProviders[method.ID] = providers
+		availableMethods = append(availableMethods, method)
+	}
+	state.ConversionMethods = availableMethods
+	if len(state.ConversionMethods) > 0 || state.ConversionOption != nil {
+		availability.Actions = append(availability.Actions, convertAction)
+	}
+
+	availableCrafting := make([]CraftingRecipe, 0, len(state.CraftingRecipes))
+	for _, recipe := range state.CraftingRecipes {
+		if state.AP >= recipe.BaseAPCost && recipeInputsAvailable(recipe.ResourceInputs, recipe.ItemInputs, resources, activeItems) {
+			availableCrafting = append(availableCrafting, recipe)
+		}
+	}
+	state.CraftingRecipes = availableCrafting
+	if len(state.CraftingRecipes) > 0 {
+		availability.Actions = append(availability.Actions, craftAction)
+	}
+
+	hasOwnedBuilding := false
+	for _, building := range state.Buildings {
+		if building.Owner.ID == userID {
+			hasOwnedBuilding = true
+			break
+		}
+	}
+	availableBuildingRecipes := make([]BuildingRecipe, 0, len(state.BuildingRecipes))
+	if !hasOwnedBuilding {
+		for _, recipe := range state.BuildingRecipes {
+			if recipeInputsAvailable(recipe.ResourceInputs, recipe.ItemInputs, resources, activeItems) {
+				availableBuildingRecipes = append(availableBuildingRecipes, recipe)
+			}
+		}
+	}
+	state.BuildingRecipes = availableBuildingRecipes
+	if len(state.BuildingRecipes) > 0 {
+		availability.Actions = append(availability.Actions, buildAction)
+	}
+
+	availableDefinitions := make([]BuildingExtensionDefinition, 0, len(state.BuildingExtensionDefinitions))
+	for _, definition := range state.BuildingExtensionDefinitions {
+		if activeItems[definition.PackageItem.ID] < 1 {
+			continue
+		}
+		targets := extensionInstallationTargets(state.Buildings, userID)
+		if len(targets) == 0 {
+			continue
+		}
+		availability.InstallationTargets[definition.ID] = targets
+		availableDefinitions = append(availableDefinitions, definition)
+	}
+	state.BuildingExtensionDefinitions = availableDefinitions
+
+	for _, building := range state.Buildings {
+		actions := make([]string, 0)
+		if building.Status == "under_construction" && state.AP > 0 {
+			actions = append(actions, contributeConstructionAction)
+		}
+		if building.Status == "completed" && (building.DurabilityStatus == activeBuildingDurabilityStatus || building.DurabilityStatus == "disabled") && state.AP >= buildingRepairAPCost && resources[woodResourceIdentifier] >= buildingRepairWoodCost {
+			actions = append(actions, repairBuildingAction)
+		}
+		for _, targets := range availability.InstallationTargets {
+			for _, target := range targets {
+				if target.BuildingID == building.ID {
+					actions = appendUnique(actions, installExtensionAction)
+				}
+			}
+		}
+		availability.BuildingActions[building.ID] = actions
+		for _, extension := range building.Extensions {
+			extensionActions := make([]string, 0)
+			if building.Status == "completed" && building.DurabilityStatus == activeBuildingDurabilityStatus && extension.Status == "under_construction" && state.AP > 0 {
+				extensionActions = append(extensionActions, contributeExtensionAction)
+			}
+			if building.Owner.ID == userID {
+				extensionActions = append(extensionActions, removeExtensionAction)
+			}
+			availability.ExtensionActions[extension.ID] = extensionActions
+		}
+		for _, action := range actions {
+			availability.Actions = appendUnique(availability.Actions, action)
+		}
+		for _, extension := range building.Extensions {
+			for _, action := range availability.ExtensionActions[extension.ID] {
+				availability.Actions = appendUnique(availability.Actions, action)
+			}
+		}
+	}
+	return state, availability
+}
+
+func newPlayerAvailability() playerAvailability {
+	return playerAvailability{
+		Actions:             make([]string, 0),
+		ConversionProviders: make(map[string][]int64),
+		InstallationTargets: make(map[string][]extensionInstallationTargetResponse),
+		BuildingActions:     make(map[int64][]string),
+		ExtensionActions:    make(map[int64][]string),
+	}
+}
+
+func activeItemQuantities(inventory []InventoryItem) map[string]int {
+	quantities := make(map[string]int)
+	for _, item := range inventory {
+		if item.DurabilityStatus == activeItemStatus {
+			quantities[item.Item.ID] += item.Quantity
+		}
+	}
+	return quantities
+}
+
+func resourceQuantities(resources []PlayerResource) map[string]int {
+	quantities := make(map[string]int)
+	for _, resource := range resources {
+		quantities[resource.Resource.ID] = resource.Quantity
+	}
+	return quantities
+}
+
+func conversionProviderIDs(method ConversionMethod, buildings []Building) []int64 {
+	providers := make([]int64, 0)
+	if method.IsGlobal {
+		return providers
+	}
+	for _, building := range buildings {
+		if building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+			continue
+		}
+		for _, extension := range building.Extensions {
+			if extension.Status == "completed" && stringInSlice(extension.DefinitionID, method.ProviderDefinitionIDs) {
+				providers = append(providers, extension.ID)
+			}
+		}
+	}
+	return providers
+}
+
+func extensionInstallationTargets(buildings []Building, userID int64) []extensionInstallationTargetResponse {
+	targets := make([]extensionInstallationTargetResponse, 0)
+	for _, building := range buildings {
+		if building.Owner.ID != userID || building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+			continue
+		}
+		for slotIndex := 0; slotIndex < building.ExtensionSlotCount; slotIndex++ {
+			occupied := false
+			for _, extension := range building.Extensions {
+				if extension.SlotIndex == slotIndex {
+					occupied = true
+					break
+				}
+			}
+			if !occupied {
+				targets = append(targets, extensionInstallationTargetResponse{BuildingID: building.ID, SlotIndex: slotIndex})
+			}
+		}
+	}
+	return targets
+}
+
+func recipeInputsAvailable(resourceInputs []CraftingResourceInput, itemInputs []CraftingItemInput, resources, activeItems map[string]int) bool {
+	for _, input := range resourceInputs {
+		if resources[input.Resource.ID] < input.Quantity {
+			return false
+		}
+	}
+	for _, input := range itemInputs {
+		if activeItems[input.Item.ID] < input.Quantity {
+			return false
+		}
+	}
+	return true
+}
+
+func stringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, value string) []string {
+	if stringInSlice(value, values) {
+		return values
+	}
+	return append(values, value)
+}
+
+func buildingExtensionDefinitionResponsesFromStore(definitions []BuildingExtensionDefinition, targets map[string][]extensionInstallationTargetResponse) []buildingExtensionDefinitionResponse {
+	responses := make([]buildingExtensionDefinitionResponse, 0, len(definitions))
+	for _, definition := range definitions {
+		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponse{ID: definition.PackageItem.ID, DisplayName: definition.PackageItem.DisplayName}, RequiredAP: definition.RequiredAP, InstallationTargets: targets[definition.ID]})
+	}
+	return responses
+}
+
+func conversionMethodResponsesFromStore(methods []ConversionMethod, providers map[string][]int64) []conversionMethodResponse {
+	responses := make([]conversionMethodResponse, 0, len(methods))
+	for _, method := range methods {
+		var essence *itemResponse
+		if method.EssenceItem != nil {
+			value := itemResponse{ID: method.EssenceItem.ID, DisplayName: method.EssenceItem.DisplayName}
+			essence = &value
+		}
+		responses = append(responses, conversionMethodResponse{ID: method.ID, DisplayName: method.DisplayName, APCost: method.APCost, Input: itemResponse{ID: method.Input.ID, DisplayName: method.Input.DisplayName}, MaxInputQuantity: method.MaxInputQuantity, OutputResource: itemResponse{ID: method.OutputResource.ID, DisplayName: method.OutputResource.DisplayName}, ResourceQuantityPerInput: method.ResourceQuantityPerInput, EssenceItem: essence, EssenceChanceBPS: method.EssenceChanceBPS, EssenceQuantity: method.EssenceQuantity, ProviderExtensionIDs: providers[method.ID]})
+	}
+	return responses
 }
 
 func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
 	s.logCarryingWeightComputation(r, userID, state)
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
 	s.logItemDurability(r, fmt.Sprintf("%d", userID), state)
-	return playerStateResponseFromStore(state)
+	return playerStateResponseFromStore(state, userID)
 }
 
 func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
@@ -1531,6 +2165,20 @@ type buildingResponse struct {
 	MaxDurabilitySeconds       int                            `json:"max_durability_seconds"`
 	DurabilityStatus           *string                        `json:"durability_status"`
 	DurabilityRemainingSeconds *int                           `json:"durability_remaining_seconds"`
+	Extensions                 []buildingExtensionResponse    `json:"extensions"`
+	AvailableActions           []string                       `json:"available_actions"`
+}
+
+type buildingExtensionResponse struct {
+	ID               int64    `json:"id"`
+	SlotIndex        int      `json:"slot_index"`
+	DefinitionID     string   `json:"definition_id"`
+	DisplayName      string   `json:"display_name"`
+	Tier             int      `json:"tier"`
+	RequiredAP       int      `json:"required_ap"`
+	ContributedAP    int      `json:"contributed_ap"`
+	Status           string   `json:"status"`
+	AvailableActions []string `json:"available_actions"`
 }
 
 type buildingOwnerResponse struct {
@@ -1577,15 +2225,15 @@ func buildingRecipeResponseFromStore(recipe BuildingRecipe) buildingRecipeRespon
 	}
 }
 
-func buildingResponsesFromStore(buildings []Building) []buildingResponse {
+func buildingResponsesFromStore(buildings []Building, availability playerAvailability) []buildingResponse {
 	responses := make([]buildingResponse, 0, len(buildings))
 	for _, building := range buildings {
-		responses = append(responses, buildingResponseFromStore(building))
+		responses = append(responses, buildingResponseFromStore(building, availability))
 	}
 	return responses
 }
 
-func buildingResponseFromStore(building Building) buildingResponse {
+func buildingResponseFromStore(building Building, availability playerAvailability) buildingResponse {
 	response := buildingResponse{
 		ID: building.ID,
 		Owner: buildingOwnerResponse{
@@ -1602,6 +2250,11 @@ func buildingResponseFromStore(building Building) buildingResponse {
 		Status:               building.Status,
 		ExtensionSlotCount:   building.ExtensionSlotCount,
 		MaxDurabilitySeconds: building.MaxDurabilitySeconds,
+		Extensions:           make([]buildingExtensionResponse, 0, len(building.Extensions)),
+		AvailableActions:     availability.BuildingActions[building.ID],
+	}
+	for _, extension := range building.Extensions {
+		response.Extensions = append(response.Extensions, buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, RequiredAP: extension.RequiredAP, ContributedAP: extension.ContributedAP, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]})
 	}
 	if building.DurabilityStatus != "" {
 		status := building.DurabilityStatus
@@ -1773,6 +2426,12 @@ func accessLogAction(r *http.Request) string {
 			return "contribute-construction"
 		case "/api/actions/repair-building":
 			return "repair-building"
+		case "/api/actions/install-extension":
+			return "install-extension"
+		case "/api/actions/contribute-extension-construction":
+			return "contribute-extension-construction"
+		case "/api/actions/remove-extension":
+			return "remove-extension"
 		default:
 			return "unknown"
 		}
@@ -1845,6 +2504,20 @@ func (s *Server) logRejectionWithID(requestID, userID, action, reason string) {
 
 func (s *Server) logComputation(r *http.Request, userID int64, action, outcome string, ap int) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
+}
+
+func (s *Server) logConvertComputation(r *http.Request, userID int64, request convertRequest, resourceQuantity, essenceQuantity int, outcome string) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=convert method_id=%s quantity=%d resource_quantity=%d essence_quantity=%d essence_result=reported outcome=%s request_id=%s\n", userID, sanitizeLogValue(request.MethodID), request.Quantity, resourceQuantity, essenceQuantity, sanitizeLogValue(outcome), requestID(r))
+}
+
+func (s *Server) logExtensionAction(r *http.Request, userID int64, action string, buildingID, extensionID int64, ap int, outcome string, computation *ExtensionConstructionComputation) {
+	format := "user_id=%d action=%s building_id=%d extension_id=%d ap=%d outcome=%s request_id=%s"
+	if computation != nil {
+		format += " requested_ap=%d effective_ap=%d resulting_progress=%d/%d status=%s"
+		fmt.Fprintf(os.Stdout, format+"\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r), computation.RequestedAP, computation.EffectiveAP, computation.ResultingProgress, computation.RequiredAP, sanitizeLogValue(computation.ResultingStatus))
+		return
+	}
+	fmt.Fprintf(os.Stdout, format+"\n", userID, sanitizeLogValue(action), buildingID, extensionID, ap, sanitizeLogValue(outcome), requestID(r))
 }
 
 func (s *Server) logCarryingWeightComputation(r *http.Request, userID int64, state PlayerState) {

@@ -54,9 +54,11 @@ const building: Building = {
   max_durability_seconds: 604800,
   durability_status: null,
   durability_remaining_seconds: null,
+  available_actions: ["contribute-construction"],
 };
 
 const campState: PlayerState = {
+  available_actions: ["rest", "move", "convert", "craft"],
   location: { id: "camp", display_name: "Camp" },
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
@@ -80,6 +82,7 @@ const campState: PlayerState = {
 };
 
 const forestState: PlayerState = {
+  available_actions: ["rest", "move", "gather", "craft", "build"],
   location: { id: "forest_edge", display_name: "Forest edge" },
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
@@ -234,6 +237,14 @@ describe("getCurrentUser", () => {
   });
 });
 
+describe("expanded convert client", () => {
+  it("sends the selected method, quantity, and optional provider", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, method_id: "sawmill_wood_t1", quantity: 2, resource_quantity: 2, essence_quantity: 1 }), { status: 200 }));
+    await expect(convert("sawmill_wood_t1", 2, 7, fetcher)).resolves.toMatchObject({ status: "success", method_id: "sawmill_wood_t1", quantity: 2, essence_quantity: 1 });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/convert", expect.objectContaining({ body: JSON.stringify({ method_id: "sawmill_wood_t1", quantity: 2, provider_extension_id: 7 }) }));
+  });
+});
+
 describe("move", () => {
   it("sends only the target identifier and returns the authoritative state", async () => {
     const fetcher = vi.fn().mockResolvedValue(
@@ -317,15 +328,15 @@ describe("move", () => {
 });
 
 describe("rest", () => {
-  it("sends a same-origin credentialed POST and returns the decremented AP", async () => {
+  it("returns the complete authoritative state after spending AP", async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ap: 2999 }), {
+      new Response(JSON.stringify({ ...campState, ap: 2999 }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
     );
 
-    await expect(rest(fetcher)).resolves.toEqual({ status: "success", ap: 2999 });
+    await expect(rest(fetcher)).resolves.toEqual({ status: "success", ...campState, ap: 2999 });
     expect(fetcher).toHaveBeenCalledWith("/api/actions/rest", {
       method: "POST",
       credentials: "include",
@@ -333,14 +344,15 @@ describe("rest", () => {
     });
   });
 
-  it("preserves the conflict error and AP for the UI", async () => {
+  it("preserves the conflict error and complete authoritative state for the UI", async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: "insufficient action points", ap: 0 }), { status: 409 }),
+      new Response(JSON.stringify({ error: "insufficient action points", ...campState, ap: 0 }), { status: 409 }),
     );
 
     await expect(rest(fetcher)).resolves.toEqual({
       status: "insufficient",
       error: "insufficient action points",
+      ...campState,
       ap: 0,
     });
   });

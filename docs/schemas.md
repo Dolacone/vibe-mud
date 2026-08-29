@@ -40,7 +40,8 @@ source_paths:
 | `gathering_rules` | 保存 Location 可產出的 item、quantity 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義取得規則，不保存玩家執行紀錄。 |
 | `player_inventory` | 保存每位玩家的 Active 與 Expired item 堆疊。 | 取得、合併、失效、Drop 或保留期結束時更新。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
 | `resource_types` | 保存後端允許的 Resource type 與單位重量。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
-| `conversion_rules` | 保存 Location 可轉換的 item、typed Resource 產量與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義轉換規則，不保存玩家執行紀錄。 |
+| `conversion_methods` | 保存 Convert method 的成本、capacity、產出與 Essence 機率。 | Store 初始化時建立固定 seed。 | 它定義運算，不決定 method 的提供來源。 |
+| `global_conversion_methods` | 保存所有 Location 都能使用的徒手 Convert method。 | Store 初始化時建立固定 seed。 | 它只定義全域可用性，不重複 Convert 數值。 |
 | `player_resources` | 保存每位玩家每種 Resource 的 quantity。 | 首次取得該 Resource 時建立，後續取得時累加。 | 它保存 typed quantity，不是 Inventory item quantity。 |
 | `ground_items` | 保存每個 Location 的公共 Active 與 Expired Item 堆疊。 | Drop、Pickup、失效或保留期結束時更新。 | 它沒有玩家 owner，也不是玩家 Inventory。 |
 | `ground_resources` | 保存每個 Location 的公共 Resource quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它保存 Resource，不把 Resource 轉成 Item。 |
@@ -51,6 +52,9 @@ source_paths:
 | `building_recipe_resource_inputs` | 保存 Building recipe 消耗的 Resource inputs。 | Recipe 需要 Resource 時加入。 | 它保存成本，不保存玩家 Resource quantity。 |
 | `building_recipe_item_inputs` | 保存 Building recipe 消耗的 Item inputs。 | Recipe 需要 Item 時加入。 | 它保存成本，不保存玩家 Inventory quantity。 |
 | `buildings` | 保存玩家在 Location 建立的 Building、施工進度與耐久期限。 | 開始施工時建立，完成、維修或消失時更新。 | 它保存世界狀態，不定義 recipe。 |
+| `building_extension_definitions` | 保存 extension 的 Package、tier 與施工 AP。 | Store 初始化時建立固定 seed。 | 它定義所有 extension 的施工資料，不保存安裝狀態。 |
+| `extension_conversion_capabilities` | 將 extension definition 連到 Convert method 與 Building 耐久成本。 | Store 初始化時建立固定 seed。 | 它只描述 Convert capability，不描述 extension 施工。 |
+| `building_extensions` | 保存 Building slot 內的 extension 與施工進度。 | 安裝 Package 時建立，施工、拆除或 Building 消失時更新。 | 它保存安裝狀態，不保存即時 Convert balance。 |
 
 ## identities
 
@@ -208,7 +212,7 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 ## items
 
-用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`，所有 Item 的測試耐久上限都是 3600 秒。
+用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 建立重 100 的 `wood`、重 10 的 `wood_component`、重 1 的 `wood_essence_t1` 與重 10 的 `sawmill_package_t1`。所有 Item 的測試耐久上限都是 3600 秒。
 
 ```sql
 CREATE TABLE IF NOT EXISTS items (
@@ -295,31 +299,58 @@ CREATE TABLE IF NOT EXISTS resource_types (
 
 索引與約束：primary key 為 `id`。前端不能建立 Resource type。
 
-## conversion_rules
+## conversion_methods
 
-用途：定義 Location 可執行的 deterministic conversion。MVP 只允許在 `camp` 消耗 1 個 `wood` item 與 1 AP，取得 1 Wood Resource。
+用途：定義 Convert method 的完整平衡值。公式留在 backend code，所有可調數值使用具型別欄位。
 
 ```sql
-CREATE TABLE IF NOT EXISTS conversion_rules (
-    location_id TEXT PRIMARY KEY REFERENCES locations(id),
+CREATE TABLE IF NOT EXISTS conversion_methods (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    ap_cost INTEGER NOT NULL CHECK (ap_cost > 0),
     input_item_id TEXT NOT NULL REFERENCES items(id),
-    input_quantity INTEGER NOT NULL CHECK (input_quantity > 0),
+    max_input_quantity INTEGER NOT NULL CHECK (max_input_quantity > 0),
     output_resource_id TEXT NOT NULL REFERENCES resource_types(id),
-    resource_yield INTEGER NOT NULL CHECK (resource_yield > 0),
-    ap_cost INTEGER NOT NULL CHECK (ap_cost > 0)
+    resource_quantity_per_input INTEGER NOT NULL CHECK (resource_quantity_per_input > 0),
+    essence_item_id TEXT REFERENCES items(id),
+    essence_chance_bps INTEGER NOT NULL CHECK (essence_chance_bps BETWEEN 0 AND 10000),
+    essence_quantity INTEGER NOT NULL CHECK (essence_quantity >= 0),
+    CHECK ((essence_item_id IS NULL AND essence_chance_bps = 0 AND essence_quantity = 0) OR (essence_item_id IS NOT NULL AND essence_chance_bps > 0 AND essence_quantity > 0))
 );
 ```
 
 | Column | 用途 |
 |---|---|
-| `location_id` | 允許 conversion 的 Location。Primary key 限制每個 Location 只有一筆 MVP rule。 |
-| `input_item_id` | 成功時從 Inventory 扣除的 item。 |
-| `input_quantity` | 每次成功時扣除的 item quantity。 |
-| `output_resource_id` | 每次成功時增加的 Resource type。 |
-| `resource_yield` | 每次成功時增加的 Resource quantity。 |
-| `ap_cost` | 每次成功時消耗的 AP。 |
+| `id` | API 使用的穩定 Convert method identifier。 |
+| `display_name` | 前端顯示的 method 名稱。 |
+| `ap_cost` | 執行一個工作單位消耗的 AP。 |
+| `input_item_id` | 每個處理單位消耗的 Active Item。 |
+| `max_input_quantity` | 一個工作單位最多處理的 input quantity。 |
+| `output_resource_id` | 每個 input 產出的 Resource type。 |
+| `resource_quantity_per_input` | 每個 input 產出的 Resource quantity。 |
+| `essence_item_id` | 成功判定後產出的 Essence Item。沒有 Essence 時為 `NULL`。 |
+| `essence_chance_bps` | 每個 input 獨立判定的 basis points 機率。`10000` 代表 100%。 |
+| `essence_quantity` | 每次成功判定產出的 Essence quantity。 |
 
-索引與約束：所有 conversion values 都由後端資料決定。前端只提交 `{}`。
+索引與約束：Primary key 為 `id`。Essence 三個欄位必須同時表示停用或有效設定。修改 row 會影響後續所有使用該 method 的操作。
+
+Store initialization 只會插入缺少的 method row。既有 method 的 balance 欄位與顯示名稱不會被重新初始化覆寫。
+
+## global_conversion_methods
+
+用途：列出不需要 Building extension，且能在所有 Location 使用的 Convert method。
+
+```sql
+CREATE TABLE IF NOT EXISTS global_conversion_methods (
+    conversion_method_id TEXT PRIMARY KEY REFERENCES conversion_methods(id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `conversion_method_id` | 所有玩家在所有 Location 都能使用的 Convert method。 |
+
+索引與約束：Primary key 防止同一 method 重複列入。刪除 method 前必須先刪除此 reference。
 
 ## player_resources
 
@@ -561,6 +592,84 @@ CREATE TABLE IF NOT EXISTS buildings (
 
 索引與約束：`UNIQUE (owner_id, location_id)` 讓尚未消失的 Building 占用持有者在該 Location 的唯一名額。Progress 不能低於 0 或超過 `required_ap`。`status` 只允許施工中或完成。後端在狀態讀取、建造、施工貢獻與維修前刪除已超過 Disabled 保留期的 row。
 
+## building_extension_definitions
+
+用途：定義所有 Building extension 的安裝 Package、顯示 tier 與施工 AP。Sawmill T1 是其中一筆 row。
+
+```sql
+CREATE TABLE IF NOT EXISTS building_extension_definitions (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    tier INTEGER NOT NULL CHECK (tier > 0),
+    package_item_id TEXT NOT NULL REFERENCES items(id),
+    required_ap INTEGER NOT NULL CHECK (required_ap > 0)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | API 與 installed extension 使用的穩定 definition identifier。 |
+| `display_name` | 前端顯示的 extension 名稱。 |
+| `tier` | Extension 的正整數 tier。 |
+| `package_item_id` | 安裝時消耗的 Active Package Item。 |
+| `required_ap` | 完成 extension 施工需要的 AP。安裝時保存快照。 |
+
+索引與約束：Primary key 為 `id`。不同 definition 可以使用相同 Package，但目前 Sawmill T1 使用專屬 Package。
+
+## extension_conversion_capabilities
+
+用途：定義能提供 Convert method 的 extension，以及每次成功使用造成的 Building 耐久耗損。
+
+```sql
+CREATE TABLE IF NOT EXISTS extension_conversion_capabilities (
+    extension_definition_id TEXT NOT NULL REFERENCES building_extension_definitions(id),
+    conversion_method_id TEXT NOT NULL REFERENCES conversion_methods(id),
+    building_durability_cost_seconds INTEGER NOT NULL CHECK (building_durability_cost_seconds > 0),
+    PRIMARY KEY (extension_definition_id, conversion_method_id)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `extension_definition_id` | 提供 Convert 功能的 extension definition。 |
+| `conversion_method_id` | Completed extension 提供的 Convert method。 |
+| `building_durability_cost_seconds` | 每次成功使用扣除的 parent Building 耐久秒數。 |
+
+索引與約束：複合 primary key 允許一種 extension 提供多個 Convert method。修改 capacity 必須更新 `conversion_methods`。修改使用耗損必須更新本 table。
+
+## building_extensions
+
+用途：保存 Building slot 內已安裝 extension 的 definition 快照、施工進度與狀態。
+
+```sql
+CREATE TABLE IF NOT EXISTS building_extensions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    building_id INTEGER NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
+    definition_id TEXT NOT NULL REFERENCES building_extension_definitions(id),
+    display_name TEXT NOT NULL,
+    tier INTEGER NOT NULL CHECK (tier > 0),
+    required_ap INTEGER NOT NULL CHECK (required_ap > 0),
+    contributed_ap INTEGER NOT NULL CHECK (contributed_ap >= 0 AND contributed_ap <= required_ap),
+    status TEXT NOT NULL CHECK (status IN ('under_construction', 'completed')),
+    UNIQUE (building_id, slot_index)
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `id` | 安裝、施工、拆除與 Convert target 使用的穩定 identifier。 |
+| `building_id` | Parent Building。Building 永久刪除時 extension 一併刪除。 |
+| `slot_index` | Parent Building 內從 0 開始的 slot index。 |
+| `definition_id` | Extension definition identifier。Operational balance 由目前 definition 與 capability 讀取。 |
+| `display_name` | 安裝時保存的顯示名稱快照。 |
+| `tier` | 安裝時保存的 tier 快照。 |
+| `required_ap` | 安裝時保存的施工 AP 需求。 |
+| `contributed_ap` | 所有玩家累計投入的施工 AP。 |
+| `status` | `under_construction` 或 `completed`。 |
+
+索引與約束：`UNIQUE (building_id, slot_index)` 防止一個 slot 同時安裝多個 extension。Backend 必須驗證 `slot_index` 小於 parent Building 的 `extension_slot_count`。
+
 ## 關聯與約束
 
 ```text
@@ -577,22 +686,23 @@ locations.id
 ├── routes.destination_id        Route 終點
 ├── player_locations.location_id 玩家目前位置
 ├── gathering_rules.location_id  Gathering 所在位置
-├── conversion_rules.location_id Conversion 所在位置
 ├── buildings.location_id        Building 所在位置
 ├── ground_items.location_id     公共地面 Item 所在位置
 └── ground_resources.location_id 公共地面 Resource 所在位置
 
 items.id
 ├── gathering_rules.item_id       Gathering 產出的 item
-├── conversion_rules.input_item_id Conversion 消耗的 item
+├── conversion_methods.input_item_id Convert 消耗的 item
+├── conversion_methods.essence_item_id Convert 產出的 Essence
 ├── player_inventory.item_id      玩家持有的 item
 ├── crafting_recipes.output_item_id Crafting 產出的 item
 ├── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
 ├── building_recipe_item_inputs.item_id Building recipe 消耗的 item
+├── building_extension_definitions.package_item_id Extension 安裝 Package
 └── ground_items.item_id                 公共地面 Item type
 
 resource_types.id
-├── conversion_rules.output_resource_id Conversion 產出的 Resource type
+├── conversion_methods.output_resource_id Convert 產出的 Resource type
 ├── player_resources.resource_id         玩家持有的 Resource type
 ├── crafting_recipe_resource_inputs.resource_id Crafting 消耗的 Resource type
 ├── building_recipe_resource_inputs.resource_id Building recipe 消耗的 Resource type
@@ -607,6 +717,17 @@ building_recipes.id
 ├── building_recipe_item_inputs.recipe_id     Item inputs
 └── buildings.recipe_id                       Player Building origin
 
+conversion_methods.id
+├── global_conversion_methods.conversion_method_id 全域 Convert method
+└── extension_conversion_capabilities.conversion_method_id Extension Convert capability
+
+building_extension_definitions.id
+├── extension_conversion_capabilities.extension_definition_id Convert capability
+└── building_extensions.definition_id Installed extension origin
+
+buildings.id
+└── building_extensions.building_id Slot 內的 installed extension
+
 oauth_attempts          OAuth 完成前的獨立暫存狀態
 ```
 
@@ -615,6 +736,8 @@ oauth_attempts          OAuth 完成前的獨立暫存狀態
 ## 初始化與升級
 
 `NewStore` 在同一 transaction 內建立 table，加入 location 與 Route seed，再 backfill 玩家資料。任何步驟失敗時，transaction 會 rollback。
+
+Balance definition seeds 使用 `INSERT OR IGNORE`。Store 重複初始化不會覆寫既有 row，因此直接修改 AP 成本、capacity、產量、Essence 機率或 Building 耐久成本後，設定會跨重啟保留。Repository 要改變既有 row 的預設值時，必須另行提供明確 migration。
 
 Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `1000000000` 轉為 Unix seconds。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session 與 player AP 時間。
 
@@ -640,17 +763,35 @@ INSERT OR IGNORE INTO resource_types (id, display_name, weight_units) VALUES
 ('medicinal', 'Medicinal', 1),
 ('arcane', 'Arcane', 1);
 
-INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
-VALUES ('camp', 'wood', 1, 'wood', 1, 1);
-
 INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds)
 VALUES ('wood_component', 'Wood Component', 10, 3600);
+
+INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
+('wood_essence_t1', 'Wood Essence T1', 1, 3600),
+('sawmill_package_t1', 'Sawmill Package T1', 10, 3600);
+
+INSERT OR IGNORE INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity)
+VALUES
+('hand_wood_t1', 'Hand Wood Convert', 30, 'wood', 3, 'wood', 1, 'wood_essence_t1', 1000, 1),
+('sawmill_wood_t1', 'Sawmill Wood Convert', 30, 'wood', 6, 'wood', 1, 'wood_essence_t1', 1000, 1);
+
+INSERT OR IGNORE INTO global_conversion_methods (conversion_method_id)
+VALUES ('hand_wood_t1');
 
 INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
 VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
 
 INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
 VALUES ('wood_component', 'wood', 10);
+
+INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
+VALUES ('sawmill_package_t1', 'Sawmill Package T1', 30, 'sawmill_package_t1', 1);
+
+INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, quantity)
+VALUES ('sawmill_package_t1', 'wood', 10);
+
+INSERT OR IGNORE INTO crafting_recipe_item_inputs (recipe_id, item_id, quantity)
+VALUES ('sawmill_package_t1', 'wood_essence_t1', 1);
 
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count)
 VALUES ('building_lv1', 'Building Lv1', 1, 60, 1);
@@ -660,9 +801,17 @@ VALUES ('building_lv1', 'wood_component', 1);
 
 INSERT OR IGNORE INTO building_recipe_resource_inputs (recipe_id, resource_id, quantity)
 VALUES ('building_lv1', 'wood', 10);
+
+INSERT OR IGNORE INTO building_extension_definitions (id, display_name, tier, package_item_id, required_ap)
+VALUES ('sawmill_t1', 'Sawmill T1', 1, 'sawmill_package_t1', 30);
+
+INSERT OR IGNORE INTO extension_conversion_capabilities (extension_definition_id, conversion_method_id, building_durability_cost_seconds)
+VALUES ('sawmill_t1', 'sawmill_wood_t1', 60);
 ```
 
-Existing databases gain the three crafting tables and seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
+Existing databases gain the Sawmill Package recipe and extension definition seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
+
+Store initialization also seeds the typed Convert methods, global hand method reference, Sawmill capability, Wood Essence T1, and Sawmill Package T1 only when each row is missing. Direct edits to existing definition rows persist across Store reinitialization.
 
 Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
 
@@ -676,19 +825,25 @@ Production migration 的起點沒有 Item durability columns 或 Expired rows。
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
-升級 legacy schema 時，系統捨棄單一 generic Resource balance，重建 typed `player_resources` 與 `conversion_rules`。升級不保留舊 balance。
+升級此功能時，系統以 `conversion_methods` 與 `global_conversion_methods` 取代 Location-bound `conversion_rules`。舊 rule 是 definition，不含玩家狀態，因此 migration 直接移除舊 table。
 
 `move` transaction 會先套用玩家 Inventory 的失效與永久刪除規則，再依目前位置查找 target Route。攜帶重量包含 Active 與尚在保留期內的 Expired Item。重量超過 1000、Route 不存在或 AP 不足時，Move 不會消耗 AP 或改變 Location。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
 
 `gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並把新 Item 以完整耐久時間加入 Active 堆疊。既有 Active 堆疊使用 quantity 加權剩餘秒數。AP 與 Inventory 必須在同一 transaction commit。
 
-`convert` transaction 只會消耗 Active Item。Rule 不存在、Active Wood 不足或 AP 不足時，transaction 不修改 Action 狀態。成功時，系統推進 `full_timestamp`，扣除 Active Wood，並累加 Wood Resource quantity。Active Wood quantity 歸零時，系統刪除該 row。
+`convert` transaction 只會消耗 Active Item。Method 不存在、quantity 超過 capacity、Active input 不足、AP 不足或 provider extension 不可用時，transaction 不修改 Action 狀態。成功時，系統推進 `full_timestamp`，扣除 input，累加 Resource，逐一判定 Essence，並把取得的 Essence 以完整耐久加入 Active Inventory。使用 extension method 時，同一 transaction 會扣除 parent Building 耐久。
 
 `craft` transaction 只會消耗 Active Item inputs。成功時，output Item 以完整耐久時間加入 Active 堆疊，並依 quantity 加權公式與既有 Active output 合併。Recipe 不存在、任何 Active input 不足或 AP 不足時，Action 狀態保持不變。
 
 `Store.Drop` 對 Item 要求 `active` 或 `expired` 狀態，並保留移出堆疊的狀態期限。Active destination 使用 quantity 加權剩餘秒數。Expired destination 使用較晚的刪除時間。`Store.Pickup` 只接受 Active Item。Resource Transfer 不接受 Item 狀態。來源不足、狀態無效、Expired Pickup 或 asset 不存在時，Transfer 資產保持不變。Transfer 不讀寫 `player_ap.full_timestamp`，也不受 ground capacity 限制。
 
 開始施工 transaction 會先刪除已超過 Disabled 保留期的 Building，再依 submitted recipe identifier 查找 Location-independent recipe 與 inputs。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP、extension slot count 與最大耐久秒數快照。
+
+安裝 extension transaction 會驗證 Building owner、目前 Location、completed 與 Active Building、空 slot、definition 與 Active Package Item。成功時，系統扣除 Package，建立 progress 0 的 `building_extensions` row，並保存名稱、tier 與 required AP 快照。任何驗證失敗時，transaction 不修改資料。
+
+Extension 施工貢獻 transaction 允許同一 Location 的玩家投入正整數 AP。系統只扣除不超過剩餘需求的 AP。Progress 達到 required AP 時，status 立即成為 `completed`。Disabled parent Building 不能接受施工 AP。
+
+拆除 extension transaction 只允許 parent Building owner。施工中與 completed extension 都能刪除。刪除不返還 Package 或 AP，並釋放原 slot。
 
 施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`，並將耐久期限設為後端目前時間加最大耐久秒數。
 
@@ -700,5 +855,5 @@ Production migration 的起點沒有 Item durability columns 或 Expired rows。
 
 - Schema 目前直接寫在 `NewStore`，沒有編號 migration 檔案或 schema version table。
 - 到期的 `oauth_attempts` 與 `sessions` 會被讀取流程拒絕，但目前沒有自動刪除工作。
-- Foreign key 沒有 `ON DELETE CASCADE`。刪除仍被 reference 的 identity 會失敗。
+- 只有 `building_extensions.building_id` 使用 `ON DELETE CASCADE`。其他 foreign key 沒有 cascade。刪除仍被 reference 的 identity 會失敗。
 - Production 必須維持單一 Fly.io Machine。多 process 寫入不在目前 SQLite concurrency scope。
