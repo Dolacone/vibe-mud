@@ -1851,6 +1851,7 @@ func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
 func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)
+	store.essenceRoll = func() int { return 10000 }
 	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-convert", "person@example.com", "Person")
 	if err != nil {
 		t.Fatal(err)
