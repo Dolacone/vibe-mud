@@ -30,7 +30,6 @@ source_paths:
   - web/src/auth.ts
   - web/src/App.tsx
   - web/src/auth.test.ts
-  - docs/terminology.md
 req_ref: [REQ-008, REQ-010, REQ-011, REQ-014, REQ-015, REQ-016, REQ-017]
 base_branch: main
 scope: "Tracks configurable Convert methods, the generic Building extension lifecycle, and Sawmill T1."
@@ -153,8 +152,8 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Major] 超過 method capacity 的 Convert 會回傳 500。後端未把 `ErrInvalidArgument` 映射為無效 action 回應。
 - [x] [Major] `install-extension` 缺少 `slot_index` 時仍使用預設值 0。無效 payload 可以消耗 Package 並安裝 extension。
 - [x] [Major] 前端向非 owner 顯示拆除控制，也向 Disabled Building 顯示安裝與施工控制。這些不是玩家可用操作。
-- [ ] [Minor] `source_paths` 仍重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單精確唯一匹配。
-- [ ] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
+- [x] [Minor] `source_paths` 仍重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單精確唯一匹配。
+- [x] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
 - [ ] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
 
 ## Plan Review Issues
