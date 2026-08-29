@@ -246,6 +246,21 @@ describe("App", () => {
     expect(screen.queryByText("Hand Wood Convert")).not.toBeInTheDocument();
   });
 
+  it("renders and submits a backend-returned legacy conversion when no methods are returned", async () => {
+    const legacyState = { ...campState, conversion_methods: [] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...legacyState } });
+    convert.mockResolvedValue({ status: "success", ...legacyState, ap: 2999 });
+    render(<App />);
+
+    const convertTable = await screen.findByRole("table", { name: "Convert" });
+    expect(convertTable).toHaveTextContent("1 Wood");
+    expect(within(convertTable).getByRole("button", { name: "Convert" })).toBeEnabled();
+
+    within(convertTable).getByRole("button", { name: "Convert" }).click();
+    await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
+    expect(convert).toHaveBeenCalledWith(fetch);
+  });
+
   it("shows carrying weight and threshold so players can judge movement availability", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, carried_weight: 1000 } });
     render(<App />);

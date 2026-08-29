@@ -66,6 +66,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const handleGather = () => runAction("gather", gather, applyPlayerActionResult);
 
   const handleConvert = (methodID: string, quantity: number, providerID?: number) => runAction("convert", () => convert(methodID, quantity, providerID), applyPlayerActionResult);
+  const handleLegacyConvert = () => runAction("convert", () => convert(fetch), applyPlayerActionResult);
   const handleInstall = (buildingID: number, slotIndex: number, definitionID: string) => runAction("install-extension", () => installExtension({ building_id: buildingID, slot_index: slotIndex, definition_id: definitionID }), applyBuildingResult);
 
   const handleCraft = (recipeID: string) => runAction("craft", () => craft(recipeID), applyPlayerActionResult);
@@ -182,7 +183,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <TableScroll>
           <table aria-label="Convert">
             <thead><tr><th scope="col">Method</th><th scope="col">Cost</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Essence chance</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("convert") || (currentUser.conversion_methods ?? []).length === 0 ? <EmptyRow colSpan={6}>No conversion action available.</EmptyRow> : (currentUser.conversion_methods ?? []).map((method) => <ConversionRow key={method.id} method={method} buildings={currentUser.buildings} disabled={actionPendingNow} onSubmit={(quantity, providerID) => void handleConvert(method.id, quantity, providerID)} />)}</tbody>
+            <tbody>{!hasAction("convert") || ((currentUser.conversion_methods ?? []).length === 0 && currentUser.conversion_option === null) ? <EmptyRow colSpan={6}>No conversion action available.</EmptyRow> : (currentUser.conversion_methods ?? []).length > 0 ? (currentUser.conversion_methods ?? []).map((method) => <ConversionRow key={method.id} method={method} buildings={currentUser.buildings} disabled={actionPendingNow} onSubmit={(quantity, providerID) => void handleConvert(method.id, quantity, providerID)} />) : <LegacyConversionRow option={currentUser.conversion_option!} disabled={actionPendingNow} onSubmit={() => void handleLegacyConvert()} />}</tbody>
           </table>
         </TableScroll>
         {action.status === "success" && actionKind === "convert" && <><p role="status">Convert succeeded.</p><p role="status">Essence: {"essence_quantity" in action ? action.essence_quantity ?? 0 : 0}</p></>}
@@ -286,6 +287,10 @@ function ConversionRow({ method, buildings, disabled, onSubmit }: { method: impo
   const providerRequired = method.provider_extension_ids.length > 0;
   const providers = (buildings ?? []).flatMap((building) => (building.extensions ?? []).filter((extension) => method.provider_extension_ids.includes(extension.id)));
   return <tr><th scope="row">{method.display_name}</th><td>{method.ap_cost} AP</td><td>{method.input.display_name}, max {method.max_input_quantity}</td><td>{method.resource_quantity_per_input} {method.output_resource.display_name}</td><td>{method.essence_item?.display_name ?? "None"}: {method.essence_chance_bps / 100}%</td><td><input aria-label={`Quantity for ${method.display_name}`} type="number" min="1" max={method.max_input_quantity} step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled} />{providerRequired && <select aria-label={`Provider for ${method.display_name}`} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled}><option value="">Select provider</option>{providers.map((extension) => <option key={extension.id} value={extension.id}>{extension.display_name} T{extension.tier}</option>)}</select>}<button type="button" onClick={() => valid && (!providerRequired || provider !== "") && onSubmit(parsed, provider ? Number(provider) : undefined)} disabled={disabled || !valid || (providerRequired && provider === "")}>{disabled ? "Converting..." : "Convert"}</button></td></tr>;
+}
+
+function LegacyConversionRow({ option, disabled, onSubmit }: { option: NonNullable<CurrentUser["conversion_option"]>; disabled: boolean; onSubmit: () => void }) {
+  return <tr><th scope="row">{option.item.display_name} to {option.resource.display_name}</th><td>{option.ap_cost} AP</td><td>{option.input_quantity} {option.item.display_name}</td><td>{option.resource_yield} {option.resource.display_name}</td><td>None</td><td><button type="button" onClick={onSubmit} disabled={disabled}>{disabled ? "Converting..." : "Convert"}</button></td></tr>;
 }
 
 function BuildingContribution({ buildingID, disabled, onSubmit }: { buildingID: number; disabled: boolean; onSubmit: (ap: number) => void }) {
