@@ -561,7 +561,7 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
-	if errors.Is(err, ErrExtensionNotFound) || errors.Is(err, ErrBuildingRemote) || errors.Is(err, ErrBuildingDisabled) {
+	if errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrExtensionNotFound) || errors.Is(err, ErrBuildingRemote) || errors.Is(err, ErrBuildingDisabled) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
@@ -700,7 +700,7 @@ type extensionIDRequest struct {
 }
 
 func (s *Server) installExtension(w http.ResponseWriter, r *http.Request) {
-	s.extensionAction(w, r, "install-extension", func(userID int64) (PlayerState, error) {
+	s.extensionActionWithMeta(w, r, "install-extension", 0, 0, 0, func(userID int64) (PlayerState, error) {
 		request, reason := decodeInstallExtensionRequest(r.Body)
 		if reason != "" {
 			return PlayerState{}, fmt.Errorf("%s", reason)
@@ -730,14 +730,24 @@ func (s *Server) removeExtension(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) extensionAction(w http.ResponseWriter, r *http.Request, action string, execute func(int64) (PlayerState, error)) {
+	s.extensionActionWithMeta(w, r, action, 0, 0, 0, execute)
+}
+
+func (s *Server) extensionActionWithMeta(w http.ResponseWriter, r *http.Request, action string, buildingID, extensionID int64, ap int, execute func(int64) (PlayerState, error)) {
 	session, err := s.authenticatedSession(r)
 	if err != nil {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	state, err := execute(session.UserID)
+	if buildingID == 0 && len(state.Buildings) > 0 {
+		buildingID = state.Buildings[len(state.Buildings)-1].ID
+	}
+	if extensionID == 0 && len(state.Buildings) > 0 && len(state.Buildings[len(state.Buildings)-1].Extensions) > 0 {
+		extensionID = state.Buildings[len(state.Buildings)-1].Extensions[len(state.Buildings[len(state.Buildings)-1].Extensions)-1].ID
+	}
 	if err != nil {
-		s.logExtensionAction(r, session.UserID, action, 0, 0, 0, "error")
+		s.logExtensionAction(r, session.UserID, action, buildingID, extensionID, ap, "error")
 		current, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
@@ -746,17 +756,19 @@ func (s *Server) extensionAction(w http.ResponseWriter, r *http.Request, action 
 		s.writeJSON(w, http.StatusConflict, extensionActionResponse{Error: "invalid action", playerStateResponse: s.playerStateResponse(r, session.UserID, current)})
 		return
 	}
-	s.logExtensionAction(r, session.UserID, action, 0, 0, 0, "success")
+	s.logExtensionAction(r, session.UserID, action, buildingID, extensionID, ap, "success")
 	s.writeJSON(w, http.StatusOK, extensionActionResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
 func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, string) {
 	var value installExtensionRequest
+	seenSlot := false
 	if err := decodeStrictFields(body, map[string]bool{"building_id": true, "slot_index": true, "definition_id": true}, func(field string, decoder *json.Decoder) error {
 		switch field {
 		case "building_id":
 			return decoder.Decode(&value.BuildingID)
 		case "slot_index":
+			seenSlot = true
 			return decoder.Decode(&value.SlotIndex)
 		case "definition_id":
 			return decoder.Decode(&value.DefinitionID)
@@ -765,7 +777,7 @@ func decodeInstallExtensionRequest(body io.Reader) (installExtensionRequest, str
 	}); err != nil {
 		return value, convertReasonInvalidJSON
 	}
-	if value.BuildingID <= 0 || value.SlotIndex < 0 || strings.TrimSpace(value.DefinitionID) == "" {
+	if !seenSlot || value.BuildingID <= 0 || value.SlotIndex < 0 || strings.TrimSpace(value.DefinitionID) == "" {
 		return value, convertReasonInvalidQuantity
 	}
 	return value, ""
