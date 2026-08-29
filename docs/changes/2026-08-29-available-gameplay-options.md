@@ -9,6 +9,7 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/server_test.go
   - docs/architecture.md
+  - docs/changes/2026-08-29-available-gameplay-options.md
   - web/src/App.tsx
   - web/src/App.test.tsx
   - web/src/auth.ts
@@ -71,7 +72,7 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
 
 ## Review Issues
 
-- [ ] [Major] The full Go suite fails `TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState`, `TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState`, and `TestRestInsufficientAPReturnsConflictWithoutChangingState` under `go test -ldflags=-linkmode=external ./...`.
+- [x] [Major] The full Go suite failed three stale tests: `TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState` assumed action ordering, `TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState` expected consumed recipes to remain available, and `TestRestInsufficientAPReturnsConflictWithoutChangingState` expected a partial error response. Tests now assert unordered availability, post-mutation filtering, and the complete authoritative state response.
 - [ ] [Major] The frontend hides a backend-returned legacy Convert option when `conversion_option` is available but `conversion_methods` is empty. The backend returns `convert` for that state, while `App.tsx` renders no control unless a method exists.
 - [ ] [Major] A remote owned extension is omitted from the current-Location response but remains removable by direct submission. `RemoveExtension` checks ownership only, then deletes the extension without checking the player's current Location.
 - [ ] [Major] `source_paths` does not match `main...HEAD`. The actual 27-file diff includes the earlier sawmill change, schema and terminology documents, store tests, changelog, and requirement files beyond the declared eight paths.

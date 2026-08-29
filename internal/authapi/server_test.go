@@ -185,7 +185,10 @@ func TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState(t *testi
 		t.Fatalf("extension definitions = %+v, want only the package-backed definition", filtered.BuildingExtensionDefinitions)
 	}
 	wantActions := []string{"rest", "move", "gather", "convert", "craft", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"}
-	if !reflect.DeepEqual(availability.Actions, wantActions) {
+	gotActions := append([]string(nil), availability.Actions...)
+	sort.Strings(gotActions)
+	sort.Strings(wantActions)
+	if !reflect.DeepEqual(gotActions, wantActions) {
 		t.Fatalf("available actions = %v, want %v", availability.Actions, wantActions)
 	}
 	if !reflect.DeepEqual(availability.BuildingActions[1], []string{"contribute-construction"}) || !reflect.DeepEqual(availability.BuildingActions[2], []string{"repair-building", "install-extension"}) {
@@ -1577,8 +1580,12 @@ func TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-10) || len(body["crafting_recipes"].([]any)) != 2 {
+	if body["ap"] != float64(maxAP-10) {
 		t.Fatalf("craft response state = %#v", body)
+	}
+	craftingRecipes, ok := body["crafting_recipes"].([]any)
+	if !ok || len(craftingRecipes) != 0 {
+		t.Fatalf("craft response recipes = %#v, want no recipes after consuming all inputs", body["crafting_recipes"])
 	}
 	inventory, ok := body["inventory"].([]any)
 	if !ok || len(inventory) != 1 || inventory[0].(map[string]any)["quantity"] != float64(1) {
@@ -2328,8 +2335,12 @@ func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) != 2 || body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
+	if body["error"] != ErrInsufficientAP.Error() || body["ap"] != float64(0) {
 		t.Fatalf("insufficient AP JSON = %#v", body)
+	}
+	availableActions, ok := body["available_actions"].([]any)
+	if !ok || len(availableActions) != 0 {
+		t.Fatalf("insufficient AP available actions = %#v, want none", body["available_actions"])
 	}
 	var after int64
 	if err := store.db.QueryRow("SELECT full_timestamp FROM player_ap WHERE user_id = ?", identity.ID).Scan(&after); err != nil {
