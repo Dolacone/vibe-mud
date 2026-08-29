@@ -7,6 +7,7 @@ last_reviewed: 2026-08-29
 source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server_test.go
   - docs/schemas.md
 req_ref: [REQ-008, REQ-010, REQ-011, REQ-014, REQ-015, REQ-016, REQ-017]
 base_branch: main

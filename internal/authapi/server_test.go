@@ -497,8 +497,23 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me buildings = %#v", meBody["buildings"])
 	}
 	recipes, ok := meBody["crafting_recipes"].([]any)
-	if !ok || len(recipes) != 1 {
+	if !ok || len(recipes) != 2 {
 		t.Fatalf("GET /api/me crafting recipes = %#v", meBody["crafting_recipes"])
+	}
+	recipeIDs := make(map[string]bool, len(recipes))
+	for _, rawRecipe := range recipes {
+		recipe, ok := rawRecipe.(map[string]any)
+		if !ok {
+			t.Fatalf("GET /api/me crafting recipe = %#v", rawRecipe)
+		}
+		id, ok := recipe["id"].(string)
+		if !ok {
+			t.Fatalf("GET /api/me crafting recipe ID = %#v", recipe)
+		}
+		recipeIDs[id] = true
+	}
+	if !recipeIDs["wood_component"] || !recipeIDs["sawmill_package_t1"] {
+		t.Fatalf("GET /api/me seeded crafting recipes = %#v", recipeIDs)
 	}
 	resources := responseResourceQuantities(t, meBody)
 	if len(resources) != 8 {
@@ -1383,7 +1398,7 @@ func TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ap"] != float64(maxAP-10) || len(body["crafting_recipes"].([]any)) != 1 {
+	if body["ap"] != float64(maxAP-10) || len(body["crafting_recipes"].([]any)) != 2 {
 		t.Fatalf("craft response state = %#v", body)
 	}
 	inventory, ok := body["inventory"].([]any)
