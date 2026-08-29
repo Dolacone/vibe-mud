@@ -541,7 +541,12 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	state, err := s.store.Convert(session.UserID, request.MethodID, request.Quantity, request.ProviderExtensionID)
+	var state PlayerState
+	if request.Legacy {
+		state, err = s.store.Convert(session.UserID)
+	} else {
+		state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, request.ProviderExtensionID)
+	}
 	if errors.Is(err, ErrInsufficientAP) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
@@ -1462,6 +1467,7 @@ type convertRequest struct {
 	MethodID            string
 	Quantity            int
 	ProviderExtensionID int64
+	Legacy              bool
 }
 
 func decodeConvertRequest(body io.Reader) (convertRequest, string) {
@@ -1518,6 +1524,9 @@ func decodeConvertRequest(body io.Reader) (convertRequest, string) {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return convertRequest{}, convertReasonExtraValue
+	}
+	if len(seen) == 0 {
+		return convertRequest{Legacy: true}, ""
 	}
 	if !seen["method_id"] || strings.TrimSpace(request.MethodID) == "" || !seen["quantity"] || request.Quantity <= 0 {
 		return convertRequest{}, convertReasonInvalidQuantity

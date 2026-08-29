@@ -27,9 +27,18 @@ func sortedMapKeys(values map[string]any) []string {
 }
 
 func TestDecodeConvertRequestStrictContract(t *testing.T) {
+	legacy, reason := decodeConvertRequest(strings.NewReader(`{}`))
+	if reason != "" || !legacy.Legacy || legacy.MethodID != "" || legacy.Quantity != 0 {
+		t.Fatalf("legacy convert request = %#v, %q", legacy, reason)
+	}
 	request, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2}`))
 	if reason != "" || request.MethodID != "hand_wood_t1" || request.Quantity != 2 {
 		t.Fatalf("valid convert request = %#v, %q", request, reason)
+	}
+	for _, body := range []string{`{"method_id":"hand_wood_t1"}`, `{"quantity":2}`, `{"provider_extension_id":7}`} {
+		if _, reason := decodeConvertRequest(strings.NewReader(body)); reason != convertReasonInvalidQuantity {
+			t.Fatalf("partial convert request %s reason = %q", body, reason)
+		}
 	}
 	if _, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2,"secret":"x"}`)); reason != convertReasonUnknownField {
 		t.Fatalf("unknown field reason = %q", reason)
@@ -1898,6 +1907,52 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	persistedResources := responseResourceQuantities(t, persistedBody)
 	if persistedResources["wood"] != float64(1) {
 		t.Fatalf("GET /api/me persisted Wood quantity = %v, want 1", persistedResources["wood"])
+	}
+}
+
+func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-legacy-convert", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)", identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{}`))
+	request.Header.Set("X-Request-ID", "legacy-convert-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("legacy convert status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP-1) || body["error"] != nil {
+		t.Fatalf("legacy convert response = %#v", body)
+	}
+	if resources := responseResourceQuantities(t, body); len(resources) != 8 || resources["wood"] != 1 {
+		t.Fatalf("legacy convert resources = %#v", resources)
+	}
+	if inventory, ok := body["inventory"].([]any); !ok || len(inventory) != 0 {
+		t.Fatalf("legacy convert inventory = %#v", body["inventory"])
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=convert outcome=success request_id=legacy-convert-request") {
+		t.Fatalf("legacy convert log = %q", logOutput)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP-1 || playerResourceQuantity(state, "wood") != 1 || len(state.Inventory) != 0 {
+		t.Fatalf("legacy convert persisted state = %+v", state)
 	}
 }
 
