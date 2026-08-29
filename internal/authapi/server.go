@@ -2087,7 +2087,7 @@ func appendUnique(values []string, value string) []string {
 func buildingExtensionDefinitionResponsesFromStore(definitions []BuildingExtensionDefinition, targets map[string][]extensionInstallationTargetResponse) []buildingExtensionDefinitionResponse {
 	responses := make([]buildingExtensionDefinitionResponse, 0, len(definitions))
 	for _, definition := range definitions {
-		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponse{ID: definition.PackageItem.ID, DisplayName: definition.PackageItem.DisplayName}, RequiredAP: definition.RequiredAP, InstallationTargets: targets[definition.ID]})
+		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponseFromStore(definition.PackageItem), RequiredAP: definition.RequiredAP, InstallationTargets: targets[definition.ID]})
 	}
 	return responses
 }
@@ -2097,10 +2097,10 @@ func conversionMethodResponsesFromStore(methods []ConversionMethod, providers ma
 	for _, method := range methods {
 		var essence *itemResponse
 		if method.EssenceItem != nil {
-			value := itemResponse{ID: method.EssenceItem.ID, DisplayName: method.EssenceItem.DisplayName}
+			value := itemResponseFromStore(*method.EssenceItem)
 			essence = &value
 		}
-		responses = append(responses, conversionMethodResponse{ID: method.ID, DisplayName: method.DisplayName, APCost: method.APCost, Input: itemResponse{ID: method.Input.ID, DisplayName: method.Input.DisplayName}, MaxInputQuantity: method.MaxInputQuantity, OutputResource: itemResponse{ID: method.OutputResource.ID, DisplayName: method.OutputResource.DisplayName}, ResourceQuantityPerInput: method.ResourceQuantityPerInput, EssenceItem: essence, EssenceChanceBPS: method.EssenceChanceBPS, EssenceQuantity: method.EssenceQuantity, ProviderExtensionIDs: providers[method.ID]})
+		responses = append(responses, conversionMethodResponse{ID: method.ID, DisplayName: method.DisplayName, APCost: method.APCost, Input: itemResponseFromStore(method.Input), MaxInputQuantity: method.MaxInputQuantity, OutputResource: itemResponse{ID: method.OutputResource.ID, DisplayName: method.OutputResource.DisplayName}, ResourceQuantityPerInput: method.ResourceQuantityPerInput, EssenceItem: essence, EssenceChanceBPS: method.EssenceChanceBPS, EssenceQuantity: method.EssenceQuantity, ProviderExtensionIDs: providers[method.ID]})
 	}
 	return responses
 }
@@ -2137,10 +2137,14 @@ func roundedUpDurabilityPercentage(remaining, maximum int) int {
 	return percentage
 }
 
+func itemResponseFromStore(item Item) itemResponse {
+	return itemResponse{ID: item.ID, DisplayName: item.DisplayName}
+}
+
 func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
 	responses := make([]groundItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, groundItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
+		responses = append(responses, groundItemResponse{Item: itemResponseFromStore(item.Item), Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
 	}
 	return responses
 }
@@ -2232,7 +2236,7 @@ func buildingRecipeResponseFromStore(recipe BuildingRecipe) buildingRecipeRespon
 	itemInputs := make([]buildingItemInputResponse, 0, len(recipe.ItemInputs))
 	for _, input := range recipe.ItemInputs {
 		itemInputs = append(itemInputs, buildingItemInputResponse{
-			Item:     itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName},
+			Item:     itemResponseFromStore(input.Item),
 			Quantity: input.Quantity,
 		})
 	}
@@ -2299,14 +2303,14 @@ func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipe
 		itemInputs := make([]craftingItemInputResponse, 0, len(recipe.ItemInputs))
 		for _, input := range recipe.ItemInputs {
 			itemInputs = append(itemInputs, craftingItemInputResponse{
-				Item:     itemResponse{ID: input.Item.ID, DisplayName: input.Item.DisplayName},
+				Item:     itemResponseFromStore(input.Item),
 				Quantity: input.Quantity,
 			})
 		}
 		responses = append(responses, craftingRecipeResponse{
 			ID: recipe.ID, DisplayName: recipe.DisplayName, BaseAPCost: recipe.BaseAPCost,
 			ResourceInputs: resourceInputs, ItemInputs: itemInputs,
-			Output:         itemResponse{ID: recipe.Output.ID, DisplayName: recipe.Output.DisplayName},
+			Output:         itemResponseFromStore(recipe.Output),
 			OutputQuantity: recipe.OutputQuantity,
 		})
 	}
@@ -2316,7 +2320,7 @@ func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipe
 func inventoryResponsesFromStore(items []InventoryItem) []inventoryItemResponse {
 	responses := make([]inventoryItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
+		responses = append(responses, inventoryItemResponse{Item: itemResponseFromStore(item.Item), Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
 	}
 	return responses
 }
@@ -2326,7 +2330,7 @@ func gatheringOptionResponseFromStore(option *GatheringOption) *gatheringOptionR
 		return nil
 	}
 	return &gatheringOptionResponse{
-		Item:     itemResponse{ID: option.Item.ID, DisplayName: option.Item.DisplayName},
+		Item:     itemResponseFromStore(option.Item),
 		Quantity: option.Quantity,
 		APCost:   option.APCost,
 	}
@@ -2345,7 +2349,7 @@ func conversionOptionResponseFromStore(option *ConversionOption) *conversionOpti
 		return nil
 	}
 	return &conversionOptionResponse{
-		Item:          itemResponse{ID: option.Item.ID, DisplayName: option.Item.DisplayName},
+		Item:          itemResponseFromStore(option.Item),
 		Resource:      itemResponse{ID: option.Resource.ID, DisplayName: option.Resource.DisplayName},
 		InputQuantity: option.InputQuantity,
 		ResourceYield: option.ResourceYield,
