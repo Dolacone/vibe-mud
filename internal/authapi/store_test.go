@@ -680,12 +680,13 @@ func TestDisabledBuildingBlocksExtensionProgressUntilRepairAndRemovalDoesNotRefu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`
-INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
-VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
-INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity)
-VALUES (?, 'sawmill_package_t1', 'active', ?, 1);
-INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1);`, owner.ID, now.Add(-time.Second).Unix(), owner.ID, now.Add(time.Hour).Unix(), owner.ID); err != nil {
+	if _, err := db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?)`, owner.ID, now.Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'sawmill_package_t1', 'active', ?, 1)`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 1)`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.InstallExtension(owner.ID, 1, 0, "sawmill_t1"); !errors.Is(err, ErrBuildingDisabled) {
