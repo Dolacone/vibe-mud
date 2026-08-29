@@ -1,7 +1,7 @@
 ---
 title: "Architecture"
 doc_type: architecture
-last_reviewed: 2026-08-28
+last_reviewed: 2026-08-29
 source_paths:
   - Dockerfile
   - cmd/server
@@ -35,13 +35,13 @@ Google login starts at `GET /auth/google/login` and returns through `GET /auth/g
 
 `GET /api/me` returns identity, AP, location, allowed Routes, available action options, recipes, current-Location Buildings, Inventory, all eight typed Resource quantities, nonzero public ground holdings, derived carrying weight, and the movement weight threshold. Game actions use dedicated endpoints under `/api/actions/*`.
 
-Pickup and Drop are AP-free Transfers under `/api/transfers/*`, not Actions. The browser submits an asset type, asset identifier, and positive quantity without a Location. The backend derives the player's current Location and atomically moves Item or Resource quantity between player holdings and public ground holdings. Ground capacity is unlimited and has no owner, access control, reservation, or history.
+Pickup and Drop are AP-free Transfers under `/api/transfers/*`, not Actions. Item Transfers submit `item_status` to distinguish Active and Expired stacks. Active and Expired Items can be dropped, but only Active Items can be picked up. Resource Transfers do not submit Item status. The backend derives the player's current Location and atomically moves quantity between player holdings and public ground holdings.
 
 AP persistence stores only the timestamp when the player will reach full AP. The backend derives current AP from its clock, caps it at 3000, and advances the timestamp when an action spends AP. No scheduler updates AP values.
 
 Movement starts at `camp`. The backend resolves a submitted target against directed Routes stored in SQLite. Players can hold more than the 1000-unit movement weight threshold, but cannot move until their derived carrying weight returns to 1000 or less. A successful move updates AP and location in one transaction. Invalid Action, target, JSON input, or overweight state leaves AP and location unchanged and produces a sanitized error outcome log.
 
-Gathering is available only when the current Location has a backend-owned gathering rule. The frontend submits `{}` and cannot submit an item, quantity, cost, or location. A successful gather updates AP and Inventory quantity in one transaction.
+Gathering is available only when the current Location has a backend-owned gathering rule. The frontend submits `{}` and cannot submit an item, quantity, cost, or location. A successful gather updates AP and adds a full-durability Item to Inventory in one transaction.
 
 Conversion is available only when the current Location has a backend-owned conversion rule. The frontend submits `{}` and cannot submit gameplay values. A successful convert consumes AP and Inventory quantity, then increases the rule's typed Resource quantity in one transaction. The current rule produces Wood Resource.
 
@@ -49,6 +49,8 @@ Crafting recipes are available at every Location. Each backend-owned recipe defi
 
 Building recipes are Location-independent. `POST /api/actions/build` starts a Building at the player's current Location from a submitted `recipe_id`. `POST /api/actions/contribute-construction` lets a player at that Location submit a Building ID and positive AP. The Building Lv1 recipe consumes one Wood Component and 10 Wood Resource, then creates an in-progress Building with a 60 AP requirement snapshot. A contribution consumes no more than the remaining requirement. Completion exposes one empty extension slot and starts a seven-day durability expiry.
 
-The backend derives Building durability from its UTC Unix seconds clock. Completed Buildings are Active before expiry and Disabled for three days after expiry. State reads, builds, construction contributions, and repairs delete Buildings beyond that window. `POST /api/actions/repair-building` accepts only a Building ID. It lets any player at the Building's Location spend 10 AP and one Wood Resource. Repair extends durability by at most one hour and clamps expiry to seven days from the repair time. Building responses expose the maximum duration plus nullable derived status and remaining seconds. Under-construction Buildings use null durability fields. Destroyed Buildings are absent.
+The backend derives Building durability from its UTC Unix seconds clock. Completed Buildings are Active before expiry and Disabled for seven days after expiry. State reads, builds, construction contributions, and repairs delete Buildings beyond that window. `POST /api/actions/repair-building` accepts only a Building ID. It lets any player at the Building's Location spend 10 AP and one Wood Resource. Repair extends durability by at most one hour and clamps expiry to seven days from the repair time.
+
+Each Item definition supplies a durability limit. The current test setting gives every Item one hour of Active durability. Inventory and ground holdings keep separate Active and Expired stacks. Active stacks merge by quantity-weighted remaining time. Expired stacks retain the latest deletion time when merged. Expired Items remain visible for one day, count toward carrying weight, can be dropped, and cannot be picked up or consumed.
 
 See [SQLite Schemas](schemas.md) for data structures and [Behavior Index](../requirements/BEHAVIOR.md) for agreed behavior.

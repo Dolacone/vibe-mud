@@ -2254,7 +2254,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		t.Fatal(err)
 	}
 	handler := server.Routes()
-	request := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(`{"asset_type":"item","asset_id":"wood","quantity":2}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/transfers/drop", strings.NewReader(`{"asset_type":"item","asset_id":"wood","quantity":2,"item_status":"active"}`))
 	request.Header.Set("X-Request-ID", "ground-drop-request")
 	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	response := httptest.NewRecorder()
@@ -2277,7 +2277,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		t.Fatalf("ground item response = %#v", body["ground_items"])
 	}
 	groundItem := groundItems[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"item", "quantity"}) || groundItem["quantity"] != float64(2) {
+	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(expectedItemDurabilitySeconds) || groundItem["retention_remaining_seconds"] != nil {
 		t.Fatalf("ground item shape = %#v", groundItem)
 	}
 	item := groundItem["item"].(map[string]any)
@@ -2346,6 +2346,9 @@ func TestGroundTransferAPIRejectsStrictInputAndReturnsAuthoritativeState(t *test
 		{"missing quantity", `{"asset_type":"item","asset_id":"wood"}`, transferReasonMissingQuantity},
 		{"invalid quantity", `{"asset_type":"item","asset_id":"wood","quantity":0}`, transferReasonInvalidQuantity},
 		{"fraction quantity", `{"asset_type":"item","asset_id":"wood","quantity":1.5}`, transferReasonInvalidQuantity},
+		{"missing item status", `{"asset_type":"item","asset_id":"wood","quantity":1}`, transferReasonMissingItemStatus},
+		{"invalid item status", `{"asset_type":"item","asset_id":"wood","quantity":1,"item_status":"stale"}`, transferReasonInvalidItemStatus},
+		{"resource item status", `{"asset_type":"resource","asset_id":"wood","quantity":1,"item_status":"active"}`, transferReasonResourceItemStatus},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2416,8 +2419,8 @@ func TestGroundTransferAPIDomainFailuresAndAuthenticationContract(t *testing.T) 
 		name, body, reason string
 		status             int
 	}{
-		{"unknown asset", `{"asset_type":"item","asset_id":"unknown","quantity":1}`, "unknown_asset", http.StatusBadRequest},
-		{"insufficient source", `{"asset_type":"item","asset_id":"wood","quantity":2}`, "insufficient_source", http.StatusConflict},
+		{"unknown asset", `{"asset_type":"item","asset_id":"unknown","quantity":1,"item_status":"active"}`, "unknown_asset", http.StatusBadRequest},
+		{"insufficient source", `{"asset_type":"item","asset_id":"wood","quantity":2,"item_status":"active"}`, "insufficient_source", http.StatusConflict},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			requestID := "ground-domain-" + strings.ReplaceAll(test.name, " ", "-")
@@ -2458,5 +2461,76 @@ func TestGroundTransferAPIDomainFailuresAndAuthenticationContract(t *testing.T) 
 	}
 	if len(body) != 1 || body["error"] != "authentication required" {
 		t.Fatalf("unauthenticated transfer body = %#v", body)
+	}
+}
+
+func TestItemDurabilityAPIExposesStatesAndRejectsExpiredPickup(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-api", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'wood', 'active', ?, 2), (?, 'wood', 'expired', ?, 3);
+INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'wood', 'active', ?, 4), ('camp', 'wood', 'expired', ?, 5)`, identity.ID, now.Add(time.Hour).Unix(), identity.ID, now.Add(2*time.Hour).Unix(), now.Add(3*time.Hour).Unix(), now.Add(4*time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	request.Header.Set("X-Request-ID", "item-state-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("state status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	inventory := body["inventory"].([]any)
+	if len(inventory) != 2 {
+		t.Fatalf("inventory rows = %#v", inventory)
+	}
+	active := inventory[0].(map[string]any)
+	expired := inventory[1].(map[string]any)
+	if active["durability_status"] != "active" || active["durability_remaining_seconds"] != float64(expectedItemDurabilitySeconds) || active["retention_remaining_seconds"] != nil {
+		t.Fatalf("active durability = %#v", active)
+	}
+	if expired["durability_status"] != "expired" || expired["durability_remaining_seconds"] != nil || expired["retention_remaining_seconds"] != float64(7200) {
+		t.Fatalf("expired durability = %#v", expired)
+	}
+	if !strings.Contains(logOutput, "action=item_durability_calculation outcome=success") || !strings.Contains(logOutput, "durability_status=expired") || !strings.Contains(logOutput, "request_id=item-state-request") {
+		t.Fatalf("durability log = %q", logOutput)
+	}
+
+	pickup := httptest.NewRequest(http.MethodPost, "/api/transfers/pickup", strings.NewReader(`{"asset_type":"item","asset_id":"wood","quantity":1,"item_status":"expired"}`))
+	pickup.Header.Set("X-Request-ID", "expired-pickup-request")
+	pickup.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	pickupResponse := httptest.NewRecorder()
+	pickupLog := captureStdout(t, func() { server.Routes().ServeHTTP(pickupResponse, pickup) })
+	if pickupResponse.Code != http.StatusConflict {
+		t.Fatalf("expired pickup status = %d: %s", pickupResponse.Code, pickupResponse.Body.String())
+	}
+	var pickupBody map[string]any
+	if err := json.Unmarshal(pickupResponse.Body.Bytes(), &pickupBody); err != nil {
+		t.Fatal(err)
+	}
+	if pickupBody["inventory"] == nil || pickupBody["ground_items"] == nil || !strings.Contains(pickupLog, "reason=expired_item") || !strings.Contains(pickupLog, "item_status=expired") {
+		t.Fatalf("expired pickup state/log = %#v/%q", pickupBody, pickupLog)
+	}
+	if _, err := store.db.Exec(`UPDATE player_inventory SET status_expires_at = ? WHERE user_id = ? AND item_id = 'wood' AND durability_status = 'expired'`, now.Add(-itemExpiredRetention-time.Second).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleanupRequest := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	cleanupRequest.Header.Set("X-Request-ID", "item-cleanup-request")
+	cleanupRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	cleanupResponse := httptest.NewRecorder()
+	cleanupLog := captureStdout(t, func() { server.Routes().ServeHTTP(cleanupResponse, cleanupRequest) })
+	if cleanupResponse.Code != http.StatusOK || !strings.Contains(cleanupLog, "action=item_durability_cleanup outcome=success") || !strings.Contains(cleanupLog, "cleanup_action=deleted") || !strings.Contains(cleanupLog, "request_id=item-cleanup-request") {
+		t.Fatalf("cleanup status/log = %d/%q", cleanupResponse.Code, cleanupLog)
 	}
 }

@@ -1,7 +1,7 @@
 ---
 title: "SQLite Schemas"
 doc_type: schema
-last_reviewed: 2026-08-28
+last_reviewed: 2026-08-29
 source_paths:
   - internal/authapi/store.go
 ---
@@ -36,13 +36,13 @@ source_paths:
 | `locations` | 保存後端允許的位置。 | Store 初始化時建立固定 seed。 | 它定義位置，不保存玩家狀態。 |
 | `routes` | 保存後端允許的有向 Route 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義兩個位置間的通行規則，不保存玩家移動紀錄。 |
 | `player_locations` | 保存每位玩家的目前位置。 | 身分建立時建立，移動成功時更新。 | 它只保存目前狀態，不保存歷史軌跡。 |
-| `items` | 保存後端允許的 item 定義與單位重量。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
+| `items` | 保存後端允許的 item 定義、單位重量與耐久上限。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
 | `gathering_rules` | 保存 Location 可產出的 item、quantity 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義取得規則，不保存玩家執行紀錄。 |
-| `player_inventory` | 保存每位玩家持有的 item quantity。 | 首次取得 item 時建立，後續取得時累加。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
+| `player_inventory` | 保存每位玩家的 Active 與 Expired item 堆疊。 | 取得、合併、失效、Drop 或保留期結束時更新。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
 | `resource_types` | 保存後端允許的 Resource type 與單位重量。 | Store 初始化時建立固定 seed。 | 它定義 Resource，不保存玩家 quantity。 |
 | `conversion_rules` | 保存 Location 可轉換的 item、typed Resource 產量與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義轉換規則，不保存玩家執行紀錄。 |
 | `player_resources` | 保存每位玩家每種 Resource 的 quantity。 | 首次取得該 Resource 時建立，後續取得時累加。 | 它保存 typed quantity，不是 Inventory item quantity。 |
-| `ground_items` | 保存每個 Location 的公共 Item quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它沒有玩家 owner，也不是玩家 Inventory。 |
+| `ground_items` | 保存每個 Location 的公共 Active 與 Expired Item 堆疊。 | Drop、Pickup、失效或保留期結束時更新。 | 它沒有玩家 owner，也不是玩家 Inventory。 |
 | `ground_resources` | 保存每個 Location 的公共 Resource quantity。 | 首次 Drop 時建立，Pickup 至 0 時刪除。 | 它保存 Resource，不把 Resource 轉成 Item。 |
 | `crafting_recipes` | 保存後端允許的 recipe、基本 AP 成本與明確 output。 | Store 初始化時建立固定 seed。 | 它定義 recipe header，不保存 inputs 或玩家執行紀錄。 |
 | `crafting_recipe_resource_inputs` | 保存每個 recipe 消耗的 Resource inputs。 | Recipe seed 建立時加入。 | 它保存 Resource 成本，不保存玩家 Resource quantity。 |
@@ -208,13 +208,14 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 ## items
 
-用途：定義後端允許的 item 與正整數單位重量。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`。
+用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 固定建立重 100 的 `wood` 與重 10 的 `wood_component`，所有 Item 的測試耐久上限都是 3600 秒。
 
 ```sql
 CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
-    weight_units INTEGER NOT NULL CHECK (weight_units > 0)
+    weight_units INTEGER NOT NULL CHECK (weight_units > 0),
+    max_durability_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (max_durability_seconds > 0)
 );
 ```
 
@@ -223,6 +224,7 @@ CREATE TABLE IF NOT EXISTS items (
 | `id` | API、gathering rule 與 Inventory 使用的穩定 item identifier。 |
 | `display_name` | 前端顯示的 item 名稱。 |
 | `weight_units` | 每單位 item 計入玩家目前攜帶重量的正整數重量。 |
+| `max_durability_seconds` | 新產生 item 的完整耐久秒數。 |
 
 索引與約束：primary key 為 `id`。前端不能建立 item 或自行提交顯示名稱。
 
@@ -250,14 +252,16 @@ CREATE TABLE IF NOT EXISTS gathering_rules (
 
 ## player_inventory
 
-用途：保存玩家目前持有的 item quantity。沒有 rows 代表空 Inventory。
+用途：保存玩家目前持有的 Active 與 Expired item 堆疊。相同玩家、item 與狀態最多各有一筆。
 
 ```sql
 CREATE TABLE IF NOT EXISTS player_inventory (
     user_id INTEGER NOT NULL REFERENCES identities(id),
     item_id TEXT NOT NULL REFERENCES items(id),
+    durability_status TEXT NOT NULL DEFAULT 'active' CHECK (durability_status IN ('active', 'expired')),
+    status_expires_at INTEGER NOT NULL DEFAULT 0,
     quantity INTEGER NOT NULL CHECK (quantity > 0),
-    PRIMARY KEY (user_id, item_id)
+    PRIMARY KEY (user_id, item_id, durability_status)
 );
 ```
 
@@ -265,9 +269,11 @@ CREATE TABLE IF NOT EXISTS player_inventory (
 |---|---|
 | `user_id` | 持有 item 的玩家。 |
 | `item_id` | 玩家持有的 item。 |
+| `durability_status` | 堆疊目前為 `active` 或 `expired`。 |
+| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。預設值 `0` 會在交易 normalization 時補成完整耐久期限。 |
 | `quantity` | 玩家持有的正整數 quantity。 |
 
-索引與約束：複合 primary key 保證每位玩家的每種 item 只有一筆 quantity。`gather` 使用 upsert 累加，不能覆寫既有 quantity。
+索引與約束：複合 primary key 保證每位玩家的每種 item 最多各有一筆 Active 與 Expired 堆疊。Active 合併採用 quantity 加權剩餘秒數。Expired 合併採用較晚的 `status_expires_at`。
 
 ## resource_types
 
@@ -338,14 +344,16 @@ CREATE TABLE IF NOT EXISTS player_resources (
 
 ## ground_items
 
-用途：保存每個 Location 的公共 Item quantity。地面不限制總重量、quantity 或堆疊數量，也不保存 owner 或權限。
+用途：保存每個 Location 的公共 Active 與 Expired Item 堆疊。地面不限制總重量或 quantity，也不保存 owner 或權限。
 
 ```sql
 CREATE TABLE IF NOT EXISTS ground_items (
     location_id TEXT NOT NULL REFERENCES locations(id),
     item_id TEXT NOT NULL REFERENCES items(id),
+    durability_status TEXT NOT NULL DEFAULT 'active' CHECK (durability_status IN ('active', 'expired')),
+    status_expires_at INTEGER NOT NULL DEFAULT 0,
     quantity INTEGER NOT NULL CHECK (quantity > 0),
-    PRIMARY KEY (location_id, item_id)
+    PRIMARY KEY (location_id, item_id, durability_status)
 );
 ```
 
@@ -353,9 +361,11 @@ CREATE TABLE IF NOT EXISTS ground_items (
 |---|---|
 | `location_id` | Item 所在的公共地面 Location。 |
 | `item_id` | 地面 Item type。 |
+| `durability_status` | 堆疊目前為 `active` 或 `expired`。 |
+| `status_expires_at` | Active 變為 Expired，或 Expired 被永久刪除的 UTC Unix seconds。預設值 `0` 會在交易 normalization 時補成完整耐久期限。 |
 | `quantity` | 該 Location 的正整數 Item quantity。 |
 
-索引與約束：複合 primary key 讓同 Location 的同種 Item 合併成一筆。Quantity 到 0 時刪除 row。Table 沒有 player、owner、capacity 或 reservation 欄位。
+索引與約束：複合 primary key 讓同 Location 的同種 Item 最多各有一筆 Active 與 Expired 堆疊。Quantity 到 0 時刪除 row。Table 沒有 player、owner、capacity 或 reservation 欄位。
 
 ## ground_resources
 
@@ -615,7 +625,7 @@ SELECT id, ? FROM identities;
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities;
 
-INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES ('wood', 'Wood', 100);
+INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES ('wood', 'Wood', 100, 3600);
 
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost)
 VALUES ('forest_edge', 'wood', 1, 10);
@@ -633,8 +643,8 @@ INSERT OR IGNORE INTO resource_types (id, display_name, weight_units) VALUES
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost)
 VALUES ('camp', 'wood', 1, 'wood', 1, 1);
 
-INSERT OR IGNORE INTO items (id, display_name, weight_units)
-VALUES ('wood_component', 'Wood Component', 10);
+INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds)
+VALUES ('wood_component', 'Wood Component', 10, 3600);
 
 INSERT OR IGNORE INTO crafting_recipes (id, display_name, base_ap_cost, output_item_id, output_quantity)
 VALUES ('wood_component', 'Wood Component', 10, 'wood_component', 1);
@@ -660,27 +670,29 @@ Existing databases gain empty `ground_items` and `ground_resources` tables throu
 
 既有資料庫若缺少 `weight_units`，Store 會在 `items` 與 `resource_types` 加入正整數欄位。既有 Item 與 Resource quantity 保持不變。Wood Item 設為 100，Wood Component 設為 10，所有 Resource type 設為 1。
 
+Production migration 的起點沒有 Item durability columns 或 Expired rows。Store 會替 `items` 加入 `max_durability_seconds`，並重建 `player_inventory` 與 `ground_items`。既有 quantity 會成為 Active 堆疊，`status_expires_at` 設為 migration 當下加 3600 秒。重複初始化不會重設既有 Active 或 Expired 期限。
+
 既有資料庫若缺少 durability columns，`ensureBuildingSchema` 依序執行 `ALTER TABLE building_recipes ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)`、`ALTER TABLE buildings ADD COLUMN max_durability_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (max_durability_seconds > 0)` 與 `ALTER TABLE buildings ADD COLUMN durability_expires_at INTEGER`。接著以 migration 當下的 UTC Unix seconds `migration_now` 執行 `UPDATE buildings SET durability_expires_at = migration_now + max_durability_seconds WHERE status = 'completed' AND durability_expires_at IS NULL`。施工中的 Building 不會被 backfill expiry。
 
 新 identity 不建立零值 Resource rows。讀取玩家狀態時，系統以 `resource_types` 為基準，將缺少的 player row 回傳為 quantity 0。
 
 升級 legacy schema 時，系統捨棄單一 generic Resource balance，重建 typed `player_resources` 與 `conversion_rules`。升級不保留舊 balance。
 
-`move` transaction 會依玩家目前位置查找 target Route，並從 Item 與 Resource definition 的 `weight_units` 乘以玩家 quantity，推導目前攜帶重量。重量超過 1000、Route 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
+`move` transaction 會先套用玩家 Inventory 的失效與永久刪除規則，再依目前位置查找 target Route。攜帶重量包含 Active 與尚在保留期內的 Expired Item。重量超過 1000、Route 不存在或 AP 不足時，Move 不會消耗 AP 或改變 Location。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並更新 `player_locations.location_id`。
 
-`gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並以 upsert 累加 `player_inventory.quantity`。兩項更新必須在同一 transaction commit。
+`gather` transaction 會依玩家目前位置查找 gathering rule。Rule 不存在或 AP 不足時，transaction 不修改資料。成功時，系統將 `full_timestamp` 向後推進 `ap_cost` 分鐘，並把新 Item 以完整耐久時間加入 Active 堆疊。既有 Active 堆疊使用 quantity 加權剩餘秒數。AP 與 Inventory 必須在同一 transaction commit。
 
-`convert` transaction 會依玩家目前位置查找 conversion rule。Rule 不存在、Wood 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除 Wood item，並以 upsert 累加 Wood Resource quantity。Wood item quantity 歸零時，系統刪除該 Inventory row。三項更新必須在同一 transaction commit。
+`convert` transaction 只會消耗 Active Item。Rule 不存在、Active Wood 不足或 AP 不足時，transaction 不修改 Action 狀態。成功時，系統推進 `full_timestamp`，扣除 Active Wood，並累加 Wood Resource quantity。Active Wood quantity 歸零時，系統刪除該 row。
 
-`craft` transaction 會依 submitted recipe identifier 查找 recipe 與所有 inputs。Recipe 不存在、任何 input 不足或 AP 不足時，transaction 不修改資料。成功時，系統推進 `full_timestamp`，扣除所有 Resource 與 Item inputs，並以 upsert 累加 output Item quantity。Quantity 歸零的 input rows 會刪除。所有更新必須在同一 transaction commit。
+`craft` transaction 只會消耗 Active Item inputs。成功時，output Item 以完整耐久時間加入 Active 堆疊，並依 quantity 加權公式與既有 Active output 合併。Recipe 不存在、任何 Active input 不足或 AP 不足時，Action 狀態保持不變。
 
-`Store.Drop` transaction 會從後端取得玩家目前 Location，驗證 asset type、identifier 與正整數 quantity，再從玩家 Inventory 或 Resource quantity 扣除並累加對應地面 quantity。`Store.Pickup` 使用相反方向。來源不足、asset 不存在或輸入無效時，transaction 不修改資料。來源剛好用盡時先刪除 row，避免違反 ground table 的 `quantity > 0` constraint。Transfer 不讀寫 `player_ap.full_timestamp`，也不受 ground capacity 限制。條件式來源更新與 transaction lock 防止 concurrent Pickup 超領。
+`Store.Drop` 對 Item 要求 `active` 或 `expired` 狀態，並保留移出堆疊的狀態期限。Active destination 使用 quantity 加權剩餘秒數。Expired destination 使用較晚的刪除時間。`Store.Pickup` 只接受 Active Item。Resource Transfer 不接受 Item 狀態。來源不足、狀態無效、Expired Pickup 或 asset 不存在時，Transfer 資產保持不變。Transfer 不讀寫 `player_ap.full_timestamp`，也不受 ground capacity 限制。
 
 開始施工 transaction 會先刪除已超過 Disabled 保留期的 Building，再依 submitted recipe identifier 查找 Location-independent recipe 與 inputs。Recipe 無 inputs、任何 input 不足或該玩家已有 Building 時，transaction 不修改資料。成功時，系統扣除所有 inputs，建立 progress 0 的 Building，並保存 level、required AP、extension slot count 與最大耐久秒數快照。
 
 施工貢獻 transaction 會依 Building identifier 查找同 Location 的施工中 Building。系統以 requested AP 與剩餘 required AP 的較小值作為實際投入量。玩家 AP 不足、Location 不同、Building 不存在或已完成時，transaction 不修改資料。成功時，系統原子推進玩家 `full_timestamp` 與 Building progress。Progress 達到 required AP 時，系統將 `status` 設為 `completed`，並將耐久期限設為後端目前時間加最大耐久秒數。
 
-狀態讀取 transaction 會先刪除耐久期限不晚於目前時間減 3 天的 completed Building。回傳的 completed Building 會包含後端依目前時間計算的 Active 或 Disabled 狀態與剩餘耐久秒數。永久消失的 Building 不再占用 `UNIQUE (owner_id, location_id)` 名額。
+狀態讀取 transaction 會先刪除耐久期限不晚於目前時間減 7 天的 completed Building。它也會把到期 Active Item 轉成 Expired，合併同種 Expired 堆疊，並刪除保留期結束的 Expired Item。回傳狀態包含每個 Item 堆疊的狀態、剩餘耐久秒數或剩餘保留秒數。
 
 維修 transaction 會先刪除已永久消失的 Building，再查找 submitted Building identifier。玩家不在該 Location、Building 尚未完成、AP 不足或 Wood Resource 不足時，transaction 不修改資料。成功時，系統扣除 10 AP 與 1 Wood Resource。Active Building 從既有期限延長，Disabled Building 從目前時間延長。每次最多增加 3600 秒，最終期限不超過目前時間加最大耐久秒數。接近上限時仍扣除完整成本。
 

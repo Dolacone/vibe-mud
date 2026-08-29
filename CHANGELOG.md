@@ -1,6 +1,15 @@
-<!-- last_reviewed: 2026-08-28 -->
+<!-- last_reviewed: 2026-08-29 -->
 
 # Changelog
+
+## 2026-08-29
+
+- Added one-hour definition-backed durability for every Item type.
+- Added separate Active and Expired Item stacks with weighted durability merging.
+- Retained Expired Items for one day while counting them toward carrying weight.
+- Allowed Expired Item Drop while rejecting Expired Item Pickup and Action inputs.
+- Extended Disabled Building retention from three days to seven days.
+- Added Item durability calculation and cleanup logs.
 
 ## 2026-08-28
 
