@@ -1,6 +1,6 @@
 ---
 title: "Durability percentage API"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
