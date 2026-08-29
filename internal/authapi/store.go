@@ -2323,15 +2323,15 @@ func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error
 		_ = tx.Rollback()
 		return PlayerState{}, fmt.Errorf("%w: quantity exceeds method capacity", ErrInvalidArgument)
 	}
-	globalMethod := false
+	isGlobalMethod := false
 	if !legacy {
-		err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM global_conversion_methods WHERE conversion_method_id = ?)`, methodID).Scan(&globalMethod)
+		err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM global_conversion_methods WHERE conversion_method_id = ?)`, methodID).Scan(&isGlobalMethod)
 		if err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("check global conversion method: %w", err)
 		}
 	}
-	if !legacy && !globalMethod {
+	if !legacy && !isGlobalMethod {
 		if providerID <= 0 {
 			_ = tx.Rollback()
 			return PlayerState{}, ErrExtensionNotFound
@@ -2432,7 +2432,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity)
 			}
 		}
 	}
-	if !legacy && !globalMethod {
+	if !legacy && !isGlobalMethod {
 		result, err := tx.Exec(`UPDATE buildings SET durability_expires_at = CASE WHEN durability_expires_at - ? > ? THEN durability_expires_at - ? ELSE ? END WHERE id = (SELECT building_id FROM building_extensions WHERE id = ?) AND durability_expires_at > ?`, durabilityCost, now.Unix(), durabilityCost, now.Unix(), providerID, now.Unix())
 		if err != nil {
 			_ = tx.Rollback()
@@ -3214,9 +3214,9 @@ WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStat
 		return failure(ErrBuildingDisabled)
 	}
 	remainingAP := requiredAP - contributedAP
-	actualAP := requestedAP
-	if actualAP > remainingAP {
-		actualAP = remainingAP
+	effectiveAP := requestedAP
+	if effectiveAP > remainingAP {
+		effectiveAP = remainingAP
 	}
 	var fullTimestamp int64
 	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); errors.Is(err, sql.ErrNoRows) {
@@ -3226,7 +3226,7 @@ WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStat
 		_ = tx.Rollback()
 		return failure(fmt.Errorf("get extension contributor AP: %w", err))
 	}
-	if calculateAP(unixSeconds(fullTimestamp), now) < actualAP {
+	if calculateAP(unixSeconds(fullTimestamp), now) < effectiveAP {
 		_ = tx.Rollback()
 		return failure(ErrInsufficientAP)
 	}
@@ -3234,7 +3234,7 @@ WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStat
 	if fullAt.Before(now) {
 		fullAt = now
 	}
-	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(actualAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
+	result, err := tx.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ? AND full_timestamp = ?`, fullAt.Add(time.Duration(effectiveAP)*apRecoveryTime).Unix(), userID, fullTimestamp)
 	if err != nil {
 		_ = tx.Rollback()
 		return failure(fmt.Errorf("consume extension construction AP: %w", err))
@@ -3246,7 +3246,7 @@ WHERE e.id = ?`, extensionID).Scan(&buildingID, &buildingLocation, &buildingStat
 		}
 		return failure(ErrInsufficientAP)
 	}
-	newProgress := contributedAP + actualAP
+	newProgress := contributedAP + effectiveAP
 	newStatus := "under_construction"
 	if newProgress == requiredAP {
 		newStatus = "completed"
@@ -3265,7 +3265,7 @@ WHERE id = ? AND status = 'under_construction' AND contributed_ap = ?`, newProgr
 		}
 		return failure(ErrExtensionCompleted)
 	}
-	computation.EffectiveAP = actualAP
+	computation.EffectiveAP = effectiveAP
 	computation.ResultingProgress = newProgress
 	computation.ResultingStatus = newStatus
 	state, err := s.getPlayerStateTx(tx, userID, now)
