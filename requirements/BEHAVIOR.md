@@ -8,11 +8,11 @@
 - 已登入玩家可使用後端依目前狀態回傳的 Convert method，原子轉換 Active Item 並判定 Essence -> REQ-008
 - 已登入玩家可執行後端依目前狀態回傳的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可依後端回傳的 recipe 建立 Building Lv1，並由同地點玩家共同投入 AP 完成本體施工 -> REQ-010
-- 完成的 Building 會自然耗損，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
+- 完成的 Building 會自然耗損，以整數百分比顯示耐久，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
 - 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
 - 玩家可在目前 Location 免費 Transfer 資產，Item 必須指定狀態，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
 - 每種 Item 與 Resource 具有獨立重量，玩家可超重持有資產，但超重時不能 Move -> REQ-014
-- 所有操作產生的 Item 於 1 小時後失效，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
+- 所有操作產生的 Item 於 1 小時後失效，以整數百分比顯示耐久，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
 - Building owner 可安裝或拆除 extension，同地點玩家可共同施工並使用 completed extension -> REQ-016
 - 玩家可使用後端依目前狀態回傳的選項製作並建造 Sawmill T1，以相同 AP 工作單位提高 Wood Convert capacity -> REQ-017
 - 後端只向前端回傳玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe -> REQ-018
