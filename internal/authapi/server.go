@@ -96,19 +96,17 @@ type itemResponse struct {
 }
 
 type inventoryItemResponse struct {
-	Item                       itemResponse `json:"item"`
-	Quantity                   int          `json:"quantity"`
-	DurabilityStatus           string       `json:"durability_status"`
-	DurabilityRemainingSeconds *int         `json:"durability_remaining_seconds"`
-	RetentionRemainingSeconds  *int         `json:"retention_remaining_seconds"`
+	Item                 itemResponse `json:"item"`
+	Quantity             int          `json:"quantity"`
+	DurabilityStatus     string       `json:"durability_status"`
+	DurabilityPercentage int          `json:"durability_percentage"`
 }
 
 type groundItemResponse struct {
-	Item                       itemResponse `json:"item"`
-	Quantity                   int          `json:"quantity"`
-	DurabilityStatus           string       `json:"durability_status"`
-	DurabilityRemainingSeconds *int         `json:"durability_remaining_seconds"`
-	RetentionRemainingSeconds  *int         `json:"retention_remaining_seconds"`
+	Item                 itemResponse `json:"item"`
+	Quantity             int          `json:"quantity"`
+	DurabilityStatus     string       `json:"durability_status"`
+	DurabilityPercentage int          `json:"durability_percentage"`
 }
 
 type groundResourceResponse struct {
@@ -2114,10 +2112,35 @@ func (s *Server) playerStateResponse(r *http.Request, userID int64, state Player
 	return playerStateResponseFromStore(state, userID)
 }
 
+func itemDurabilityPercentage(status string, remaining *int, maximum int) int {
+	if status != activeItemStatus || remaining == nil || *remaining <= 0 || maximum <= 0 {
+		return 0
+	}
+	return roundedUpDurabilityPercentage(*remaining, maximum)
+}
+
+func buildingDurabilityPercentage(status string, remaining int) int {
+	if status != activeBuildingDurabilityStatus || remaining <= 0 {
+		return 0
+	}
+	return roundedUpDurabilityPercentage(remaining, int(buildingDefaultDurabilitySeconds))
+}
+
+func roundedUpDurabilityPercentage(remaining, maximum int) int {
+	percentage := (remaining*100 + maximum - 1) / maximum
+	if percentage > 100 {
+		return 100
+	}
+	if percentage < 1 {
+		return 1
+	}
+	return percentage
+}
+
 func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
 	responses := make([]groundItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, groundItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityRemainingSeconds: item.DurabilityRemainingSeconds, RetentionRemainingSeconds: item.RetentionRemainingSeconds})
+		responses = append(responses, groundItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
 	}
 	return responses
 }
@@ -2154,19 +2177,18 @@ type buildingRecipeResponse struct {
 }
 
 type buildingResponse struct {
-	ID                         int64                          `json:"id"`
-	Owner                      buildingOwnerResponse          `json:"owner"`
-	Recipe                     buildingRecipeIdentityResponse `json:"recipe"`
-	BuildingLevel              int                            `json:"building_level"`
-	RequiredAP                 int                            `json:"required_ap"`
-	ContributedAP              int                            `json:"contributed_ap"`
-	Status                     string                         `json:"status"`
-	ExtensionSlotCount         int                            `json:"extension_slot_count"`
-	MaxDurabilitySeconds       int                            `json:"max_durability_seconds"`
-	DurabilityStatus           *string                        `json:"durability_status"`
-	DurabilityRemainingSeconds *int                           `json:"durability_remaining_seconds"`
-	Extensions                 []buildingExtensionResponse    `json:"extensions"`
-	AvailableActions           []string                       `json:"available_actions"`
+	ID                   int64                          `json:"id"`
+	Owner                buildingOwnerResponse          `json:"owner"`
+	Recipe               buildingRecipeIdentityResponse `json:"recipe"`
+	BuildingLevel        int                            `json:"building_level"`
+	RequiredAP           int                            `json:"required_ap"`
+	ContributedAP        int                            `json:"contributed_ap"`
+	Status               string                         `json:"status"`
+	ExtensionSlotCount   int                            `json:"extension_slot_count"`
+	DurabilityStatus     *string                        `json:"durability_status"`
+	DurabilityPercentage *int                           `json:"durability_percentage"`
+	Extensions           []buildingExtensionResponse    `json:"extensions"`
+	AvailableActions     []string                       `json:"available_actions"`
 }
 
 type buildingExtensionResponse struct {
@@ -2244,23 +2266,22 @@ func buildingResponseFromStore(building Building, availability playerAvailabilit
 			ID:          building.Recipe.ID,
 			DisplayName: building.Recipe.DisplayName,
 		},
-		BuildingLevel:        building.BuildingLevel,
-		RequiredAP:           building.RequiredAP,
-		ContributedAP:        building.ContributedAP,
-		Status:               building.Status,
-		ExtensionSlotCount:   building.ExtensionSlotCount,
-		MaxDurabilitySeconds: building.MaxDurabilitySeconds,
-		Extensions:           make([]buildingExtensionResponse, 0, len(building.Extensions)),
-		AvailableActions:     availability.BuildingActions[building.ID],
+		BuildingLevel:      building.BuildingLevel,
+		RequiredAP:         building.RequiredAP,
+		ContributedAP:      building.ContributedAP,
+		Status:             building.Status,
+		ExtensionSlotCount: building.ExtensionSlotCount,
+		Extensions:         make([]buildingExtensionResponse, 0, len(building.Extensions)),
+		AvailableActions:   availability.BuildingActions[building.ID],
 	}
 	for _, extension := range building.Extensions {
 		response.Extensions = append(response.Extensions, buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, RequiredAP: extension.RequiredAP, ContributedAP: extension.ContributedAP, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]})
 	}
 	if building.DurabilityStatus != "" {
 		status := building.DurabilityStatus
-		remaining := building.DurabilityRemainingSeconds
+		percentage := buildingDurabilityPercentage(building.DurabilityStatus, building.DurabilityRemainingSeconds)
 		response.DurabilityStatus = &status
-		response.DurabilityRemainingSeconds = &remaining
+		response.DurabilityPercentage = &percentage
 	}
 	return response
 }
@@ -2295,7 +2316,7 @@ func craftingRecipeResponsesFromStore(recipes []CraftingRecipe) []craftingRecipe
 func inventoryResponsesFromStore(items []InventoryItem) []inventoryItemResponse {
 	responses := make([]inventoryItemResponse, 0, len(items))
 	for _, item := range items {
-		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityRemainingSeconds: item.DurabilityRemainingSeconds, RetentionRemainingSeconds: item.RetentionRemainingSeconds})
+		responses = append(responses, inventoryItemResponse{Item: itemResponse{ID: item.Item.ID, DisplayName: item.Item.DisplayName}, Quantity: item.Quantity, DurabilityStatus: item.DurabilityStatus, DurabilityPercentage: itemDurabilityPercentage(item.DurabilityStatus, item.DurabilityRemainingSeconds, item.Item.MaxDurabilitySeconds)})
 	}
 	return responses
 }

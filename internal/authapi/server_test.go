@@ -706,7 +706,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		t.Fatalf("buildings response = %#v", body["buildings"])
 	}
 	building := buildings[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(building), []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"available_actions", "building_level", "contributed_ap", "durability_percentage", "durability_status", "extension_slot_count", "extensions", "id", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["durability_status"] != nil || building["durability_percentage"] != nil {
 		t.Fatalf("building response = %#v", building)
 	}
 	recipe := building["recipe"].(map[string]any)
@@ -864,22 +864,19 @@ func buildingFromResponse(t *testing.T, body []byte) map[string]any {
 
 func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
 	t.Helper()
-	wantKeys := []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
+	wantKeys := []string{"available_actions", "building_level", "contributed_ap", "durability_percentage", "durability_status", "extension_slot_count", "extensions", "id", "owner", "recipe", "required_ap", "status"}
 	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
 		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
 	}
 	if building["id"] != float64(1) || building["building_level"] != float64(1) || building["required_ap"] != float64(60) || building["contributed_ap"] != contributedAP || building["status"] != status || building["extension_slot_count"] != float64(1) {
 		t.Fatalf("building contract = %#v", building)
 	}
-	if building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
-		t.Fatalf("building max durability = %#v", building["max_durability_seconds"])
-	}
 	if status == "under_construction" {
-		if building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
-			t.Fatalf("under-construction durability = %#v/%#v", building["durability_status"], building["durability_remaining_seconds"])
+		if building["durability_status"] != nil || building["durability_percentage"] != nil {
+			t.Fatalf("under-construction durability = %#v/%#v", building["durability_status"], building["durability_percentage"])
 		}
-	} else if building["durability_status"] != "active" || building["durability_remaining_seconds"] != float64(buildingDefaultDurability/time.Second) {
-		t.Fatalf("completed durability = %#v/%#v", building["durability_status"], building["durability_remaining_seconds"])
+	} else if building["durability_status"] != "active" || building["durability_percentage"] != float64(100) {
+		t.Fatalf("completed durability = %#v/%#v", building["durability_status"], building["durability_percentage"])
 	}
 	owner, ok := building["owner"].(map[string]any)
 	if !ok || !reflect.DeepEqual(sortedMapKeys(owner), []string{"display_name", "id"}) || owner["id"] != float64(1) || owner["display_name"] != "Person" {
@@ -1336,15 +1333,15 @@ func TestContributeExtensionAPILogUsesAuthoritativeBuildingOnDomainFailure(t *te
 
 func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing.T) {
 	tests := []struct {
-		name          string
-		expiresAt     *time.Time
-		wantStatus    any
-		wantRemaining any
-		wantBuildings int
+		name           string
+		expiresAt      *time.Time
+		wantStatus     any
+		wantPercentage any
+		wantBuildings  int
 	}{
 		{name: "under construction", wantBuildings: 1},
-		{name: "active", expiresAt: func() *time.Time { value := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC); return &value }(), wantStatus: "active", wantRemaining: float64(7 * 24 * 60 * 60), wantBuildings: 1},
-		{name: "disabled", expiresAt: func() *time.Time { value := time.Date(2026, 8, 25, 11, 59, 59, 0, time.UTC); return &value }(), wantStatus: "disabled", wantRemaining: float64(0), wantBuildings: 1},
+		{name: "active", expiresAt: func() *time.Time { value := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC); return &value }(), wantStatus: "active", wantPercentage: float64(100), wantBuildings: 1},
+		{name: "disabled", expiresAt: func() *time.Time { value := time.Date(2026, 8, 25, 11, 59, 59, 0, time.UTC); return &value }(), wantStatus: "disabled", wantPercentage: float64(0), wantBuildings: 1},
 		{name: "destroyed", expiresAt: func() *time.Time { value := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC); return &value }(), wantBuildings: 0},
 	}
 	for _, test := range tests {
@@ -1376,11 +1373,13 @@ func TestBuildingAPIExposesDurabilityStatesAndOmitsDestroyedBuildings(t *testing
 			if !ok {
 				t.Fatalf("building = %#v", buildings[0])
 			}
-			if building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
-				t.Fatalf("max durability = %#v", building["max_durability_seconds"])
+			if building["durability_status"] != test.wantStatus || building["durability_percentage"] != test.wantPercentage {
+				t.Fatalf("durability = %#v/%#v, want %#v/%#v", building["durability_status"], building["durability_percentage"], test.wantStatus, test.wantPercentage)
 			}
-			if building["durability_status"] != test.wantStatus || building["durability_remaining_seconds"] != test.wantRemaining {
-				t.Fatalf("durability = %#v/%#v, want %#v/%#v", building["durability_status"], building["durability_remaining_seconds"], test.wantStatus, test.wantRemaining)
+			for _, key := range []string{"max_durability_seconds", "durability_remaining_seconds", "retention_remaining_seconds", "durability_expires_at", "status_expires_at"} {
+				if _, ok := building[key]; ok {
+					t.Fatalf("building exposes internal durability key %q: %#v", key, building)
+				}
 			}
 		})
 	}
@@ -1556,8 +1555,13 @@ func TestRepairBuildingAPIReturnsAuthoritativeStateAndSanitizedComputationLog(t 
 		t.Fatalf("authoritative wood = %#v", resources["wood"])
 	}
 	building := buildingFromResponse(t, response.Body.Bytes())
-	if building["durability_status"] != "active" || building["durability_remaining_seconds"] != float64(6*24*60*60+60*60) || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) {
+	if building["durability_status"] != "active" || building["durability_percentage"] != float64(87) {
 		t.Fatalf("authoritative durability = %#v", building)
+	}
+	for _, key := range []string{"max_durability_seconds", "durability_remaining_seconds", "retention_remaining_seconds", "durability_expires_at", "status_expires_at"} {
+		if _, ok := building[key]; ok {
+			t.Fatalf("building exposes internal durability key %q: %#v", key, building)
+		}
 	}
 }
 
@@ -2581,8 +2585,13 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 		t.Fatalf("ground item response = %#v", body["ground_items"])
 	}
 	groundItem := groundItems[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_remaining_seconds", "durability_status", "item", "quantity", "retention_remaining_seconds"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_remaining_seconds"] != float64(expectedItemDurabilitySeconds) || groundItem["retention_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(groundItem), []string{"durability_percentage", "durability_status", "item", "quantity"}) || groundItem["quantity"] != float64(2) || groundItem["durability_status"] != "active" || groundItem["durability_percentage"] != float64(100) {
 		t.Fatalf("ground item shape = %#v", groundItem)
+	}
+	for _, key := range []string{"max_durability_seconds", "durability_remaining_seconds", "retention_remaining_seconds", "durability_expires_at", "status_expires_at"} {
+		if _, ok := groundItem[key]; ok {
+			t.Fatalf("ground item exposes internal durability key %q: %#v", key, groundItem)
+		}
 	}
 	item := groundItem["item"].(map[string]any)
 	if !reflect.DeepEqual(sortedMapKeys(item), []string{"display_name", "id"}) || item["id"] != "wood" || item["display_name"] != "Wood" {
@@ -2801,11 +2810,18 @@ INSERT INTO ground_items (location_id, item_id, durability_status, status_expire
 	}
 	active := inventory[0].(map[string]any)
 	expired := inventory[1].(map[string]any)
-	if active["durability_status"] != "active" || active["durability_remaining_seconds"] != float64(expectedItemDurabilitySeconds) || active["retention_remaining_seconds"] != nil {
+	if active["durability_status"] != "active" || active["durability_percentage"] != float64(100) {
 		t.Fatalf("active durability = %#v", active)
 	}
-	if expired["durability_status"] != "expired" || expired["durability_remaining_seconds"] != nil || expired["retention_remaining_seconds"] != float64(7200) {
+	if expired["durability_status"] != "expired" || expired["durability_percentage"] != float64(0) {
 		t.Fatalf("expired durability = %#v", expired)
+	}
+	for _, entry := range []map[string]any{active, expired} {
+		for _, key := range []string{"max_durability_seconds", "durability_remaining_seconds", "retention_remaining_seconds", "durability_expires_at", "status_expires_at"} {
+			if _, ok := entry[key]; ok {
+				t.Fatalf("inventory exposes internal durability key %q: %#v", key, entry)
+			}
+		}
 	}
 	if !strings.Contains(logOutput, "action=item_durability_calculation outcome=success") || !strings.Contains(logOutput, "durability_status=expired") || !strings.Contains(logOutput, "request_id=item-state-request") {
 		t.Fatalf("durability log = %q", logOutput)
@@ -2836,5 +2852,74 @@ INSERT INTO ground_items (location_id, item_id, durability_status, status_expire
 	cleanupLog := captureStdout(t, func() { server.Routes().ServeHTTP(cleanupResponse, cleanupRequest) })
 	if cleanupResponse.Code != http.StatusOK || !strings.Contains(cleanupLog, "action=item_durability_cleanup outcome=success") || !strings.Contains(cleanupLog, "cleanup_action=deleted") || !strings.Contains(cleanupLog, "request_id=item-cleanup-request") {
 		t.Fatalf("cleanup status/log = %d/%q", cleanupResponse.Code, cleanupLog)
+	}
+}
+
+func TestDurabilityPercentageAPIUsesCeilingCapAndZero(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-item-percentage", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+INSERT INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
+('percentage_ceil', 'Percentage Ceil', 1, 3),
+('percentage_cap', 'Percentage Cap', 1, 100),
+('percentage_expired', 'Percentage Expired', 1, 100)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'percentage_ceil', 'active', ?, 1)`, identity.ID, now.Add(2*time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'percentage_cap', 'active', ?, 1)`, identity.ID, now.Add(101*time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'percentage_expired', 'expired', ?, 1)`, identity.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO ground_items (location_id, item_id, durability_status, status_expires_at, quantity) VALUES ('camp', 'percentage_ceil', 'active', ?, 1)`, now.Add(time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	request.Header.Set("X-Request-ID", "item-percentage-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("state status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"max_durability_seconds", "durability_remaining_seconds", "retention_remaining_seconds", "durability_expires_at", "status_expires_at"} {
+		if _, ok := body[key]; ok {
+			t.Fatalf("state exposes internal durability key %q: %#v", key, body)
+		}
+	}
+	inventory := body["inventory"].([]any)
+	wantInventory := map[string]float64{"percentage_ceil": 67, "percentage_cap": 100, "percentage_expired": 0}
+	for _, raw := range inventory {
+		entry := raw.(map[string]any)
+		item := entry["item"].(map[string]any)
+		itemID := item["id"].(string)
+		if entry["durability_percentage"] != wantInventory[itemID] {
+			t.Fatalf("inventory %s percentage = %#v, want %v", itemID, entry["durability_percentage"], wantInventory[itemID])
+		}
+		if _, ok := entry["durability_remaining_seconds"]; ok {
+			t.Fatalf("inventory %s exposes remaining seconds: %#v", itemID, entry)
+		}
+		if _, ok := entry["retention_remaining_seconds"]; ok {
+			t.Fatalf("inventory %s exposes retention seconds: %#v", itemID, entry)
+		}
+	}
+	groundItems := body["ground_items"].([]any)
+	ground := groundItems[0].(map[string]any)
+	if ground["durability_status"] != "active" || ground["durability_percentage"] != float64(34) {
+		t.Fatalf("ground percentage = %#v", ground)
 	}
 }

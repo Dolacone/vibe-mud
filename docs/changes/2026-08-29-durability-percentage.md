@@ -6,6 +6,8 @@ doc_type: change
 last_reviewed: 2026-08-29
 source_paths:
   - docs/architecture.md
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-011, REQ-015
 base_branch: main
 scope: "Replace frontend durability timing details with rounded-up integer percentages."
@@ -41,7 +43,7 @@ REQ-011 and REQ-015 are the sources of truth. The plan will copy each affected c
 
 ## Tasks
 
-- [ ] Task 1 [parallel: no]: Replace public durability timing fields with backend-calculated percentages in `internal/authapi/server.go`. Update backend tests in the same commit.
+- [x] Task 1 [parallel: no]: Replace public durability timing fields with backend-calculated percentages in `internal/authapi/server.go`. Update backend tests in the same commit.
   - REQ-011.28: Building 耐久百分比必須以剩餘耐久時間除以 7 天耐久上限計算，乘以 100 後無條件進位，且不得超過 100。
   - REQ-011.29: Active Building 的耐久百分比必須介於 1 至 100，Disabled Building 必須為 0。
   - REQ-011.30: 後端傳給前端的 Building 資訊不得包含耐久上限秒數、剩餘耐久秒數、失效保留秒數或對應 timestamp。
