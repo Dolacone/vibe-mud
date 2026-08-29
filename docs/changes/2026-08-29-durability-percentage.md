@@ -1,17 +1,21 @@
 ---
 title: "Durability percentage API"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
 source_paths:
   - docs/architecture.md
+  - docs/changes/2026-08-29-durability-percentage.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
-  - web/src/auth.ts
-  - web/src/auth.test.ts
-  - web/src/App.tsx
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-011.md
+  - requirements/REQ-015.md
   - web/src/App.test.tsx
+  - web/src/App.tsx
+  - web/src/auth.test.ts
+  - web/src/auth.ts
 req_ref: REQ-011, REQ-015
 base_branch: main
 scope: "Replace frontend durability timing details with rounded-up integer percentages."
@@ -65,4 +69,4 @@ REQ-011 and REQ-015 are the sources of truth. The plan will copy each affected c
 
 ## Review Issues
 
-- [ ] [Major] `source_paths` 只列出 `main...HEAD` 11 個變更檔案中的 7 個。缺少 change document 與 3 個 requirements 檔案，因此中繼資料不符合實際 diff。
+- [x] [Major] `source_paths` 只列出 `main...HEAD` 11 個變更檔案中的 7 個。缺少 change document 與 3 個 requirements 檔案，因此中繼資料不符合實際 diff。
