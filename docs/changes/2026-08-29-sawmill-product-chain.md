@@ -152,8 +152,8 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Major] Extension 操作日誌的 `building_id`、`extension_id` 與 `ap` 固定為 0。日誌未記錄實際操作目標與投入 AP。
 - [x] [Major] 超過 method capacity 的 Convert 會回傳 500。後端未把 `ErrInvalidArgument` 映射為無效 action 回應。
 - [x] [Major] `install-extension` 缺少 `slot_index` 時仍使用預設值 0。無效 payload 可以消耗 Package 並安裝 extension。
-- [ ] [Major] 前端向非 owner 顯示拆除控制，也向 Disabled Building 顯示安裝與施工控制。這些不是玩家可用操作。
-- [ ] [Minor] `source_paths` 重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單完全一致。
+- [x] [Major] 前端向非 owner 顯示拆除控制，也向 Disabled Building 顯示安裝與施工控制。這些不是玩家可用操作。
+- [x] [Minor] `source_paths` 重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單完全一致。
 
 ## Plan Review Issues
 
