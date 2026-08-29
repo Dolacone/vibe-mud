@@ -545,7 +545,11 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 	if request.Legacy {
 		state, err = s.store.Convert(session.UserID)
 	} else {
-		state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, request.ProviderExtensionID)
+		if request.ProviderExtensionIDSet {
+			state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, request.ProviderExtensionID)
+		} else {
+			state, err = s.store.Convert(session.UserID, request.MethodID, request.Quantity, nil)
+		}
 	}
 	if errors.Is(err, ErrInsufficientAP) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
@@ -1464,10 +1468,11 @@ func decodeGatherRequest(body io.Reader) string {
 }
 
 type convertRequest struct {
-	MethodID            string
-	Quantity            int
-	ProviderExtensionID int64
-	Legacy              bool
+	MethodID               string
+	Quantity               int
+	ProviderExtensionID    int64
+	ProviderExtensionIDSet bool
+	Legacy                 bool
 }
 
 func decodeConvertRequest(body io.Reader) (convertRequest, string) {
@@ -1508,6 +1513,7 @@ func decodeConvertRequest(body io.Reader) (convertRequest, string) {
 			if err := decoder.Decode(&request.ProviderExtensionID); err != nil {
 				return convertRequest{}, convertReasonInvalidJSON
 			}
+			request.ProviderExtensionIDSet = true
 		default:
 			var ignored json.RawMessage
 			if err := decoder.Decode(&ignored); err != nil {

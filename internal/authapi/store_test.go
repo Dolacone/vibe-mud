@@ -2646,6 +2646,22 @@ func TestConvertUsesGlobalMethodTableForProviderEligibility(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES ('global_wood', 'Global Wood', 5, 'wood', 1, 'wood', 2, NULL, 0, 0); INSERT INTO global_conversion_methods (conversion_method_id) VALUES ('global_wood'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
 		t.Fatal(err)
 	}
+	for _, providerID := range []int64{0, 42} {
+		before, err := store.GetPlayerState(identity.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Convert(identity.ID, "global_wood", 1, providerID); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("global method provider %d error = %v, want ErrInvalidArgument", providerID, err)
+		}
+		after, err := store.GetPlayerState(identity.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.AP != before.AP || resourceQuantity(after, "wood") != resourceQuantity(before, "wood") || inventoryQuantity(after, "wood") != inventoryQuantity(before, "wood") {
+			t.Fatalf("global method provider %d changed state: before=%+v after=%+v", providerID, before, after)
+		}
+	}
 	state, err := store.Convert(identity.ID, "global_wood", 1)
 	if err != nil {
 		t.Fatal(err)

@@ -2292,6 +2292,7 @@ func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error
 		return PlayerState{}, fmt.Errorf("get player location for convert: %w", err)
 	}
 	methodID, quantity, providerID := "hand_wood_t1", 1, int64(0)
+	providerIDProvided := false
 	legacy := len(params) == 0
 	durabilityCost := 0
 	var legacyOption ConversionOption
@@ -2324,6 +2325,7 @@ func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error
 			return PlayerState{}, fmt.Errorf("%w: quantity must be positive", ErrInvalidArgument)
 		}
 		if len(params) > 2 && params[2] != nil {
+			providerIDProvided = true
 			switch v := params[2].(type) {
 			case int64:
 				providerID = v
@@ -2359,6 +2361,10 @@ func (s *Store) Convert(userID int64, params ...interface{}) (PlayerState, error
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("check global conversion method: %w", err)
 		}
+	}
+	if !legacy && isGlobalMethod && providerIDProvided {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("%w: global conversion methods do not accept provider extensions", ErrInvalidArgument)
 	}
 	if !legacy && !isGlobalMethod {
 		if providerID <= 0 {

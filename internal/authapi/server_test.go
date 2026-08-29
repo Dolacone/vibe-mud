@@ -1910,6 +1910,46 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	}
 }
 
+func TestConvertAPIRejectsProviderForGlobalMethodWithoutChangingState(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-api-global-provider", "global-provider@example.com", "Global Provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity) VALUES ('global_wood', 'Global Wood', 5, 'wood', 1, 'wood', 2, NULL, 0, 0); INSERT INTO global_conversion_methods (conversion_method_id) VALUES ('global_wood'); INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/convert", strings.NewReader(`{"method_id":"global_wood","quantity":1,"provider_extension_id":0}`))
+	request.Header.Set("X-Request-ID", "global-provider-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"error":"invalid provider extension"`) {
+		t.Fatalf("global provider response = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ap"] != float64(maxAP) || responseResourceQuantities(t, body)["wood"] != 0 {
+		t.Fatalf("global provider response state = %#v", body)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=convert outcome=error reason=invalid_provider request_id=global-provider-request") {
+		t.Fatalf("global provider log = %q", logOutput)
+	}
+	state, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AP != maxAP || playerResourceQuantity(state, "wood") != 0 || inventoryQuantity(state, "wood") != 1 {
+		t.Fatalf("global provider changed state = %+v", state)
+	}
+}
+
 func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)
