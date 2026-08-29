@@ -26,6 +26,19 @@ func sortedMapKeys(values map[string]any) []string {
 	return keys
 }
 
+func TestDecodeConvertRequestStrictContract(t *testing.T) {
+	request, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2}`))
+	if reason != "" || request.MethodID != "hand_wood_t1" || request.Quantity != 2 {
+		t.Fatalf("valid convert request = %#v, %q", request, reason)
+	}
+	if _, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":2,"secret":"x"}`)); reason != convertReasonUnknownField {
+		t.Fatalf("unknown field reason = %q", reason)
+	}
+	if _, reason := decodeConvertRequest(strings.NewReader(`{"method_id":"hand_wood_t1","quantity":0}`)); reason != convertReasonInvalidQuantity {
+		t.Fatalf("invalid quantity reason = %q", reason)
+	}
+}
+
 type fakeProvider struct {
 	authorizationURL string
 	authorization    struct {

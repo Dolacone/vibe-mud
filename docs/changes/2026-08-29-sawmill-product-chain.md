@@ -8,6 +8,8 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
   - internal/authapi/server_test.go
+  - internal/authapi/server.go
+  - docs/architecture.md
   - docs/schemas.md
 req_ref: [REQ-008, REQ-010, REQ-011, REQ-014, REQ-015, REQ-016, REQ-017]
 base_branch: main
@@ -105,7 +107,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
   - REQ-017.7: 玩家使用 Sawmill Convert method 時，必須指定提供該 method 的 Sawmill T1。
   - REQ-017.8: 每次 Sawmill Convert 成功時，必須減少所屬 Building 的 60 秒耐久時間。
   - REQ-017.9: 已安裝的 Sawmill T1 必須使用目前 definition 的 Convert capacity 與 Building 耐久消耗秒數，不得保存這兩個平衡值的歷史快照。
-- [ ] Task 4 [parallel: no]: Expose strict JSON contracts, state responses, extension Action endpoints, Convert computation results, and sanitized logs in `internal/authapi/server.go`. Update server tests and `docs/architecture.md` in the same commit.
+- [x] Task 4 [parallel: no]: Expose strict JSON contracts, state responses, extension Action endpoints, Convert computation results, and sanitized logs in `internal/authapi/server.go`. Update server tests and `docs/architecture.md` in the same commit.
   - REQ-008.12: 後端必須拒絕不存在的 method、非正整數 quantity、超過 method 上限的 quantity、錯誤格式與未支援欄位。
   - REQ-008.15: 後端必須記錄 user ID、Action、method、quantity、Resource 產量、Essence 判定結果、結果與 request ID。
   - REQ-008.16: Log 不得包含 credentials、session、OAuth 資料、cookie、secret 或未處理的原始輸入。
