@@ -7,6 +7,8 @@ last_reviewed: 2026-08-29
 source_paths:
   - internal/authapi/server.go
   - internal/authapi/store.go
+  - internal/authapi/server_test.go
+  - docs/architecture.md
   - web/src/App.tsx
   - web/src/auth.ts
 req_ref: REQ-018
@@ -44,7 +46,7 @@ REQ-018 is the source of truth. Each criterion is copied into one task below.
 
 ## Tasks
 
-- [ ] Task 1 [parallel: no]: Filter backend gameplay options and expose executable target metadata in `internal/authapi/store.go` and `internal/authapi/server.go`. Update backend tests and `docs/architecture.md` in the same commit.
+- [x] Task 1 [parallel: no]: Filter backend gameplay options and expose executable target metadata in `internal/authapi/store.go` and `internal/authapi/server.go`. Update backend tests and `docs/architecture.md` in the same commit.
   - REQ-018.1: 後端回傳玩家狀態時，只能包含玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe。
   - REQ-018.2: 可執行性必須由後端依 Action 定義、玩家狀態、目前 Location、target 狀態、權限、AP、Resource inputs 與 Active Item inputs 判定。
   - REQ-018.3: 可執行性判定不得修改任何玩家或世界狀態。

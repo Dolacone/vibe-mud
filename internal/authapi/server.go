@@ -46,12 +46,8 @@ type currentUserResponse struct {
 }
 
 type restResponse struct {
-	AP int `json:"ap"`
-}
-
-type restConflictResponse struct {
-	Error string `json:"error"`
-	AP    int    `json:"ap"`
+	Error string `json:"error,omitempty"`
+	playerStateResponse
 }
 
 type locationResponse struct {
@@ -66,6 +62,7 @@ type routeResponse struct {
 }
 
 type playerStateResponse struct {
+	AvailableActions             []string                              `json:"available_actions"`
 	Location                     locationResponse                      `json:"location"`
 	Routes                       []routeResponse                       `json:"routes"`
 	AP                           int                                   `json:"ap"`
@@ -175,14 +172,21 @@ type conversionMethodResponse struct {
 	EssenceItem              *itemResponse `json:"essence_item"`
 	EssenceChanceBPS         int           `json:"essence_chance_bps"`
 	EssenceQuantity          int           `json:"essence_quantity"`
+	ProviderExtensionIDs     []int64       `json:"provider_extension_ids"`
 }
 
 type buildingExtensionDefinitionResponse struct {
-	ID          string       `json:"id"`
-	DisplayName string       `json:"display_name"`
-	Tier        int          `json:"tier"`
-	PackageItem itemResponse `json:"package_item"`
-	RequiredAP  int          `json:"required_ap"`
+	ID                  string                                `json:"id"`
+	DisplayName         string                                `json:"display_name"`
+	Tier                int                                   `json:"tier"`
+	PackageItem         itemResponse                          `json:"package_item"`
+	RequiredAP          int                                   `json:"required_ap"`
+	InstallationTargets []extensionInstallationTargetResponse `json:"installation_targets"`
+}
+
+type extensionInstallationTargetResponse struct {
+	BuildingID int64 `json:"building_id"`
+	SlotIndex  int   `json:"slot_index"`
 }
 
 type transferResponse struct {
@@ -229,6 +233,7 @@ const (
 	transferReasonExpiredItem        = "expired_item"
 
 	moveAction                       = "move"
+	restAction                       = "rest"
 	moveReasonInvalidJSON            = "invalid_json"
 	moveReasonUnknownField           = "unknown_field"
 	moveReasonDuplicate              = "duplicate_field"
@@ -275,6 +280,9 @@ const (
 	buildReasonInsufficientItem      = "insufficient_item"
 	buildReasonOccupied              = "building_occupied"
 	contributeConstructionAction     = "contribute-construction"
+	installExtensionAction           = "install-extension"
+	contributeExtensionAction        = "contribute-extension-construction"
+	removeExtensionAction            = "remove-extension"
 	contributeReasonInvalidJSON      = "invalid_json"
 	contributeReasonUnknownField     = "unknown_field"
 	contributeReasonDuplicate        = "duplicate_field"
@@ -299,6 +307,9 @@ const (
 	repairReasonUnderConstruction    = "under_construction"
 	repairReasonInsufficientAP       = "insufficient_ap"
 	repairReasonInsufficientResource = "insufficient_resource"
+	activeItemStatus                 = "active"
+	activeBuildingDurabilityStatus   = "active"
+	woodResourceIdentifier           = "wood"
 )
 
 type Config struct {
@@ -503,7 +514,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		ID:                  identity.ID,
 		DisplayName:         identity.DisplayName,
 		Email:               identity.Email,
-		playerStateResponse: playerStateResponseFromStore(state),
+		playerStateResponse: playerStateResponseFromStore(state, identity.ID),
 	}
 	s.writeJSON(w, http.StatusOK, response)
 }
@@ -1160,25 +1171,30 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	ap, err := s.store.Rest(session.UserID)
+	_, err = s.store.Rest(session.UserID)
 	if errors.Is(err, ErrInsufficientAP) {
-		ap, apErr := s.store.GetAP(session.UserID)
-		if apErr != nil {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
 			s.writeError(w, http.StatusInternalServerError, "action unavailable")
 			return
 		}
-		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", ap)
+		s.logComputation(r, session.UserID, "ap_calculation", "insufficient_ap", state.AP)
 		s.logAction(r, session.UserID, "rest", "insufficient_ap")
-		s.writeJSON(w, http.StatusConflict, restConflictResponse{Error: err.Error(), AP: ap})
+		s.writeJSON(w, http.StatusConflict, restResponse{Error: err.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "action unavailable")
 		return
 	}
-	s.logComputation(r, session.UserID, "ap_calculation", "success", ap)
+	state, err := s.store.GetPlayerState(session.UserID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
 	s.logAction(r, session.UserID, "rest", "success")
-	s.writeJSON(w, http.StatusOK, restResponse{AP: ap})
+	s.writeJSON(w, http.StatusOK, restResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
 func (s *Server) move(w http.ResponseWriter, r *http.Request) {
@@ -1786,8 +1802,18 @@ func routeResponsesFromStore(routes []Route) []routeResponse {
 	return responses
 }
 
-func playerStateResponseFromStore(state PlayerState) playerStateResponse {
+type playerAvailability struct {
+	Actions             []string
+	ConversionProviders map[string][]int64
+	InstallationTargets map[string][]extensionInstallationTargetResponse
+	BuildingActions     map[int64][]string
+	ExtensionActions    map[int64][]string
+}
+
+func playerStateResponseFromStore(state PlayerState, userID int64) playerStateResponse {
+	state, availability := filterAvailableGameplayOptions(state, userID)
 	return playerStateResponse{
+		AvailableActions:             availability.Actions,
 		Location:                     locationResponseFromStore(state.Location),
 		Routes:                       routeResponsesFromStore(state.Routes),
 		AP:                           state.AP,
@@ -1798,24 +1824,226 @@ func playerStateResponseFromStore(state PlayerState) playerStateResponse {
 		GroundResources:              groundResourceResponsesFromStore(state.GroundResources),
 		GatheringOption:              gatheringOptionResponseFromStore(state.GatheringOption),
 		ConversionOption:             conversionOptionResponseFromStore(state.ConversionOption),
-		ConversionMethods:            conversionMethodResponsesFromStore(state.ConversionMethods),
-		BuildingExtensionDefinitions: buildingExtensionDefinitionResponsesFromStore(state.BuildingExtensionDefinitions),
+		ConversionMethods:            conversionMethodResponsesFromStore(state.ConversionMethods, availability.ConversionProviders),
+		BuildingExtensionDefinitions: buildingExtensionDefinitionResponsesFromStore(state.BuildingExtensionDefinitions, availability.InstallationTargets),
 		Resources:                    resourceResponsesFromStore(state.Resources),
 		CraftingRecipes:              craftingRecipeResponsesFromStore(state.CraftingRecipes),
 		BuildingRecipes:              buildingRecipeResponsesFromStore(state.BuildingRecipes),
-		Buildings:                    buildingResponsesFromStore(state.Buildings),
+		Buildings:                    buildingResponsesFromStore(state.Buildings, availability),
 	}
 }
 
-func buildingExtensionDefinitionResponsesFromStore(definitions []BuildingExtensionDefinition) []buildingExtensionDefinitionResponse {
+func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerState, playerAvailability) {
+	availability := playerAvailability{
+		Actions:             make([]string, 0),
+		ConversionProviders: make(map[string][]int64),
+		InstallationTargets: make(map[string][]extensionInstallationTargetResponse),
+		BuildingActions:     make(map[int64][]string),
+		ExtensionActions:    make(map[int64][]string),
+	}
+	activeItems := make(map[string]int)
+	for _, item := range state.Inventory {
+		if item.DurabilityStatus == activeItemStatus {
+			activeItems[item.Item.ID] += item.Quantity
+		}
+	}
+	resources := make(map[string]int)
+	for _, resource := range state.Resources {
+		resources[resource.Resource.ID] = resource.Quantity
+	}
+
+	if state.AP > 0 {
+		availability.Actions = append(availability.Actions, restAction)
+	}
+	availableRoutes := make([]Route, 0, len(state.Routes))
+	if state.CarriedWeight <= state.MovementWeightThreshold {
+		for _, route := range state.Routes {
+			if state.AP >= route.APCost {
+				availableRoutes = append(availableRoutes, route)
+			}
+		}
+	}
+	state.Routes = availableRoutes
+	if len(state.Routes) > 0 {
+		availability.Actions = append(availability.Actions, moveAction)
+	}
+	if state.GatheringOption != nil && state.AP >= state.GatheringOption.APCost {
+		availability.Actions = append(availability.Actions, gatherAction)
+	} else {
+		state.GatheringOption = nil
+	}
+	if state.ConversionOption != nil && (state.AP < state.ConversionOption.APCost || activeItems[state.ConversionOption.Item.ID] < state.ConversionOption.InputQuantity) {
+		state.ConversionOption = nil
+	}
+
+	availableMethods := make([]ConversionMethod, 0, len(state.ConversionMethods))
+	for _, method := range state.ConversionMethods {
+		if state.AP < method.APCost || activeItems[method.Input.ID] < 1 {
+			continue
+		}
+		providers := make([]int64, 0)
+		if !method.IsGlobal {
+			for _, building := range state.Buildings {
+				if building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+					continue
+				}
+				for _, extension := range building.Extensions {
+					if extension.Status == "completed" && stringInSlice(extension.DefinitionID, method.ProviderDefinitionIDs) {
+						providers = append(providers, extension.ID)
+					}
+				}
+			}
+			if len(providers) == 0 {
+				continue
+			}
+		}
+		availability.ConversionProviders[method.ID] = providers
+		availableMethods = append(availableMethods, method)
+	}
+	state.ConversionMethods = availableMethods
+	if len(state.ConversionMethods) > 0 || state.ConversionOption != nil {
+		availability.Actions = append(availability.Actions, convertAction)
+	}
+
+	availableCrafting := make([]CraftingRecipe, 0, len(state.CraftingRecipes))
+	for _, recipe := range state.CraftingRecipes {
+		if state.AP >= recipe.BaseAPCost && recipeInputsAvailable(recipe.ResourceInputs, recipe.ItemInputs, resources, activeItems) {
+			availableCrafting = append(availableCrafting, recipe)
+		}
+	}
+	state.CraftingRecipes = availableCrafting
+	if len(state.CraftingRecipes) > 0 {
+		availability.Actions = append(availability.Actions, craftAction)
+	}
+
+	hasOwnedBuilding := false
+	for _, building := range state.Buildings {
+		if building.Owner.ID == userID {
+			hasOwnedBuilding = true
+			break
+		}
+	}
+	availableBuildingRecipes := make([]BuildingRecipe, 0, len(state.BuildingRecipes))
+	if !hasOwnedBuilding {
+		for _, recipe := range state.BuildingRecipes {
+			if recipeInputsAvailable(recipe.ResourceInputs, recipe.ItemInputs, resources, activeItems) {
+				availableBuildingRecipes = append(availableBuildingRecipes, recipe)
+			}
+		}
+	}
+	state.BuildingRecipes = availableBuildingRecipes
+	if len(state.BuildingRecipes) > 0 {
+		availability.Actions = append(availability.Actions, buildAction)
+	}
+
+	availableDefinitions := make([]BuildingExtensionDefinition, 0, len(state.BuildingExtensionDefinitions))
+	for _, definition := range state.BuildingExtensionDefinitions {
+		if activeItems[definition.PackageItem.ID] < 1 {
+			continue
+		}
+		targets := make([]extensionInstallationTargetResponse, 0)
+		for _, building := range state.Buildings {
+			if building.Owner.ID != userID || building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+				continue
+			}
+			for slotIndex := 0; slotIndex < building.ExtensionSlotCount; slotIndex++ {
+				occupied := false
+				for _, extension := range building.Extensions {
+					if extension.SlotIndex == slotIndex {
+						occupied = true
+						break
+					}
+				}
+				if !occupied {
+					targets = append(targets, extensionInstallationTargetResponse{BuildingID: building.ID, SlotIndex: slotIndex})
+				}
+			}
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		availability.InstallationTargets[definition.ID] = targets
+		availableDefinitions = append(availableDefinitions, definition)
+	}
+	state.BuildingExtensionDefinitions = availableDefinitions
+
+	for _, building := range state.Buildings {
+		actions := make([]string, 0)
+		if building.Status == "under_construction" && state.AP > 0 {
+			actions = append(actions, contributeConstructionAction)
+		}
+		if building.Status == "completed" && (building.DurabilityStatus == activeBuildingDurabilityStatus || building.DurabilityStatus == "disabled") && state.AP >= buildingRepairAPCost && resources[woodResourceIdentifier] >= buildingRepairWoodCost {
+			actions = append(actions, repairBuildingAction)
+		}
+		for _, targets := range availability.InstallationTargets {
+			for _, target := range targets {
+				if target.BuildingID == building.ID {
+					actions = appendUnique(actions, installExtensionAction)
+				}
+			}
+		}
+		availability.BuildingActions[building.ID] = actions
+		for _, extension := range building.Extensions {
+			extensionActions := make([]string, 0)
+			if building.Status == "completed" && building.DurabilityStatus == activeBuildingDurabilityStatus && extension.Status == "under_construction" && state.AP > 0 {
+				extensionActions = append(extensionActions, contributeExtensionAction)
+			}
+			if building.Owner.ID == userID {
+				extensionActions = append(extensionActions, removeExtensionAction)
+			}
+			availability.ExtensionActions[extension.ID] = extensionActions
+		}
+		for _, action := range actions {
+			availability.Actions = appendUnique(availability.Actions, action)
+		}
+		for _, extension := range building.Extensions {
+			for _, action := range availability.ExtensionActions[extension.ID] {
+				availability.Actions = appendUnique(availability.Actions, action)
+			}
+		}
+	}
+	return state, availability
+}
+
+func recipeInputsAvailable(resourceInputs []CraftingResourceInput, itemInputs []CraftingItemInput, resources, activeItems map[string]int) bool {
+	for _, input := range resourceInputs {
+		if resources[input.Resource.ID] < input.Quantity {
+			return false
+		}
+	}
+	for _, input := range itemInputs {
+		if activeItems[input.Item.ID] < input.Quantity {
+			return false
+		}
+	}
+	return true
+}
+
+func stringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, value string) []string {
+	if stringInSlice(value, values) {
+		return values
+	}
+	return append(values, value)
+}
+
+func buildingExtensionDefinitionResponsesFromStore(definitions []BuildingExtensionDefinition, targets map[string][]extensionInstallationTargetResponse) []buildingExtensionDefinitionResponse {
 	responses := make([]buildingExtensionDefinitionResponse, 0, len(definitions))
 	for _, definition := range definitions {
-		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponse{ID: definition.PackageItem.ID, DisplayName: definition.PackageItem.DisplayName}, RequiredAP: definition.RequiredAP})
+		responses = append(responses, buildingExtensionDefinitionResponse{ID: definition.ID, DisplayName: definition.DisplayName, Tier: definition.Tier, PackageItem: itemResponse{ID: definition.PackageItem.ID, DisplayName: definition.PackageItem.DisplayName}, RequiredAP: definition.RequiredAP, InstallationTargets: targets[definition.ID]})
 	}
 	return responses
 }
 
-func conversionMethodResponsesFromStore(methods []ConversionMethod) []conversionMethodResponse {
+func conversionMethodResponsesFromStore(methods []ConversionMethod, providers map[string][]int64) []conversionMethodResponse {
 	responses := make([]conversionMethodResponse, 0, len(methods))
 	for _, method := range methods {
 		var essence *itemResponse
@@ -1823,7 +2051,7 @@ func conversionMethodResponsesFromStore(methods []ConversionMethod) []conversion
 			value := itemResponse{ID: method.EssenceItem.ID, DisplayName: method.EssenceItem.DisplayName}
 			essence = &value
 		}
-		responses = append(responses, conversionMethodResponse{ID: method.ID, DisplayName: method.DisplayName, APCost: method.APCost, Input: itemResponse{ID: method.Input.ID, DisplayName: method.Input.DisplayName}, MaxInputQuantity: method.MaxInputQuantity, OutputResource: itemResponse{ID: method.OutputResource.ID, DisplayName: method.OutputResource.DisplayName}, ResourceQuantityPerInput: method.ResourceQuantityPerInput, EssenceItem: essence, EssenceChanceBPS: method.EssenceChanceBPS, EssenceQuantity: method.EssenceQuantity})
+		responses = append(responses, conversionMethodResponse{ID: method.ID, DisplayName: method.DisplayName, APCost: method.APCost, Input: itemResponse{ID: method.Input.ID, DisplayName: method.Input.DisplayName}, MaxInputQuantity: method.MaxInputQuantity, OutputResource: itemResponse{ID: method.OutputResource.ID, DisplayName: method.OutputResource.DisplayName}, ResourceQuantityPerInput: method.ResourceQuantityPerInput, EssenceItem: essence, EssenceChanceBPS: method.EssenceChanceBPS, EssenceQuantity: method.EssenceQuantity, ProviderExtensionIDs: providers[method.ID]})
 	}
 	return responses
 }
@@ -1832,7 +2060,7 @@ func (s *Server) playerStateResponse(r *http.Request, userID int64, state Player
 	s.logCarryingWeightComputation(r, userID, state)
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
 	s.logItemDurability(r, fmt.Sprintf("%d", userID), state)
-	return playerStateResponseFromStore(state)
+	return playerStateResponseFromStore(state, userID)
 }
 
 func groundItemResponsesFromStore(items []GroundItem) []groundItemResponse {
@@ -1887,17 +2115,19 @@ type buildingResponse struct {
 	DurabilityStatus           *string                        `json:"durability_status"`
 	DurabilityRemainingSeconds *int                           `json:"durability_remaining_seconds"`
 	Extensions                 []buildingExtensionResponse    `json:"extensions"`
+	AvailableActions           []string                       `json:"available_actions"`
 }
 
 type buildingExtensionResponse struct {
-	ID            int64  `json:"id"`
-	SlotIndex     int    `json:"slot_index"`
-	DefinitionID  string `json:"definition_id"`
-	DisplayName   string `json:"display_name"`
-	Tier          int    `json:"tier"`
-	RequiredAP    int    `json:"required_ap"`
-	ContributedAP int    `json:"contributed_ap"`
-	Status        string `json:"status"`
+	ID               int64    `json:"id"`
+	SlotIndex        int      `json:"slot_index"`
+	DefinitionID     string   `json:"definition_id"`
+	DisplayName      string   `json:"display_name"`
+	Tier             int      `json:"tier"`
+	RequiredAP       int      `json:"required_ap"`
+	ContributedAP    int      `json:"contributed_ap"`
+	Status           string   `json:"status"`
+	AvailableActions []string `json:"available_actions"`
 }
 
 type buildingOwnerResponse struct {
@@ -1944,15 +2174,15 @@ func buildingRecipeResponseFromStore(recipe BuildingRecipe) buildingRecipeRespon
 	}
 }
 
-func buildingResponsesFromStore(buildings []Building) []buildingResponse {
+func buildingResponsesFromStore(buildings []Building, availability playerAvailability) []buildingResponse {
 	responses := make([]buildingResponse, 0, len(buildings))
 	for _, building := range buildings {
-		responses = append(responses, buildingResponseFromStore(building))
+		responses = append(responses, buildingResponseFromStore(building, availability))
 	}
 	return responses
 }
 
-func buildingResponseFromStore(building Building) buildingResponse {
+func buildingResponseFromStore(building Building, availability playerAvailability) buildingResponse {
 	response := buildingResponse{
 		ID: building.ID,
 		Owner: buildingOwnerResponse{
@@ -1970,9 +2200,10 @@ func buildingResponseFromStore(building Building) buildingResponse {
 		ExtensionSlotCount:   building.ExtensionSlotCount,
 		MaxDurabilitySeconds: building.MaxDurabilitySeconds,
 		Extensions:           make([]buildingExtensionResponse, 0, len(building.Extensions)),
+		AvailableActions:     availability.BuildingActions[building.ID],
 	}
 	for _, extension := range building.Extensions {
-		response.Extensions = append(response.Extensions, buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, RequiredAP: extension.RequiredAP, ContributedAP: extension.ContributedAP, Status: extension.Status})
+		response.Extensions = append(response.Extensions, buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, RequiredAP: extension.RequiredAP, ContributedAP: extension.ContributedAP, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]})
 	}
 	if building.DurabilityStatus != "" {
 		status := building.DurabilityStatus

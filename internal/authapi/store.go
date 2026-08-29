@@ -124,6 +124,8 @@ type ConversionMethod struct {
 	EssenceItem              *Item
 	EssenceChanceBPS         int
 	EssenceQuantity          int
+	IsGlobal                 bool
+	ProviderDefinitionIDs    []string
 }
 
 type BuildingExtensionDefinition struct {
@@ -1590,7 +1592,8 @@ func loadConversionMethodsTx(tx *sql.Tx, state *PlayerState) error {
 SELECT cm.id, cm.display_name, cm.ap_cost, ii.id, ii.display_name, ii.weight_units, ii.max_durability_seconds,
        cm.max_input_quantity, output.id, output.display_name, cm.resource_quantity_per_input,
        essence.id, essence.display_name, essence.weight_units, essence.max_durability_seconds,
-       cm.essence_chance_bps, cm.essence_quantity
+       cm.essence_chance_bps, cm.essence_quantity,
+       EXISTS (SELECT 1 FROM global_conversion_methods gm WHERE gm.conversion_method_id = cm.id)
 FROM conversion_methods cm
 JOIN items ii ON ii.id = cm.input_item_id
 JOIN resource_types output ON output.id = cm.output_resource_id
@@ -1599,9 +1602,8 @@ ORDER BY cm.id`)
 	if err != nil {
 		return fmt.Errorf("get conversion methods: %w", err)
 	}
-	defer rows.Close()
 	for rows.Next() {
-		var method ConversionMethod
+		method := ConversionMethod{ProviderDefinitionIDs: make([]string, 0)}
 		var essenceID, essenceDisplay sql.NullString
 		var essenceWeight, essenceDurability sql.NullInt64
 		if err := rows.Scan(
@@ -1609,7 +1611,7 @@ ORDER BY cm.id`)
 			&method.Input.ID, &method.Input.DisplayName, &method.Input.WeightUnits, &method.Input.MaxDurabilitySeconds,
 			&method.MaxInputQuantity, &method.OutputResource.ID, &method.OutputResource.DisplayName,
 			&method.ResourceQuantityPerInput, &essenceID, &essenceDisplay, &essenceWeight, &essenceDurability,
-			&method.EssenceChanceBPS, &method.EssenceQuantity,
+			&method.EssenceChanceBPS, &method.EssenceQuantity, &method.IsGlobal,
 		); err != nil {
 			return fmt.Errorf("scan conversion method: %w", err)
 		}
@@ -1619,7 +1621,34 @@ ORDER BY cm.id`)
 		state.ConversionMethods = append(state.ConversionMethods, method)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return fmt.Errorf("read conversion methods: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close conversion methods: %w", err)
+	}
+	providerRows, err := tx.Query(`
+SELECT conversion_method_id, extension_definition_id
+FROM extension_conversion_capabilities
+ORDER BY conversion_method_id, extension_definition_id`)
+	if err != nil {
+		return fmt.Errorf("get conversion method providers: %w", err)
+	}
+	defer providerRows.Close()
+	for providerRows.Next() {
+		var methodID, definitionID string
+		if err := providerRows.Scan(&methodID, &definitionID); err != nil {
+			return fmt.Errorf("scan conversion method provider: %w", err)
+		}
+		for index := range state.ConversionMethods {
+			if state.ConversionMethods[index].ID == methodID {
+				state.ConversionMethods[index].ProviderDefinitionIDs = append(state.ConversionMethods[index].ProviderDefinitionIDs, definitionID)
+				break
+			}
+		}
+	}
+	if err := providerRows.Err(); err != nil {
+		return fmt.Errorf("read conversion method providers: %w", err)
 	}
 	return nil
 }

@@ -126,6 +126,83 @@ func responseResourceQuantities(t *testing.T, body map[string]any) map[string]fl
 	return quantities
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPlayerStateResponseFiltersOptionsFromCurrentAuthoritativeState(t *testing.T) {
+	const userID int64 = 42
+	state := PlayerState{
+		Location:                     Location{ID: "camp", DisplayName: "Camp"},
+		AP:                           20,
+		CarriedWeight:                movementWeightThreshold,
+		MovementWeightThreshold:      movementWeightThreshold,
+		Routes:                       []Route{{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}, {OriginID: "camp", DestinationID: "mine", APCost: 21}},
+		Inventory:                    []InventoryItem{{Item: Item{ID: "wood"}, Quantity: 10, DurabilityStatus: activeItemStatus}, {Item: Item{ID: "wood_component"}, Quantity: 1, DurabilityStatus: activeItemStatus}, {Item: Item{ID: "sawmill_package_t1"}, Quantity: 1, DurabilityStatus: activeItemStatus}},
+		Resources:                    []PlayerResource{{Resource: ResourceType{ID: woodResourceIdentifier}, Quantity: 10}},
+		GatheringOption:              &GatheringOption{Item: Item{ID: "wood"}, Quantity: 1, APCost: 20},
+		ConversionOption:             &ConversionOption{Item: Item{ID: "wood"}, Resource: ResourceType{ID: "wood"}, InputQuantity: 1, ResourceYield: 1, APCost: 20},
+		ConversionMethods:            []ConversionMethod{{ID: "hand", APCost: 20, Input: Item{ID: "wood"}, MaxInputQuantity: 1, IsGlobal: true}, {ID: "sawmill", APCost: 20, Input: Item{ID: "wood"}, MaxInputQuantity: 1, ProviderDefinitionIDs: []string{"sawmill_t1"}}, {ID: "too-expensive", APCost: 21, Input: Item{ID: "wood"}, MaxInputQuantity: 1, IsGlobal: true}},
+		CraftingRecipes:              []CraftingRecipe{{ID: "craftable", BaseAPCost: 20, ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "wood"}, Quantity: 10}}, ItemInputs: []CraftingItemInput{{Item: Item{ID: "wood_component"}, Quantity: 1}}}, {ID: "missing-resource", BaseAPCost: 20, ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "stone"}, Quantity: 1}}}},
+		BuildingRecipes:              []BuildingRecipe{{ID: "buildable", ResourceInputs: []CraftingResourceInput{{Resource: ResourceType{ID: "wood"}, Quantity: 10}}, ItemInputs: []CraftingItemInput{{Item: Item{ID: "wood_component"}, Quantity: 1}}}},
+		BuildingExtensionDefinitions: []BuildingExtensionDefinition{{ID: "sawmill_t1", PackageItem: Item{ID: "sawmill_package_t1"}}, {ID: "missing-package", PackageItem: Item{ID: "missing_package"}}},
+		Buildings: []Building{
+			{ID: 1, Owner: BuildingOwner{ID: userID}, Status: "under_construction"},
+			{ID: 2, Owner: BuildingOwner{ID: userID}, Status: "completed", DurabilityStatus: activeBuildingDurabilityStatus, ExtensionSlotCount: 2, Extensions: []BuildingExtension{{ID: 101, SlotIndex: 0, DefinitionID: "sawmill_t1", Status: "completed"}}},
+			{ID: 3, Owner: BuildingOwner{ID: userID}, Status: "completed", DurabilityStatus: activeBuildingDurabilityStatus, ExtensionSlotCount: 1, Extensions: []BuildingExtension{{ID: 102, SlotIndex: 0, DefinitionID: "sawmill_t1", Status: "under_construction"}}},
+		},
+	}
+	original := state
+	filtered, availability := filterAvailableGameplayOptions(state, userID)
+
+	if !reflect.DeepEqual(state, original) {
+		t.Fatalf("availability calculation mutated authoritative state: before=%+v after=%+v", original, state)
+	}
+	if !reflect.DeepEqual(filtered.Routes, []Route{{OriginID: "camp", DestinationID: "forest_edge", APCost: 20}}) {
+		t.Fatalf("routes = %+v, want only the affordable route", filtered.Routes)
+	}
+	if len(filtered.CraftingRecipes) != 1 || filtered.CraftingRecipes[0].ID != "craftable" {
+		t.Fatalf("crafting recipes = %+v, want only the recipe with all inputs", filtered.CraftingRecipes)
+	}
+	if len(filtered.BuildingRecipes) != 0 {
+		t.Fatalf("building recipes = %+v, want none when the location limit is occupied", filtered.BuildingRecipes)
+	}
+	if filtered.ConversionOption == nil || len(filtered.ConversionMethods) != 2 {
+		t.Fatalf("conversion options = %+v/%+v, want available legacy option and methods", filtered.ConversionOption, filtered.ConversionMethods)
+	}
+	if got := availability.ConversionProviders["sawmill"]; !reflect.DeepEqual(got, []int64{101}) {
+		t.Fatalf("sawmill providers = %v, want completed local extension 101", got)
+	}
+	if got := availability.InstallationTargets["sawmill_t1"]; !reflect.DeepEqual(got, []extensionInstallationTargetResponse{{BuildingID: 2, SlotIndex: 1}}) {
+		t.Fatalf("installation targets = %+v, want the one empty slot", got)
+	}
+	if len(filtered.BuildingExtensionDefinitions) != 1 || filtered.BuildingExtensionDefinitions[0].ID != "sawmill_t1" {
+		t.Fatalf("extension definitions = %+v, want only the package-backed definition", filtered.BuildingExtensionDefinitions)
+	}
+	wantActions := []string{"rest", "move", "gather", "convert", "craft", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"}
+	if !reflect.DeepEqual(availability.Actions, wantActions) {
+		t.Fatalf("available actions = %v, want %v", availability.Actions, wantActions)
+	}
+	if !reflect.DeepEqual(availability.BuildingActions[1], []string{"contribute-construction"}) || !reflect.DeepEqual(availability.BuildingActions[2], []string{"repair-building", "install-extension"}) {
+		t.Fatalf("building action metadata = %+v", availability.BuildingActions)
+	}
+	if !reflect.DeepEqual(availability.ExtensionActions[102], []string{"contribute-extension-construction", "remove-extension"}) {
+		t.Fatalf("extension action metadata = %+v", availability.ExtensionActions[102])
+	}
+
+	noBuilding := state
+	noBuilding.Buildings = nil
+	filtered, availability = filterAvailableGameplayOptions(noBuilding, userID)
+	if len(filtered.BuildingRecipes) != 1 || filtered.BuildingRecipes[0].ID != "buildable" || !containsString(availability.Actions, buildAction) {
+		t.Fatalf("build availability = recipes %+v/actions %v, want buildable recipe and action", filtered.BuildingRecipes, availability.Actions)
+	}
+}
+
 func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -489,16 +566,15 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 19 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 20 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
 	}
-	definitions, ok := meBody["building_extension_definitions"].([]any)
-	if !ok || len(definitions) != 1 {
-		t.Fatalf("extension definitions = %#v", meBody["building_extension_definitions"])
+	if actions, ok := meBody["available_actions"].([]any); !ok || !reflect.DeepEqual(actions, []any{"rest", "move"}) {
+		t.Fatalf("available actions = %#v, want rest and move only", meBody["available_actions"])
 	}
-	definition := definitions[0].(map[string]any)
-	if definition["id"] != "sawmill_t1" || definition["display_name"] != "Sawmill T1" || definition["tier"] != float64(1) || definition["required_ap"] != float64(30) {
-		t.Fatalf("extension definition = %#v", definition)
+	definitions, ok := meBody["building_extension_definitions"].([]any)
+	if !ok || len(definitions) != 0 {
+		t.Fatalf("extension definitions = %#v", meBody["building_extension_definitions"])
 	}
 	if meBody["carried_weight"] != float64(0) || meBody["movement_weight_threshold"] != float64(movementWeightThreshold) {
 		t.Fatalf("GET /api/me carrying weight = %#v/%#v, want 0/%d", meBody["carried_weight"], meBody["movement_weight_threshold"], movementWeightThreshold)
@@ -510,7 +586,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me ground resources = %#v", meBody["ground_resources"])
 	}
 	buildingRecipes, ok := meBody["building_recipes"].([]any)
-	if !ok || len(buildingRecipes) != 1 {
+	if !ok || len(buildingRecipes) != 0 {
 		t.Fatalf("GET /api/me building recipes = %#v", meBody["building_recipes"])
 	}
 	buildings, ok := meBody["buildings"].([]any)
@@ -518,23 +594,8 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 		t.Fatalf("GET /api/me buildings = %#v", meBody["buildings"])
 	}
 	recipes, ok := meBody["crafting_recipes"].([]any)
-	if !ok || len(recipes) != 2 {
+	if !ok || len(recipes) != 0 {
 		t.Fatalf("GET /api/me crafting recipes = %#v", meBody["crafting_recipes"])
-	}
-	recipeIDs := make(map[string]bool, len(recipes))
-	for _, rawRecipe := range recipes {
-		recipe, ok := rawRecipe.(map[string]any)
-		if !ok {
-			t.Fatalf("GET /api/me crafting recipe = %#v", rawRecipe)
-		}
-		id, ok := recipe["id"].(string)
-		if !ok {
-			t.Fatalf("GET /api/me crafting recipe ID = %#v", recipe)
-		}
-		recipeIDs[id] = true
-	}
-	if !recipeIDs["wood_component"] || !recipeIDs["sawmill_package_t1"] {
-		t.Fatalf("GET /api/me seeded crafting recipes = %#v", recipeIDs)
 	}
 	resources := responseResourceQuantities(t, meBody)
 	if len(resources) != 8 {
@@ -562,9 +623,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if meBody["gathering_option"] != nil {
 		t.Fatalf("GET /api/me camp gathering option = %#v", meBody["gathering_option"])
 	}
-	conversion, ok := meBody["conversion_option"].(map[string]any)
-	outputResource, outputResourceOK := conversion["resource"].(map[string]any)
-	if !outputResourceOK || outputResource["id"] != "wood" || outputResource["display_name"] != "Wood" || conversion["input_quantity"] != float64(1) || conversion["resource_yield"] != float64(1) || conversion["ap_cost"] != float64(1) {
+	if meBody["conversion_option"] != nil {
 		t.Fatalf("GET /api/me camp conversion option = %#v", meBody["conversion_option"])
 	}
 
@@ -581,7 +640,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(restResponse.Body.Bytes(), &restBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(restBody) != 1 || restBody["ap"] != float64(maxAP-1) {
+	if len(restBody) != 17 || restBody["ap"] != float64(maxAP-1) {
 		t.Fatalf("POST /api/actions/rest JSON = %#v", restBody)
 	}
 	if ap, err := store.GetAP(identity.ID); err != nil || ap != maxAP-1 {
@@ -635,7 +694,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		t.Fatalf("buildings response = %#v", body["buildings"])
 	}
 	building := buildings[0].(map[string]any)
-	if !reflect.DeepEqual(sortedMapKeys(building), []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
+	if !reflect.DeepEqual(sortedMapKeys(building), []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}) || building["required_ap"] != float64(60) || building["contributed_ap"] != float64(0) || building["status"] != "under_construction" || building["max_durability_seconds"] != float64(buildingDefaultDurability/time.Second) || building["durability_status"] != nil || building["durability_remaining_seconds"] != nil {
 		t.Fatalf("building response = %#v", building)
 	}
 	recipe := building["recipe"].(map[string]any)
@@ -793,7 +852,7 @@ func buildingFromResponse(t *testing.T, body []byte) map[string]any {
 
 func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
 	t.Helper()
-	wantKeys := []string{"building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
+	wantKeys := []string{"available_actions", "building_level", "contributed_ap", "durability_remaining_seconds", "durability_status", "extension_slot_count", "extensions", "id", "max_durability_seconds", "owner", "recipe", "required_ap", "status"}
 	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
 		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
 	}
