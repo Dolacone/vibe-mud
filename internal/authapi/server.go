@@ -1860,23 +1860,9 @@ func playerStateResponseFromStore(state PlayerState, userID int64) playerStateRe
 }
 
 func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerState, playerAvailability) {
-	availability := playerAvailability{
-		Actions:             make([]string, 0),
-		ConversionProviders: make(map[string][]int64),
-		InstallationTargets: make(map[string][]extensionInstallationTargetResponse),
-		BuildingActions:     make(map[int64][]string),
-		ExtensionActions:    make(map[int64][]string),
-	}
-	activeItems := make(map[string]int)
-	for _, item := range state.Inventory {
-		if item.DurabilityStatus == activeItemStatus {
-			activeItems[item.Item.ID] += item.Quantity
-		}
-	}
-	resources := make(map[string]int)
-	for _, resource := range state.Resources {
-		resources[resource.Resource.ID] = resource.Quantity
-	}
+	availability := newPlayerAvailability()
+	activeItems := activeItemQuantities(state.Inventory)
+	resources := resourceQuantities(state.Resources)
 
 	if state.AP > 0 {
 		availability.Actions = append(availability.Actions, restAction)
@@ -1907,21 +1893,9 @@ func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerStat
 		if state.AP < method.APCost || activeItems[method.Input.ID] < 1 {
 			continue
 		}
-		providers := make([]int64, 0)
-		if !method.IsGlobal {
-			for _, building := range state.Buildings {
-				if building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
-					continue
-				}
-				for _, extension := range building.Extensions {
-					if extension.Status == "completed" && stringInSlice(extension.DefinitionID, method.ProviderDefinitionIDs) {
-						providers = append(providers, extension.ID)
-					}
-				}
-			}
-			if len(providers) == 0 {
-				continue
-			}
+		providers := conversionProviderIDs(method, state.Buildings)
+		if !method.IsGlobal && len(providers) == 0 {
+			continue
 		}
 		availability.ConversionProviders[method.ID] = providers
 		availableMethods = append(availableMethods, method)
@@ -1967,24 +1941,7 @@ func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerStat
 		if activeItems[definition.PackageItem.ID] < 1 {
 			continue
 		}
-		targets := make([]extensionInstallationTargetResponse, 0)
-		for _, building := range state.Buildings {
-			if building.Owner.ID != userID || building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
-				continue
-			}
-			for slotIndex := 0; slotIndex < building.ExtensionSlotCount; slotIndex++ {
-				occupied := false
-				for _, extension := range building.Extensions {
-					if extension.SlotIndex == slotIndex {
-						occupied = true
-						break
-					}
-				}
-				if !occupied {
-					targets = append(targets, extensionInstallationTargetResponse{BuildingID: building.ID, SlotIndex: slotIndex})
-				}
-			}
-		}
+		targets := extensionInstallationTargets(state.Buildings, userID)
 		if len(targets) == 0 {
 			continue
 		}
@@ -2029,6 +1986,74 @@ func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerStat
 		}
 	}
 	return state, availability
+}
+
+func newPlayerAvailability() playerAvailability {
+	return playerAvailability{
+		Actions:             make([]string, 0),
+		ConversionProviders: make(map[string][]int64),
+		InstallationTargets: make(map[string][]extensionInstallationTargetResponse),
+		BuildingActions:     make(map[int64][]string),
+		ExtensionActions:    make(map[int64][]string),
+	}
+}
+
+func activeItemQuantities(inventory []InventoryItem) map[string]int {
+	quantities := make(map[string]int)
+	for _, item := range inventory {
+		if item.DurabilityStatus == activeItemStatus {
+			quantities[item.Item.ID] += item.Quantity
+		}
+	}
+	return quantities
+}
+
+func resourceQuantities(resources []PlayerResource) map[string]int {
+	quantities := make(map[string]int)
+	for _, resource := range resources {
+		quantities[resource.Resource.ID] = resource.Quantity
+	}
+	return quantities
+}
+
+func conversionProviderIDs(method ConversionMethod, buildings []Building) []int64 {
+	providers := make([]int64, 0)
+	if method.IsGlobal {
+		return providers
+	}
+	for _, building := range buildings {
+		if building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+			continue
+		}
+		for _, extension := range building.Extensions {
+			if extension.Status == "completed" && stringInSlice(extension.DefinitionID, method.ProviderDefinitionIDs) {
+				providers = append(providers, extension.ID)
+			}
+		}
+	}
+	return providers
+}
+
+func extensionInstallationTargets(buildings []Building, userID int64) []extensionInstallationTargetResponse {
+	targets := make([]extensionInstallationTargetResponse, 0)
+	for _, building := range buildings {
+		if building.Owner.ID != userID || building.Status != "completed" || building.DurabilityStatus != activeBuildingDurabilityStatus {
+			continue
+		}
+		for slotIndex := 0; slotIndex < building.ExtensionSlotCount; slotIndex++ {
+			occupied := false
+			for _, extension := range building.Extensions {
+				if extension.SlotIndex == slotIndex {
+					occupied = true
+					break
+				}
+			}
+			if !occupied {
+				targets = append(targets, extensionInstallationTargetResponse{BuildingID: building.ID, SlotIndex: slotIndex})
+			}
+		}
+	}
+	return targets
 }
 
 func recipeInputsAvailable(resourceInputs []CraftingResourceInput, itemInputs []CraftingItemInput, resources, activeItems map[string]int) bool {
