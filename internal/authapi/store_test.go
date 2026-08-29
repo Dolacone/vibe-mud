@@ -620,6 +620,47 @@ VALUES (?, 'sawmill_package_t1', 'active', ?, 1);`, owner.ID, now.Add(time.Hour)
 	}
 }
 
+func TestRemoveExtensionRejectsRemoteOwnedExtensionWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-extension-remove-remote", "owner@example.com", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count, max_durability_seconds, durability_expires_at)
+VALUES (?, 'forest_edge', 'building_lv1', 'Building Lv1', 1, 60, 60, 'completed', 1, 604800, ?);
+INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status)
+VALUES (1, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 30, 'completed');`, owner.ID, now.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Buildings) != 0 {
+		t.Fatalf("remote building was exposed in current-location state = %+v", before.Buildings)
+	}
+	if _, err := store.RemoveExtension(owner.ID, 1); !errors.Is(err, ErrBuildingRemote) {
+		t.Fatalf("remote extension removal error = %v, want ErrBuildingRemote", err)
+	}
+	after, err := store.GetPlayerState(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("remote extension removal changed player state: before=%+v after=%+v", before, after)
+	}
+	var extensionCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM building_extensions WHERE id = 1`).Scan(&extensionCount); err != nil {
+		t.Fatal(err)
+	}
+	if extensionCount != 1 {
+		t.Fatalf("remote extension count = %d, want 1", extensionCount)
+	}
+}
+
 func TestExtensionConstructionSharesAPAndCompletesAtRequiredProgress(t *testing.T) {
 	store, db := newTestStore(t)
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)

@@ -3328,12 +3328,21 @@ func (s *Store) RemoveExtension(userID, extensionID int64) (PlayerState, error) 
 		_ = tx.Rollback()
 		return PlayerState{}, err
 	}
+	var playerLocation string
+	if err := tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&playerLocation); errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrIdentityNotFound
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, fmt.Errorf("get extension remover location: %w", err)
+	}
 	var ownerID int64
+	var buildingLocation string
 	err = tx.QueryRow(`
-SELECT b.owner_id
+SELECT b.owner_id, b.location_id
 FROM building_extensions e
 JOIN buildings b ON b.id = e.building_id
-WHERE e.id = ?`, extensionID).Scan(&ownerID)
+WHERE e.id = ?`, extensionID).Scan(&ownerID, &buildingLocation)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrExtensionNotFound
@@ -3345,6 +3354,10 @@ WHERE e.id = ?`, extensionID).Scan(&ownerID)
 	if ownerID != userID {
 		_ = tx.Rollback()
 		return PlayerState{}, ErrBuildingNotOwner
+	}
+	if playerLocation != buildingLocation {
+		_ = tx.Rollback()
+		return PlayerState{}, ErrBuildingRemote
 	}
 	result, err := tx.Exec(`DELETE FROM building_extensions WHERE id = ?`, extensionID)
 	if err != nil {
