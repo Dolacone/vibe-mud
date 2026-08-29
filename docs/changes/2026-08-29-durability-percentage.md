@@ -1,10 +1,11 @@
 ---
 title: "Durability percentage API"
-status: Refactored
+status: Done
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
 source_paths:
+  - CHANGELOG.md
   - docs/architecture.md
   - docs/changes/2026-08-29-durability-percentage.md
   - internal/authapi/server.go
