@@ -1,6 +1,6 @@
 ---
 title: "Sawmill product chain"
-status: Done
+status: Issues-confirmed
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29
@@ -157,6 +157,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
 - [x] [Major] Extension 施工日誌記錄 request AP，不是實際投入 AP。投入量被剩餘進度截斷時，日誌會高報 AP。
 - [x] [Major] Extension 施工的 effective AP 由交易外的前後 progress 相減。並發施工會把其他 request 的 AP 算入本次日誌。
+- [ ] [Major] `source_paths` 與更新後的 `main...HEAD` 不一致。清單多列 `docs/changes/2026-08-29-item-durability.md`、兩個 durability 測試、`requirements/REQ-013.md` 與 `web/src/App.test.tsx`。
 
 ## Plan Review Issues
 
