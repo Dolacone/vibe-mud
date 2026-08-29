@@ -4,6 +4,11 @@
 
 ## 2026-08-29
 
+- Added configurable hand and Sawmill conversion methods with Wood Essence output.
+- Added the Sawmill Package T1 recipe and Sawmill T1 Building extension.
+- Added shared extension construction, owner removal, and Building durability consumption.
+- Added compact conversion and Building extension controls to the frontend.
+- Added atomic extension computation logs with exact Building, extension, and AP attribution.
 - Added one-hour definition-backed durability for every Item type.
 - Added separate Active and Expired Item stacks with weighted durability merging.
 - Retained Expired Items for one day while counting them toward carrying weight.
