@@ -11,6 +11,10 @@ source_paths:
   - internal/authapi/server.go
   - docs/architecture.md
   - docs/schemas.md
+  - web/src/auth.ts
+  - web/src/App.tsx
+  - web/src/auth.test.ts
+  - docs/terminology.md
 req_ref: [REQ-008, REQ-010, REQ-011, REQ-014, REQ-015, REQ-016, REQ-017]
 base_branch: main
 scope: "Tracks configurable Convert methods, the generic Building extension lifecycle, and Sawmill T1."
@@ -113,7 +117,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
   - REQ-008.16: Log 不得包含 credentials、session、OAuth 資料、cookie、secret 或未處理的原始輸入。
   - REQ-016.20: 後端必須記錄 user ID、Building、extension、操作、AP、結果與 request ID。
   - REQ-016.21: Log 不得包含 credentials、session、OAuth 資料、cookie、secret 或未處理的原始輸入。
-- [ ] Task 5 [parallel: no]: Parse the expanded player state, implement typed clients, and render compact Convert and extension controls in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and `docs/terminology.md` in the same commit.
+- [x] Task 5 [parallel: no]: Parse the expanded player state, implement typed clients, and render compact Convert and extension controls in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and `docs/terminology.md` in the same commit.
   - REQ-008.4: 前端必須顯示後端提供的 Convert method、AP 成本、單次 input quantity 上限、Resource 產量與 Essence 機率。
   - REQ-008.5: 玩家必須選擇後端提供的 Convert method 與不超過該 method 上限的正整數 quantity。
   - REQ-016.19: 前端必須顯示空 slot、extension 顯示名稱、tier、施工狀態、progress、所需 AP 與玩家可用操作。

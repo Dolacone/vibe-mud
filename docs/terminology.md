@@ -50,6 +50,7 @@ scope: "Canonical game terms used by the application."
 | [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
 | [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
 | [Sawmill T1](#sawmill-t1) | - | 鋸木廠 T1 | [REQ-017](../requirements/REQ-017.md) |
+| [Sawmill Package T1](#sawmill-package-t1) | - | 鋸木廠套件 T1 | [REQ-017](../requirements/REQ-017.md) |
 | [Transfer](#transfer) | - | 轉移 | [REQ-013](../requirements/REQ-013.md) |
 | [Transfer: Drop](#transfer-drop) | - | 放置 | [REQ-013](../requirements/REQ-013.md) |
 | [Transfer: Pickup](#transfer-pickup) | - | 撿取 | [REQ-013](../requirements/REQ-013.md) |
@@ -58,6 +59,14 @@ scope: "Canonical game terms used by the application."
 | [Wood Component](#wood-component) | - | 木質加工品 | [REQ-009](../requirements/REQ-009.md) |
 
 ## 名詞定義
+
+### Sawmill Package T1
+
+- 正式英文名稱：Sawmill Package T1
+- 中文名稱：鋸木廠套件 T1
+- 定義：由配方產出的 Active Package Item，用於安裝 Sawmill T1。
+- 對應行為：[REQ-017 - Sawmill T1](../requirements/REQ-017.md)
+- 與相似名詞的差異：Package Item 是可安裝的物品。Sawmill T1 是安裝後提供 Convert 功能的 Building extension。
 
 ### Action
 

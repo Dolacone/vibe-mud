@@ -234,6 +234,14 @@ describe("getCurrentUser", () => {
   });
 });
 
+describe("expanded convert client", () => {
+  it("sends the selected method, quantity, and optional provider", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, method_id: "sawmill_wood_t1", quantity: 2, resource_quantity: 2, essence_quantity: 1 }), { status: 200 }));
+    await expect(convert("sawmill_wood_t1", 2, 7, fetcher)).resolves.toMatchObject({ status: "success", method_id: "sawmill_wood_t1", quantity: 2, essence_quantity: 1 });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/convert", expect.objectContaining({ body: JSON.stringify({ method_id: "sawmill_wood_t1", quantity: 2, provider_extension_id: 7 }) }));
+  });
+});
+
 describe("move", () => {
   it("sends only the target identifier and returns the authoritative state", async () => {
     const fetcher = vi.fn().mockResolvedValue(

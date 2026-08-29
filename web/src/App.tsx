@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
+import { build, contributeConstruction, contributeExtensionConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, removeExtension, repairBuilding, rest, type AuthResult, type BuildResult, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
 
 type PageState = AuthResult | { status: "loading" };
 type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | TransferResult | { status: "idle" } | { status: "pending" };
@@ -65,7 +65,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
 
   const handleGather = () => runAction("gather", gather, applyPlayerActionResult);
 
-  const handleConvert = () => runAction("convert", convert, applyPlayerActionResult);
+  const handleConvert = (methodID: string, quantity: number, providerID?: number) => runAction("convert", () => convert(methodID, quantity, providerID), applyPlayerActionResult);
 
   const handleCraft = (recipeID: string) => runAction("craft", () => craft(recipeID), applyPlayerActionResult);
 
@@ -181,8 +181,8 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
         <h2 id="convert-heading">Convert</h2>
         <TableScroll>
           <table aria-label="Convert">
-            <thead><tr><th scope="col">Input</th><th scope="col">Yield</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.conversion_option === null ? <EmptyRow colSpan={4}>No conversion action available.</EmptyRow> : <tr><th scope="row">Input: {currentUser.conversion_option.input_quantity} {currentUser.conversion_option.item.display_name}; Yield: {currentUser.conversion_option.resource_yield} {currentUser.conversion_option.resource.display_name} Resource; Cost: {currentUser.conversion_option.ap_cost} AP</th><td>{currentUser.conversion_option.resource_yield} {currentUser.conversion_option.resource.display_name} Resource</td><td>{currentUser.conversion_option.ap_cost} AP</td><td><button type="button" onClick={() => void handleConvert()} disabled={actionPendingNow}>{actionPendingNow && actionKind === "convert" ? "Converting..." : "Convert"}</button></td></tr>}</tbody>
+            <thead><tr><th scope="col">Method</th><th scope="col">Cost</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Essence chance</th><th scope="col">Controls</th></tr></thead>
+            <tbody>{(currentUser.conversion_methods ?? []).length === 0 && currentUser.conversion_option === null ? <EmptyRow colSpan={6}>No conversion action available.</EmptyRow> : (currentUser.conversion_methods ?? []).map((method) => <ConversionRow key={method.id} method={method} buildings={currentUser.buildings ?? []} disabled={actionPendingNow} onSubmit={(quantity, providerID) => void handleConvert(method.id, quantity, providerID)} />)}{(currentUser.conversion_methods ?? []).length === 0 && currentUser.conversion_option !== null && <tr><th scope="row">Input: {currentUser.conversion_option.input_quantity} {currentUser.conversion_option.item.display_name}; Yield: {currentUser.conversion_option.resource_yield} {currentUser.conversion_option.resource.display_name} Resource; Cost: {currentUser.conversion_option.ap_cost} AP</th><td>{currentUser.conversion_option.ap_cost} AP</td><td>{currentUser.conversion_option.item.display_name}</td><td>{currentUser.conversion_option.resource.display_name}</td><td>-</td><td><button type="button" onClick={() => void handleConvert("hand_wood_t1", 1)} disabled={actionPendingNow}>Convert</button></td></tr>}</tbody>
           </table>
         </TableScroll>
         {action.status === "success" && actionKind === "convert" && <p role="status">Convert succeeded.</p>}
@@ -216,8 +216,9 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
             <thead><tr><th scope="col">Building</th><th scope="col">Owner</th><th scope="col">Status</th><th scope="col">Progress</th><th scope="col">Durability</th><th scope="col">Controls</th></tr></thead>
             <tbody>{(currentUser.buildings ?? []).length === 0 ? <EmptyRow colSpan={6}>No buildings at this location.</EmptyRow> : (currentUser.buildings ?? []).map((building) => {
               const percentage = Math.floor((building.contributed_ap / building.required_ap) * 100);
+              const extensions = building.extensions ?? [];
               const canContribute = building.status === "under_construction";
-              return <tr key={building.id}><th scope="row">{building.recipe.display_name}</th><td>Owner: {building.owner.display_name}</td><td>Status: {building.status}</td><td><span>Progress: {building.contributed_ap}/{building.required_ap} AP ({percentage}%)</span><br /><span>Empty extension slots: {building.extension_slot_count}</span></td><td>{building.status === "completed" && building.durability_status !== null && building.durability_remaining_seconds !== null ? <><span>Durability status: {building.durability_status}</span><br /><span>Remaining durability: {Math.max(0, building.durability_remaining_seconds)} seconds</span></> : "-"}</td><td>{building.status === "completed" && building.durability_status !== null && building.durability_remaining_seconds !== null && <button type="button" onClick={() => void handleRepair(building.id)} disabled={actionPendingNow}>{actionPendingNow && actionKind === "repair-building" ? "Repairing..." : `Repair building ${building.id}`}</button>}{canContribute && <BuildingContribution buildingID={building.id} disabled={actionPendingNow} onSubmit={(ap) => void applyBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />}</td></tr>;
+              return <tr key={building.id}><th scope="row">{building.recipe.display_name}</th><td>Owner: {building.owner.display_name}</td><td>Status: {building.status}</td><td><span>Progress: {building.contributed_ap}/{building.required_ap} AP ({percentage}%)</span><br /><span>Empty extension slots: {Math.max(0, building.extension_slot_count - extensions.length)}</span>{extensions.map((extension) => <div key={extension.id}>{extension.display_name} T{extension.tier}: {extension.status} {extension.contributed_ap}/{extension.required_ap} AP {extension.status === "under_construction" && <BuildingContribution buildingID={extension.id} disabled={actionPendingNow} onSubmit={(ap) => void applyBuildingAction("contribute-construction", () => contributeExtensionConstruction(extension.id, ap))} />}{extension.status === "completed" && <button type="button" onClick={() => void applyBuildingAction("contribute-construction", () => removeExtension(extension.id))} disabled={actionPendingNow}>Remove extension</button>}</div>)}</td><td>{building.status === "completed" && building.durability_status !== null && building.durability_remaining_seconds !== null ? <><span>Durability status: {building.durability_status}</span><br /><span>Remaining durability: {Math.max(0, building.durability_remaining_seconds)} seconds</span></> : "-"}</td><td>{building.status === "completed" && building.durability_status !== null && building.durability_remaining_seconds !== null && <button type="button" onClick={() => void handleRepair(building.id)} disabled={actionPendingNow}>{actionPendingNow && actionKind === "repair-building" ? "Repairing..." : `Repair building ${building.id}`}</button>}{canContribute && <BuildingContribution buildingID={building.id} disabled={actionPendingNow} onSubmit={(ap) => void applyBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />}</td></tr>;
             })}</tbody>
           </table>
         </TableScroll>
@@ -275,6 +276,15 @@ function TransferQuantity({ operation, assetType, assetID, itemStatus, displayNa
       <button type="submit" aria-label={`${operationLabel} ${displayName}${statusSuffix}`} disabled={disabled || unavailable || !valid}>{disabled ? (operation === "drop" ? "Dropping..." : "Picking up...") : operationLabel}</button>
     </form>
   );
+}
+
+function ConversionRow({ method, buildings, disabled, onSubmit }: { method: import("./auth").ConversionMethod; buildings: CurrentUser["buildings"]; disabled: boolean; onSubmit: (quantity: number, providerID?: number) => void }) {
+  const [quantity, setQuantity] = useState("1");
+  const [provider, setProvider] = useState("");
+  const parsed = Number(quantity);
+  const valid = Number.isInteger(parsed) && parsed > 0 && parsed <= method.max_input_quantity;
+  const providers = (buildings ?? []).filter((building) => (building.extensions ?? []).some((extension) => extension.status === "completed" && extension.definition_id === "sawmill_t1") && building.durability_status === "active");
+  return <tr><th scope="row">{method.display_name}</th><td>{method.ap_cost} AP</td><td>{method.input.display_name}, max {method.max_input_quantity}</td><td>{method.resource_quantity_per_input} {method.output_resource.display_name}</td><td>{method.essence_item?.display_name ?? "None"}: {method.essence_chance_bps / 100}%</td><td><input aria-label={`Quantity for ${method.display_name}`} type="number" min="1" max={method.max_input_quantity} step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled} />{providers.length > 0 && <select aria-label={`Provider for ${method.display_name}`} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled}><option value="">Hand</option>{providers.flatMap((building) => (building.extensions ?? []).filter((extension) => extension.status === "completed" && extension.definition_id === "sawmill_t1").map((extension) => <option key={extension.id} value={extension.id}>{extension.display_name} T{extension.tier}</option>))}</select>}<button type="button" onClick={() => valid && onSubmit(parsed, provider ? Number(provider) : undefined)} disabled={disabled || !valid}>{disabled ? "Converting..." : "Convert"}</button></td></tr>;
 }
 
 function BuildingContribution({ buildingID, disabled, onSubmit }: { buildingID: number; disabled: boolean; onSubmit: (ap: number) => void }) {
