@@ -1,6 +1,6 @@
 ---
 title: "Backend-filtered gameplay options"
-status: Refactored
+status: Done
 created: 2026-08-29
 doc_type: change
 last_reviewed: 2026-08-29

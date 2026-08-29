@@ -4,6 +4,9 @@
 
 ## 2026-08-29
 
+- Filtered gameplay Actions, targets, methods, and recipes by authoritative backend state.
+- Kept all eight Resource balances and other player state visible when options are unavailable.
+- Made the frontend render only backend-returned gameplay options.
 - Added configurable hand and Sawmill conversion methods with Wood Essence output.
 - Added the Sawmill Package T1 recipe and Sawmill T1 Building extension.
 - Added shared extension construction, owner removal, and Building durability consumption.
