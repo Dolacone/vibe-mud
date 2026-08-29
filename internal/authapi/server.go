@@ -561,6 +561,16 @@ func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: ErrConversionNotFound.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 		return
 	}
+	if errors.Is(err, ErrInvalidArgument) && strings.Contains(err.Error(), "capacity") {
+		state, stateErr := s.store.GetPlayerState(session.UserID)
+		if stateErr != nil {
+			s.writeError(w, http.StatusInternalServerError, "action unavailable")
+			return
+		}
+		s.logRejection(r, session.UserID, convertAction, convertReasonInvalidQuantity)
+		s.writeJSON(w, http.StatusBadRequest, convertResponse{Error: "invalid action input", MethodID: request.MethodID, Quantity: request.Quantity, playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
 	if errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrExtensionNotFound) || errors.Is(err, ErrBuildingRemote) || errors.Is(err, ErrBuildingDisabled) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {

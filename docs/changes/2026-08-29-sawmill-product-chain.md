@@ -154,7 +154,7 @@ Dependency graph: Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5.
 - [x] [Major] 前端向非 owner 顯示拆除控制，也向 Disabled Building 顯示安裝與施工控制。這些不是玩家可用操作。
 - [x] [Minor] `source_paths` 仍重複列出 `docs/terminology.md`，因此未與 `main...HEAD` 檔案清單精確唯一匹配。
 - [x] [Major] 前端對 Disabled Building 隱藏拆除按鈕。Owner 因此無法拆除該 Building 的施工中或 completed extension。
-- [ ] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
+- [x] [Minor] 超過 method capacity 時，後端回傳並記錄 `invalid provider extension`。拒絕原因與實際 quantity 錯誤不符。
 
 ## Plan Review Issues
 
