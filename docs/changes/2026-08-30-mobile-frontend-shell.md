@@ -1,13 +1,20 @@
 ---
 title: "Mobile frontend shell"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
 source_paths:
   - docs/architecture.md
-  - web/src/GameShell.tsx
+  - docs/changes/2026-08-30-mobile-frontend-shell.md
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-012.md
+  - web/browser-fixture.html
+  - web/src/App.test.tsx
+  - web/src/App.tsx
   - web/src/GameShell.test.tsx
+  - web/src/GameShell.tsx
+  - web/src/browser-fixture.tsx
   - web/src/styles.css
 req_ref: REQ-012
 base_branch: main
@@ -55,7 +62,7 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
   - REQ-012.8: 核心狀態列的水平 swipe 不得造成整個頁面水平溢出，也不得阻止主內容垂直捲動。
   - REQ-012.9: App Shell 底部必須固定提供 `地圖`、`地區`、`道具`、`角色` 四個主分頁。
   - REQ-012.10: 切換主分頁不得重新登入或遺失最新 authoritative player state。
-- [ ] Task 2 [parallel: no]: Move existing gameplay sections into the four tabs and connect them to the shell in `web/src/App.tsx`. Add a local-only layout harness in `web/src/browser-fixture.tsx` with its root `web/browser-fixture.html`; Vite's production build must not include this non-entry HTML. Update application tests and verify the production build in the same commit. Map uses a compact Route list and owns carrying weight plus the movement threshold. Area owns gathering, Building creation, every Building install, contribution, removal, and repair control, installation targets, ground holdings, and Pickup. Items owns Inventory, all Resource balances, Item and Resource Drop, provider-backed Convert, and Craft. Character owns Rest and progression placeholders. Action and Transfer feedback renders in the active content region so failures cannot unmount the shell. Tests must cover global `available_actions`, per-Building and per-extension actions, installation targets, provider extension IDs, Routes, methods, and recipes. An authoritative success response must update the header without changing tabs. Request and domain failures must leave the header and navigation mounted. After integration, run `npm exec vite -- --host 127.0.0.1 --port 4173` from `web/` and open `http://127.0.0.1:4173/browser-fixture.html`. The harness must supply a long player name, all eight nonzero Resources, long tab content, and a quantity input without calling `/api/me`. At 320 by 568 and 390 by 844, drag each header row and verify its `scrollLeft` changes, vertically scroll the content and verify the header and navigation bounds remain fixed, and verify the document does not overflow horizontally. Focus the quantity input, reduce the viewport height to simulate a software keyboard, and verify the control remains above the bottom navigation. Record the observed evidence in this change document.
+- [x] Task 2 [parallel: no]: Move existing gameplay sections into the four tabs and connect them to the shell in `web/src/App.tsx`. Add a local-only layout harness in `web/src/browser-fixture.tsx` with its root `web/browser-fixture.html`; Vite's production build must not include this non-entry HTML. Update application tests and verify the production build in the same commit. Map uses a compact Route list and owns carrying weight plus the movement threshold. Area owns gathering, Building creation, every Building install, contribution, removal, and repair control, installation targets, ground holdings, and Pickup. Items owns Inventory, all Resource balances, Item and Resource Drop, provider-backed Convert, and Craft. Character owns Rest and progression placeholders. Action and Transfer feedback renders in the active content region so failures cannot unmount the shell. Tests must cover global `available_actions`, per-Building and per-extension actions, installation targets, provider extension IDs, Routes, methods, and recipes. An authoritative success response must update the header without changing tabs. Request and domain failures must leave the header and navigation mounted. After integration, run `npm exec vite -- --host 127.0.0.1 --port 4173` from `web/` and open `http://127.0.0.1:4173/browser-fixture.html`. The harness must supply a long player name, all eight nonzero Resources, long tab content, and a quantity input without calling `/api/me`. At 320 by 568 and 390 by 844, drag each header row and verify its `scrollLeft` changes, vertically scroll the content and verify the header and navigation bounds remain fixed, and verify the document does not overflow horizontally. Focus the quantity input, reduce the viewport height to simulate a software keyboard, and verify the control remains above the bottom navigation. Record the observed evidence in this change document.
   - REQ-012.11: `地圖` 必須顯示玩家目前 Location，以及後端回傳的可抵達 Location、Route 與 AP 成本。
   - REQ-012.12: 玩家必須能在 `地圖` 對後端回傳的 Route 執行 Move。
   - REQ-012.13: `地區` 必須顯示目前 Location 的可互動 gathering option。
@@ -80,3 +87,12 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 - [x] Task 2 does not define a verification matrix for backend availability and shell persistence. Cover global `available_actions`, per-Building and per-extension actions, installation targets, provider IDs, Routes, methods, and recipes; also verify that authoritative success state updates the header without changing tabs and that request or domain failures leave the shell mounted.
 - [x] Task 1's real-browser verification is not executable at that stage because `GameShell` does not enter the browser-rendered `App` until Task 2, and the plan defines no standalone fixture. Move the verification after Task 2 integration or define a reachable fixture, then name the server URL, authenticated or mocked state, touch-swipe method, and software-keyboard method used to collect the evidence.
 - [x] Task 2 still lacks an executable `/api/me` fixture. The repository has no browser test dependency, and the available Browser API does not expose request interception, so Vite preview will return its normal 404 response. Specify a supported mock server, proxy, fixture route, or test harness with exact startup commands and keep its files inside the task limit.
+
+## Browser Verification Evidence
+
+- Command: from `web/`, `npm exec vite -- --host 127.0.0.1 --port 4173`; URL: `http://127.0.0.1:4173/browser-fixture.html`. The fixture renders static state and does not call `/api/me`.
+- At `320x568`, row 1 changed `scrollLeft` from `0` to `288` and row 2 changed from `0` to `180` after dragging each horizontal scrollbar. `scrollWidth` was `584` and `680`; each row `clientWidth` was `296`.
+- At `320x568`, content `scrollTop` changed from `0` to `470`. Header bounds stayed `top=0,bottom=97`; navigation bounds stayed `top=496,bottom=568`. `document.documentElement.scrollWidth` and `document.body.scrollWidth` stayed `320`.
+- At `390x844`, row 1 changed `scrollLeft` from `0` to `218` and row 2 changed from `0` to `314.5` after dragging each horizontal scrollbar. `scrollWidth` was `584` and `680`; each row `clientWidth` was `366`.
+- At `390x844`, content `scrollTop` changed from `0` to `461.5`. Header bounds stayed `top=0,bottom=97`; navigation bounds stayed `top=772,bottom=844`. `document.documentElement.scrollWidth` and `document.body.scrollWidth` stayed `390`.
+- With the quantity input focused, reducing the viewport to `320x360` kept focus on `Fixture quantity`; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `288`. Reducing the viewport to `390x500` kept focus on the same input; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `428`. Both controls stayed above navigation and both document widths matched the viewport.
