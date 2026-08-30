@@ -1,6 +1,6 @@
 ---
 title: "Mobile frontend shell"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -96,3 +96,7 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 - At `390x844`, row 1 changed `scrollLeft` from `0` to `218` and row 2 changed from `0` to `314.5` after dragging each horizontal scrollbar. `scrollWidth` was `584` and `680`; each row `clientWidth` was `366`.
 - At `390x844`, content `scrollTop` changed from `0` to `461.5`. Header bounds stayed `top=0,bottom=97`; navigation bounds stayed `top=772,bottom=844`. `document.documentElement.scrollWidth` and `document.body.scrollWidth` stayed `390`.
 - With the quantity input focused, reducing the viewport to `320x360` kept focus on `Fixture quantity`; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `288`. Reducing the viewport to `390x500` kept focus on the same input; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `428`. Both controls stayed above navigation and both document widths matched the viewport.
+
+## Review Issues
+
+- [ ] [Major] `web/src/App.test.tsx` replaces 49 existing App tests with 14 integration tests and drops equivalent business-behavior coverage. Restore the removed action, availability, transfer, and Building protections in the tabbed UI, including legacy Convert, authoritative unsuccessful states, request deduplication while pending, Resource Drop, transfer conflicts, Building failure and reload behavior, gather/convert/craft/move/rest success and failure handling, and unauthenticated identity clearing. Layout integration does not replace these behavior tests.
