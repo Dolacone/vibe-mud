@@ -3,7 +3,7 @@ title: "Ground asset transfers"
 status: Done
 created: 2026-08-28
 doc_type: change
-last_reviewed: 2026-08-28
+last_reviewed: 2026-08-30
 source_paths:
   - docs/architecture.md
   - docs/schemas.md

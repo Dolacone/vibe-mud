@@ -1,7 +1,7 @@
 ---
 title: "SQLite Schemas"
 doc_type: schema
-last_reviewed: 2026-08-29
+last_reviewed: 2026-08-30
 source_paths:
   - internal/authapi/store.go
 ---

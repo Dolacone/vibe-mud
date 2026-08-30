@@ -3,7 +3,7 @@ title: "Building construction"
 status: Done
 created: 2026-08-27
 doc_type: change
-last_reviewed: 2026-08-27
+last_reviewed: 2026-08-30
 source_paths:
   - docs/architecture.md
   - docs/schemas.md

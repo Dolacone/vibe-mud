@@ -3,7 +3,7 @@ title: "Frontend Login"
 status: Done
 created: 2026-08-25
 doc_type: change
-last_reviewed: 2026-08-25
+last_reviewed: 2026-08-30
 source_paths:
   - AGENTS.md
   - README.md

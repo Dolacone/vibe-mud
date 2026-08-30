@@ -1,7 +1,7 @@
 ---
 title: "Documentation"
 doc_type: index
-last_reviewed: 2026-08-26
+last_reviewed: 2026-08-30
 source_paths: []
 scope: "Entry point for project documentation."
 ---

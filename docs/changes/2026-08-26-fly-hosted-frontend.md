@@ -3,7 +3,7 @@ title: "Fly-hosted frontend"
 status: Done
 created: 2026-08-26
 doc_type: change
-last_reviewed: 2026-08-26
+last_reviewed: 2026-08-30
 source_paths:
   - AGENTS.md
   - CHANGELOG.md

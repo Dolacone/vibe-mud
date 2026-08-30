@@ -1,7 +1,7 @@
 ---
 title: "Deployment"
 doc_type: runbook
-last_reviewed: 2026-08-26
+last_reviewed: 2026-08-30
 source_paths:
   - Dockerfile
   - fly.toml
