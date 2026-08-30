@@ -1,10 +1,11 @@
 ---
 title: "Mobile frontend shell"
-status: Refactored
+status: Done
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
 source_paths:
+  - CHANGELOG.md
   - docs/architecture.md
   - docs/changes/2026-08-30-mobile-frontend-shell.md
   - requirements/BEHAVIOR.md
