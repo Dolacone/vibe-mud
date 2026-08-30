@@ -34,16 +34,14 @@ const activeItem = (item: { id: string; display_name: string }, quantity: number
   item,
   quantity,
   durability_status: "active" as const,
-  durability_remaining_seconds: 604800,
-  retention_remaining_seconds: null,
+  durability_percentage: 100,
 });
 
 const expiredItem = (item: { id: string; display_name: string }, quantity: number) => ({
   item,
   quantity,
   durability_status: "expired" as const,
-  durability_remaining_seconds: null,
-  retention_remaining_seconds: 604700,
+  durability_percentage: 0,
 });
 
 const woodComponentRecipe = {
@@ -89,25 +87,72 @@ const underConstruction = {
   contributed_ap: 0,
   status: "under_construction" as const,
   extension_slot_count: 1,
-  max_durability_seconds: 604800,
   durability_status: null,
-  durability_remaining_seconds: null,
+  durability_percentage: null,
   available_actions: ["contribute-construction"],
 };
 
 const completedActive = {
-  ...underConstruction,
-  contributed_ap: 60,
+  id: 1,
+  owner: { id: 1, display_name: "Ada" },
+  recipe: { id: "building_lv1", display_name: "Building Lv1" },
+  building_level: 1,
   status: "completed" as const,
+  extension_slot_count: 1,
   durability_status: "active" as const,
-  durability_remaining_seconds: 604700,
+  durability_percentage: 99,
   available_actions: ["repair-building"],
 };
 
 const completedDisabled = {
   ...completedActive,
   durability_status: "disabled" as const,
-  durability_remaining_seconds: 0,
+  durability_percentage: 0,
+};
+
+const underConstructionSawmill = {
+  id: 7,
+  slot_index: 0,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  required_ap: 30,
+  contributed_ap: 12,
+  status: "under_construction" as const,
+  available_actions: ["contribute-extension-construction"],
+};
+
+const completedSawmill = {
+  id: 8,
+  slot_index: 1,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  status: "completed" as const,
+  available_actions: [],
+};
+
+const sawmillDefinition = {
+  id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  package_item: { id: "sawmill_package_t1", display_name: "Sawmill Package T1" },
+  required_ap: 30,
+  installation_targets: [{ building_id: 1, slot_index: 0 }],
+};
+
+const sawmillMethod = {
+  id: "sawmill_wood_t1",
+  display_name: "Sawmill Wood Convert",
+  ap_cost: 30,
+  input: { id: "wood", display_name: "Wood" },
+  max_input_quantity: 6,
+  output_resource: { id: "wood", display_name: "Wood" },
+  resource_quantity_per_input: 1,
+  essence_item: null,
+  essence_chance_bps: 1000,
+  essence_quantity: 1,
+  provider_extension_ids: [8],
 };
 
 const campState = {
@@ -357,20 +402,20 @@ describe("App", () => {
     expect(inventory.querySelectorAll("tbody > tr")).toHaveLength(2);
     expect(groundItems.querySelectorAll("tbody > tr")).toHaveLength(2);
     expect(inventory).toHaveTextContent("Status: active");
-    expect(inventory).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(inventory).toHaveTextContent("Durability: 100%");
     expect(inventory).toHaveTextContent("Status: expired");
-    expect(inventory).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(inventory).toHaveTextContent("Durability: 0%");
     expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeEnabled();
     expect(within(inventory).getByRole("button", { name: "Drop Wood (expired)" })).toBeEnabled();
     expect(groundItems).toHaveTextContent("Status: active");
-    expect(groundItems).toHaveTextContent("Remaining durability: 604800 seconds");
+    expect(groundItems).toHaveTextContent("Durability: 100%");
     expect(groundItems).toHaveTextContent("Status: expired");
-    expect(groundItems).toHaveTextContent("Remaining retention: 604700 seconds");
+    expect(groundItems).toHaveTextContent("Durability: 0%");
     expect(within(groundItems).getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
     expect(within(groundItems).queryByRole("button", { name: "Pickup Wood Component (expired)" })).not.toBeInTheDocument();
   });
 
-  it("drops the selected expired stack and renders the authoritative retention state", async () => {
+  it("drops the selected expired stack and renders the authoritative durability state", async () => {
     const mixedState = {
       ...transferState,
       inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 3)],
@@ -393,7 +438,7 @@ describe("App", () => {
     expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "expired" });
     expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("6")).toBeInTheDocument();
-    expect(within(inventory).getByText("Remaining retention: 604700 seconds")).toBeInTheDocument();
+    expect(within(inventory).getByText("Durability: 0%")).toBeInTheDocument();
   });
 
   it("applies authoritative state after an unsuccessful Resource pickup", async () => {
@@ -449,29 +494,29 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("Durability status: active")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 604700 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 99%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
   });
 
-  it("shows disabled Building durability with zero remaining seconds", async () => {
+  it("shows disabled Building durability with zero percent", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedDisabled] } });
     render(<App />);
 
     expect(await screen.findByText("Durability status: disabled")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
   });
 
   it("repairs a completed Building and applies the authoritative state", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, buildings: [completedActive] } });
-    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_remaining_seconds: 604800 }] });
+    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_percentage: 100 }] });
     render(<App />);
 
     (await screen.findByRole("button", { name: "Repair building 1" })).click();
     await waitFor(() => expect(screen.getByText("Building repair succeeded.")).toBeInTheDocument());
     expect(repairBuilding).toHaveBeenCalledWith(1);
     expect(apRow(2990)).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 604800 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 100%")).toBeInTheDocument();
   });
 
   it("shows a repair failure and applies its authoritative state", async () => {
@@ -483,7 +528,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
     expect(apRow(5)).toBeInTheDocument();
     expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
-    expect(screen.getByText("Remaining durability: 0 seconds")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
   });
 
   it("displays the backend building recipe and current-location construction state", async () => {
@@ -498,6 +543,25 @@ describe("App", () => {
     expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
     expect(screen.getByText("Empty extension slots: 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Build Building Lv1" })).toBeEnabled();
+  });
+
+  it("shows construction AP only for in-progress Buildings and extensions", async () => {
+    const building = { ...underConstruction, required_ap: 6, contributed_ap: 1, extensions: [{ ...underConstructionSawmill, required_ap: 6, contributed_ap: 1 }, completedSawmill] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, available_actions: [...campState.available_actions, "install-extension"], conversion_methods: [sawmillMethod], building_extension_definitions: [sawmillDefinition], buildings: [building] } });
+    render(<App />);
+
+    const buildingsTable = await screen.findByRole("table", { name: "Buildings" });
+    expect(buildingsTable).toHaveTextContent("Progress: 1/6 AP (16%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: under_construction 1/6 AP (16%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: completed");
+    expect(buildingsTable).not.toHaveTextContent("Sawmill T1: completed 30/30 AP");
+
+    const definitionsTable = screen.getByRole("table", { name: "Building extension definitions" });
+    expect(definitionsTable).toHaveTextContent("Sawmill T1");
+    expect(definitionsTable).not.toHaveTextContent("Sawmill T1 T1");
+    const provider = within(screen.getByRole("table", { name: "Convert" })).getByRole("combobox", { name: "Provider for Sawmill Wood Convert" });
+    expect(within(provider).getByRole("option", { name: "Sawmill T1" })).toBeInTheDocument();
+    expect(within(provider).queryByRole("option", { name: "Sawmill T1 T1" })).not.toBeInTheDocument();
   });
 
   it("starts construction with only the backend recipe identifier and applies authoritative state", async () => {
@@ -532,7 +596,7 @@ describe("App", () => {
 
   it("allows same-location contribution and caps oversized AP at completion", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 100, buildings: [underConstruction] } });
-    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [{ ...underConstruction, contributed_ap: 60, status: "completed" as const, available_actions: [] }] });
+    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [completedActive] });
     render(<App />);
 
     const input = await screen.findByRole("spinbutton", { name: "Contribution AP for building 1" });
@@ -541,7 +605,8 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Construction contribution succeeded.")).toBeInTheDocument());
     expect(contributeConstruction).toHaveBeenCalledWith(1, 100);
     expect(screen.getByText("Status: completed")).toBeInTheDocument();
-    expect(screen.getByText("Progress: 60/60 AP (100%)")).toBeInTheDocument();
+    expect(screen.queryByText("Progress: 60/60 AP (100%)")).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Buildings" })).not.toHaveTextContent("60/60 AP");
     expect(screen.queryByRole("spinbutton", { name: "Contribution AP for building 1" })).not.toBeInTheDocument();
   });
 
