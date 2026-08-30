@@ -152,6 +152,40 @@ const sawmillMethod = {
   provider_extension_ids: [8],
 };
 
+const completedActive = {
+  ...completedWithExtension,
+  id: 1,
+  extensions: [],
+};
+
+const completedDisabled = {
+  ...completedActive,
+  durability_status: "disabled" as const,
+  durability_percentage: 0,
+};
+
+const underConstructionSawmill = {
+  id: 7,
+  slot_index: 0,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  required_ap: 30,
+  contributed_ap: 12,
+  status: "under_construction" as const,
+  available_actions: ["contribute-extension-construction"],
+};
+
+const completedSawmill = {
+  id: 8,
+  slot_index: 1,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  status: "completed" as const,
+  available_actions: [],
+};
+
 const campState: auth.PlayerState = {
   available_actions: ["rest", "move", "convert", "craft", "build"],
   location: { id: "camp", display_name: "Camp" },
@@ -180,6 +214,14 @@ const forestState: auth.PlayerState = {
   gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 },
   conversion_option: null,
   conversion_methods: [],
+};
+
+const transferState: auth.PlayerState = {
+  ...campState,
+  inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4)],
+  resources: resourcesWith("wood", 6),
+  ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2)],
+  ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
 };
 
 const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", ...state } });
@@ -438,5 +480,546 @@ describe("App gameplay tab integration", () => {
     const view = render(<App />);
     await waitFor(() => expect(view.getByRole("alert")).toHaveTextContent("backend unavailable"));
     expect(view.getByRole("link", { name: /google/i })).toBeInTheDocument();
+  });
+
+  it("keeps empty gameplay sections as explicit rows in their owning tabs", async () => {
+    await renderAuthenticated({ ...campState, routes: [], gathering_option: null, conversion_option: null, conversion_methods: [], crafting_recipes: [], building_recipes: [], buildings: [], ground_items: [], ground_resources: [] });
+
+    expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("No available routes.");
+    await selectTab("地區");
+    expect(screen.getByRole("table", { name: "Gather" })).toHaveTextContent("No gathering action available.");
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("No building recipes available.");
+    expect(screen.getByRole("table", { name: "Buildings" })).toHaveTextContent("No buildings at this location.");
+    expect(screen.getByRole("table", { name: "Ground Items" })).toHaveTextContent("Ground items are empty.");
+    expect(screen.getByRole("table", { name: "Ground Resources" })).toHaveTextContent("Ground resources are empty.");
+    await selectTab("道具");
+    expect(screen.getByRole("table", { name: "Convert" })).toHaveTextContent("No conversion action available.");
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("No crafting recipes available.");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+  });
+
+  it("renders and submits a backend-returned legacy conversion in Items", async () => {
+    const legacyState = { ...campState, conversion_methods: [] };
+    await renderAuthenticated(legacyState);
+    await selectTab("道具");
+    convert.mockResolvedValue({ status: "success", ...legacyState, ap: 2999 });
+
+    const convertTable = screen.getByRole("table", { name: "Convert" });
+    expect(convertTable).toHaveTextContent("1 Wood");
+    fireEvent.click(within(convertTable).getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
+    expect(convert).toHaveBeenCalledWith(fetch);
+  });
+
+  it("renders public ground items and resources with Area pickup controls", async () => {
+    await renderAuthenticated({ ...campState, ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2)], ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }] });
+    await selectTab("地區");
+
+    const groundItems = screen.getByRole("table", { name: "Ground Items" });
+    const groundResources = screen.getByRole("table", { name: "Ground Resources" });
+    expect(groundItems).toHaveTextContent("Wood Component");
+    expect(within(groundItems).getByRole("spinbutton", { name: "Pickup quantity for Wood Component" })).toHaveValue(1);
+    expect(within(groundItems).getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
+    expect(groundResources).toHaveTextContent("Stone");
+    expect(within(groundResources).getByRole("spinbutton", { name: "Pickup quantity for Stone" })).toHaveValue(1);
+    expect(within(groundResources).getByRole("button", { name: "Pickup Stone" })).toBeEnabled();
+  });
+
+  it("drops an Item with the requested quantity and applies authoritative state", async () => {
+    const nextState = { ...transferState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 2)], ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 4)] };
+    await renderAuthenticated(transferState);
+    await selectTab("道具");
+    drop.mockResolvedValue({ status: "success", ...nextState });
+
+    const inventory = screen.getByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 2, item_status: "active" });
+    expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
+    await selectTab("地區");
+    expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("4")).toBeInTheDocument();
+  });
+
+  it("drops a Resource with a positive integer quantity", async () => {
+    await renderAuthenticated(transferState);
+    await selectTab("道具");
+    drop.mockResolvedValue({ status: "success", ...transferState, resources: resourcesWith("wood", 4), ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 5 }] });
+
+    const resourcesTable = screen.getByRole("table", { name: "Resources" });
+    const input = within(resourcesTable).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "resource", asset_id: "wood", quantity: 2 });
+    expect(within(resourcesTable).getByText("Wood: 4")).toBeInTheDocument();
+  });
+
+  it("picks up an Item with the requested quantity", async () => {
+    const nextState = { ...transferState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 5)], ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 1)] };
+    await renderAuthenticated(transferState);
+    await selectTab("地區");
+    pickup.mockResolvedValue({ status: "success", ...nextState });
+
+    const groundItems = screen.getByRole("table", { name: "Ground Items" });
+    const input = within(groundItems).getByRole("spinbutton", { name: "Pickup quantity for Wood Component" });
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Pickup succeeded.")).toBeInTheDocument());
+    expect(pickup).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood_component", quantity: 1, item_status: "active" });
+    expect(within(groundItems).getByText("1")).toBeInTheDocument();
+  });
+
+  it("drops the selected expired stack and renders authoritative durability state", async () => {
+    const mixedState = { ...transferState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 3)], ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2), expiredItem({ id: "wood_component", display_name: "Wood Component" }, 5)] };
+    const nextState = { ...mixedState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4), expiredItem({ id: "wood", display_name: "Wood" }, 2)], ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2), expiredItem({ id: "wood_component", display_name: "Wood Component" }, 6)] };
+    await renderAuthenticated(mixedState);
+    await selectTab("道具");
+    drop.mockResolvedValue({ status: "success", ...nextState });
+
+    const inventory = screen.getByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood (expired)" });
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+    expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "expired" });
+    expect(within(inventory).getByText("Wood: 2")).toBeInTheDocument();
+    await selectTab("地區");
+    expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("6")).toBeInTheDocument();
+  });
+
+  it("applies authoritative state after an unsuccessful Resource pickup", async () => {
+    const nextState = { ...transferState, ap: 2998, resources: resourcesWith("wood", 8), ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 1 }] };
+    await renderAuthenticated(transferState);
+    await selectTab("地區");
+    pickup.mockResolvedValue({ status: "conflict", error: "insufficient ground quantity", ...nextState });
+
+    const groundResources = screen.getByRole("table", { name: "Ground Resources" });
+    fireEvent.submit(within(groundResources).getByRole("spinbutton", { name: "Pickup quantity for Stone" }).closest("form")!);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient ground quantity"));
+    expect(pickup).toHaveBeenCalledWith({ asset_type: "resource", asset_id: "stone", quantity: 1 });
+    expect(screen.getByLabelText("目前 AP 2998")).toBeInTheDocument();
+    expect(within(groundResources).getByText("1")).toBeInTheDocument();
+    await selectTab("道具");
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 8");
+  });
+
+  it("prevents duplicate transfers while one request is pending", async () => {
+    let resolveDrop: ((value: auth.TransferResult) => void) | undefined;
+    drop.mockReturnValue(new Promise((resolve) => { resolveDrop = resolve; }));
+    await renderAuthenticated(transferState);
+    await selectTab("道具");
+
+    const inventory = screen.getByRole("table", { name: "Inventory" });
+    const input = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood" });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeDisabled());
+    fireEvent.submit(input.closest("form")!);
+    expect(drop).toHaveBeenCalledTimes(1);
+    resolveDrop?.({ status: "success", ...transferState });
+    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
+  });
+
+  it("shows active Building durability and a repair action in Area", async () => {
+    await renderAuthenticated({ ...campState, buildings: [completedActive] });
+    await selectTab("地區");
+
+    expect(screen.getByText("Durability status: active")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 99%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
+  });
+
+  it("shows disabled Building durability with zero percent", async () => {
+    await renderAuthenticated({ ...campState, buildings: [completedDisabled] });
+    await selectTab("地區");
+
+    expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair building 1" })).toBeEnabled();
+  });
+
+  it("repairs a completed Building and applies authoritative state", async () => {
+    await renderAuthenticated({ ...campState, buildings: [completedActive] });
+    await selectTab("地區");
+    repairBuilding.mockResolvedValue({ status: "success", ...campState, ap: 2990, buildings: [{ ...completedActive, durability_percentage: 100 }] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Repair building 1" }));
+    await waitFor(() => expect(screen.getByText("Building repair succeeded.")).toBeInTheDocument());
+    expect(repairBuilding).toHaveBeenCalledWith(1);
+    expect(screen.getByLabelText("目前 AP 2990")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 100%")).toBeInTheDocument();
+  });
+
+  it("shows a repair failure and applies its authoritative state", async () => {
+    await renderAuthenticated({ ...campState, buildings: [completedActive] });
+    await selectTab("地區");
+    repairBuilding.mockResolvedValue({ status: "conflict", error: "insufficient action points", ...campState, ap: 5, buildings: [completedDisabled] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Repair building 1" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 5")).toBeInTheDocument();
+    expect(screen.getByText("Durability status: disabled")).toBeInTheDocument();
+    expect(screen.getByText("Durability: 0%")).toBeInTheDocument();
+  });
+
+  it("displays the backend building recipe and current-location construction state", async () => {
+    await renderAuthenticated({ ...campState, buildings: [underConstruction] });
+    await selectTab("地區");
+
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("Building Lv1");
+    expect(screen.getByRole("table", { name: "Building recipes" })).toHaveTextContent("Required AP: 60");
+    expect(screen.getByText("Wood Component: 1")).toBeInTheDocument();
+    expect(screen.getByText("Owner: Ada")).toBeInTheDocument();
+    expect(screen.getByText("Status: under_construction")).toBeInTheDocument();
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+    expect(screen.getByText("Empty extension slots: 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Build Building Lv1" })).toBeEnabled();
+  });
+
+  it("shows construction AP only for in-progress Buildings and extensions", async () => {
+    const building = { ...underConstruction, required_ap: 6, contributed_ap: 1, extensions: [{ ...underConstructionSawmill, required_ap: 6, contributed_ap: 1 }, completedSawmill] };
+    await renderAuthenticated({ ...campState, available_actions: [...campState.available_actions, "install-extension"], conversion_methods: [sawmillMethod], building_extension_definitions: [sawmillDefinition], buildings: [building] });
+    await selectTab("地區");
+
+    const buildingsTable = screen.getByRole("table", { name: "Buildings" });
+    expect(buildingsTable).toHaveTextContent("Progress: 1/6 AP (16%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: under_construction 1/6 AP (16%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: completed");
+    expect(buildingsTable).not.toHaveTextContent("Sawmill T1: completed 30/30 AP");
+
+    const definitionsTable = screen.getByRole("table", { name: "Building extension definitions" });
+    expect(definitionsTable).toHaveTextContent("Sawmill T1");
+    expect(definitionsTable).not.toHaveTextContent("Sawmill T1 T1");
+    await selectTab("道具");
+    const provider = within(screen.getByRole("table", { name: "Convert" })).getByRole("combobox", { name: "Provider for Sawmill Wood Convert" });
+    expect(within(provider).getByRole("option", { name: "Sawmill T1" })).toBeInTheDocument();
+    expect(within(provider).queryByRole("option", { name: "Sawmill T1 T1" })).not.toBeInTheDocument();
+  });
+
+  it("starts construction with only the backend recipe identifier and applies authoritative state", async () => {
+    await renderAuthenticated(campState);
+    await selectTab("地區");
+    build.mockResolvedValue({ status: "success", ...campState, ap: 3000, inventory: [], buildings: [underConstruction] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Build Building Lv1" }));
+    await waitFor(() => expect(screen.getByText("Building construction started.")).toBeInTheDocument());
+    expect(build).toHaveBeenCalledWith("building_lv1");
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("restores the persisted building after a page reload", async () => {
+    getCurrentUser.mockResolvedValue(authenticated({ ...campState, buildings: [underConstruction] }));
+    const view = render(<App />);
+    await screen.findByRole("heading", { name: "地圖" });
+    await selectTab("地區");
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+    view.unmount();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "地圖" });
+    await selectTab("地區");
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("shows an occupied-slot failure with authoritative state", async () => {
+    await renderAuthenticated({ ...campState, buildings: [underConstruction] });
+    await selectTab("地區");
+    build.mockResolvedValue({ status: "invalid", error: "building already exists", ...campState, buildings: [underConstruction] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Build Building Lv1" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("building already exists"));
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("allows same-location contribution and caps oversized AP at completion", async () => {
+    await renderAuthenticated({ ...campState, ap: 100, buildings: [underConstruction] });
+    await selectTab("地區");
+    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [completedActive] });
+
+    const input = screen.getByRole("spinbutton", { name: "Contribution AP for building 1" });
+    fireEvent.change(input, { target: { value: "100" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("Construction contribution succeeded.")).toBeInTheDocument());
+    expect(contributeConstruction).toHaveBeenCalledWith(1, 100);
+    expect(screen.getByText("Status: completed")).toBeInTheDocument();
+    expect(screen.queryByText("Progress: 60/60 AP (100%)")).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Buildings" })).not.toHaveTextContent("60/60 AP");
+    expect(screen.queryByRole("spinbutton", { name: "Contribution AP for building 1" })).not.toBeInTheDocument();
+  });
+
+  it("prevents duplicate building actions while one request is pending", async () => {
+    let resolveBuild: ((value: auth.BuildResult) => void) | undefined;
+    build.mockReturnValue(new Promise((resolve) => { resolveBuild = resolve; }));
+    await renderAuthenticated(campState);
+    await selectTab("地區");
+
+    const button = screen.getByRole("button", { name: "Build Building Lv1" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.click(button);
+    expect(build).toHaveBeenCalledTimes(1);
+    resolveBuild?.({ status: "success", ...campState, buildings: [underConstruction] });
+    await waitFor(() => expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument());
+  });
+
+  it("keeps authoritative AP and progress after a failed contribution", async () => {
+    await renderAuthenticated({ ...campState, ap: 5, buildings: [underConstruction] });
+    await selectTab("地區");
+    contributeConstruction.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...campState, ap: 5, buildings: [underConstruction] });
+
+    const input = screen.getByRole("spinbutton", { name: "Contribution AP for building 1" });
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 5")).toBeInTheDocument();
+    expect(screen.getByText("Progress: 0/60 AP (0%)")).toBeInTheDocument();
+  });
+
+  it("shows the backend gathering option and applies authoritative state after success", async () => {
+    await renderAuthenticated(forestState);
+    await selectTab("地區");
+    gather.mockResolvedValue({ status: "success", ...forestState, ap: 2970, inventory: [activeItem({ id: "wood", display_name: "Oak wood" }, 7)], gathering_option: { item: { id: "wood", display_name: "Oak wood" }, quantity: 3, ap_cost: 12 } });
+
+    expect(screen.getByText("Yield: 1 Wood; Cost: 10 AP")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Gather" }));
+    await waitFor(() => expect(screen.getByText("Gather succeeded.")).toBeInTheDocument());
+    expect(screen.getByLabelText("目前 AP 2970")).toBeInTheDocument();
+    await selectTab("道具");
+    expect(screen.getByText("Oak wood: 7")).toBeInTheDocument();
+    await selectTab("地區");
+    expect(screen.getByRole("table", { name: "Gather" })).toHaveTextContent("Yield: 3 Oak wood; Cost: 12 AP");
+    expect(gather).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies authoritative state after an insufficient gather", async () => {
+    await renderAuthenticated({ ...forestState, ap: 1 });
+    await selectTab("地區");
+    gather.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...forestState, ap: 0, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4)] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Gather" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 0")).toBeInTheDocument();
+    await selectTab("道具");
+    expect(screen.getByText("Wood: 4")).toBeInTheDocument();
+  });
+
+  it("disables the active action and prevents duplicate gathers while pending", async () => {
+    let resolveGather: ((value: auth.GatherResult) => void) | undefined;
+    gather.mockReturnValue(new Promise((resolve) => { resolveGather = resolve; }));
+    await renderAuthenticated(forestState);
+    await selectTab("地區");
+
+    const gatherButton = screen.getByRole("button", { name: "Gather" });
+    fireEvent.click(gatherButton);
+    await waitFor(() => expect(gatherButton).toBeDisabled());
+    fireEvent.click(gatherButton);
+    expect(gather).toHaveBeenCalledTimes(1);
+    resolveGather?.({ status: "success", ...forestState, ap: 2970, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 1)] });
+    await waitFor(() => expect(screen.getByText("Wood: 1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Gather" })).toBeEnabled();
+  });
+
+  it("applies authoritative state after converting the last Wood", async () => {
+    const stateWithWood = { ...campState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 1)] };
+    await renderAuthenticated(stateWithWood);
+    await selectTab("道具");
+    convert.mockResolvedValue({ status: "success", ...campState, ap: 2999, resources: resourcesWith("wood", 1) });
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
+    expect(screen.getByLabelText("目前 AP 2999")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+    expect(convert).toHaveBeenCalledTimes(1);
+  });
+
+  it("crafts by recipe identifier and displays authoritative state", async () => {
+    await renderAuthenticated({ ...campState, resources: resourcesWith("wood", 10) });
+    await selectTab("道具");
+    craft.mockResolvedValue({ status: "success", ...campState, ap: 2990, resources: resourcesWith("wood", 0), inventory: [activeItem(woodComponentRecipe.output, 1)] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Craft Wood Component" }));
+    await waitFor(() => expect(screen.getByText("Craft succeeded.")).toBeInTheDocument());
+    expect(screen.getByLabelText("目前 AP 2990")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 0");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Wood Component: 1");
+    expect(craft).toHaveBeenCalledWith("wood_component");
+  });
+
+  it("displays the recipe at a non-camp location", async () => {
+    await renderAuthenticated(forestState);
+    await selectTab("道具");
+
+    expect(screen.getByRole("table", { name: "Craft" })).toHaveTextContent("Wood Component");
+    await selectTab("地圖");
+    expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument();
+  });
+
+  it("keeps authoritative state after a failed craft", async () => {
+    await renderAuthenticated({ ...campState, ap: 5, resources: resourcesWith("wood", 2) });
+    await selectTab("道具");
+    craft.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...campState, ap: 5, resources: resourcesWith("wood", 2) });
+
+    fireEvent.click(screen.getByRole("button", { name: "Craft Wood Component" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 5")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 2");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
+  });
+
+  it("prevents duplicate crafts while one request is pending", async () => {
+    let resolveCraft: ((value: auth.CraftResult) => void) | undefined;
+    craft.mockReturnValue(new Promise((resolve) => { resolveCraft = resolve; }));
+    await renderAuthenticated(campState);
+    await selectTab("道具");
+
+    const button = screen.getByRole("button", { name: "Craft Wood Component" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.click(button);
+    expect(craft).toHaveBeenCalledTimes(1);
+    resolveCraft?.({ status: "success", ...campState, ap: 2990, inventory: [activeItem(woodComponentRecipe.output, 1)] });
+    await waitFor(() => expect(screen.getByText("Wood Component: 1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeEnabled();
+  });
+
+  it("applies authoritative state after an unsuccessful conversion", async () => {
+    const stateWithWood = { ...campState, ap: 0, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 2)], resources: resourcesWith("wood", 3) };
+    await renderAuthenticated(stateWithWood);
+    await selectTab("道具");
+    convert.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...stateWithWood });
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 0")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 3");
+    expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Wood: 2");
+  });
+
+  it("disables the active action and prevents duplicate conversions while pending", async () => {
+    let resolveConvert: ((value: auth.ConvertResult) => void) | undefined;
+    convert.mockReturnValue(new Promise((resolve) => { resolveConvert = resolve; }));
+    await renderAuthenticated(campState);
+    await selectTab("道具");
+
+    const button = screen.getByRole("button", { name: "Convert" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.click(button);
+    expect(convert).toHaveBeenCalledTimes(1);
+    resolveConvert?.({ status: "success", ...campState, ap: 2999, resources: resourcesWith("wood", 1) });
+    await waitFor(() => expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1"));
+    expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
+  });
+
+  it("keeps the authoritative state after an insufficient move", async () => {
+    await renderAuthenticated({ ...campState, ap: 10 });
+    move.mockResolvedValue({ status: "insufficient", error: "insufficient action points", ...campState, ap: 10 });
+
+    const button = screen.getByRole("button", { name: "Move to forest_edge" });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByText("Move failed: insufficient action points")).toBeInTheDocument());
+    expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
+    expect(screen.getByLabelText("目前 AP 10")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
+  });
+
+  it("prevents duplicate move requests while one request is pending", async () => {
+    let resolveMove: ((value: auth.MoveResult) => void) | undefined;
+    move.mockReturnValue(new Promise((resolve) => { resolveMove = resolve; }));
+    await renderAuthenticated(campState);
+
+    const button = screen.getByRole("button", { name: "Move to forest_edge" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.click(button);
+    expect(move).toHaveBeenCalledTimes(1);
+    resolveMove?.({ ...forestState, status: "success", ap: 2980 });
+    await waitFor(() => expect(screen.getByText("Current location: Forest edge")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Move to camp" })).toBeEnabled();
+  });
+
+  it("updates the displayed AP after a successful rest", async () => {
+    await renderAuthenticated({ ...campState, ap: 2 });
+    await selectTab("角色");
+    rest.mockResolvedValue({ ...campState, status: "success", ap: 1 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rest" }));
+    await waitFor(() => expect(screen.getByText("Rest succeeded. AP: 1")).toBeInTheDocument());
+    expect(screen.getByLabelText("目前 AP 1")).toBeInTheDocument();
+    expect(rest).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Rest when the backend does not return it", async () => {
+    await renderAuthenticated({ ...campState, ap: 0, available_actions: ["move"] });
+    await selectTab("角色");
+
+    expect(screen.getByText("No actions available.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rest" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("目前 AP 0")).toBeInTheDocument();
+    expect(rest).not.toHaveBeenCalled();
+  });
+
+  it("updates stale AP from an insufficient Rest response", async () => {
+    await renderAuthenticated({ ...campState, ap: 1 });
+    await selectTab("角色");
+    rest.mockResolvedValue({ ...campState, status: "insufficient", error: "insufficient action points", ap: 0, available_actions: ["move"] });
+
+    const button = screen.getByRole("button", { name: "Rest" });
+    expect(screen.getByLabelText("目前 AP 1")).toBeInTheDocument();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
+    expect(screen.getByLabelText("目前 AP 0")).toBeInTheDocument();
+    expect(screen.queryByText("AP: 1")).not.toBeInTheDocument();
+  });
+
+  it("disables Rest and prevents duplicate requests while one is pending", async () => {
+    let resolveRest: ((value: auth.RestResult) => void) | undefined;
+    rest.mockReturnValue(new Promise((resolve) => { resolveRest = resolve; }));
+    await renderAuthenticated({ ...campState, ap: 2 });
+    await selectTab("角色");
+
+    const button = screen.getByRole("button", { name: "Rest" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.click(button);
+    expect(rest).toHaveBeenCalledTimes(1);
+    resolveRest?.({ ...campState, status: "success", ap: 1 });
+    await waitFor(() => expect(screen.getByLabelText("目前 AP 1")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
+  });
+
+  it("keeps the known AP when Rest fails", async () => {
+    await renderAuthenticated({ ...campState, ap: 2 });
+    await selectTab("角色");
+    rest.mockRejectedValue(new Error("backend unavailable"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rest" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("backend unavailable"));
+    expect(screen.getByLabelText("目前 AP 2")).toBeInTheDocument();
+  });
+
+  it("loads and displays only the backend-confirmed identity", async () => {
+    getCurrentUser.mockResolvedValue(authenticated());
+    render(<App />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading");
+    await screen.findByRole("heading", { name: "地圖" });
+    expect(screen.getByLabelText("玩家名稱 Ada")).toBeInTheDocument();
+    await selectTab("角色");
+    expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("1");
+    expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("ada@example.com");
+    expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
+    expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
+  });
+
+  it("does not retain identity after an unauthenticated response", async () => {
+    getCurrentUser.mockResolvedValue({ status: "unauthenticated" });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Not signed in" })).toBeInTheDocument());
+    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /google/i })).toHaveAttribute("href", "/auth/google/login");
   });
 });

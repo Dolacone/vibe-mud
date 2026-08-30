@@ -1,6 +1,6 @@
 ---
 title: "Mobile frontend shell"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -99,4 +99,4 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 
 ## Review Issues
 
-- [ ] [Major] `web/src/App.test.tsx` replaces 49 existing App tests with 14 integration tests and drops equivalent business-behavior coverage. Restore the removed action, availability, transfer, and Building protections in the tabbed UI, including legacy Convert, authoritative unsuccessful states, request deduplication while pending, Resource Drop, transfer conflicts, Building failure and reload behavior, gather/convert/craft/move/rest success and failure handling, and unauthenticated identity clearing. Layout integration does not replace these behavior tests.
+- [x] [Major] `web/src/App.test.tsx` replaces 49 existing App tests with 14 integration tests and drops equivalent business-behavior coverage. Restore the removed action, availability, transfer, and Building protections in the tabbed UI, including legacy Convert, authoritative unsuccessful states, request deduplication while pending, Resource Drop, transfer conflicts, Building failure and reload behavior, gather/convert/craft/move/rest success and failure handling, and unauthenticated identity clearing. Layout integration does not replace these behavior tests.
