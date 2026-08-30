@@ -283,6 +283,26 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByRole("table", { name: "Movement weight" })).toHaveTextContent("Movement weight threshold");
   });
 
+  it("contains every gameplay table in a scroll wrapper with scoped column headers", async () => {
+    const tableCoverageState: auth.PlayerState = {
+      ...allGameplayState,
+      available_actions: [...allGameplayState.available_actions, "install-extension"],
+      building_extension_definitions: [sawmillDefinition],
+    };
+    await renderAuthenticated(tableCoverageState);
+
+    for (const tab of ["地圖", "地區", "道具", "角色"] as const) {
+      await selectTab(tab);
+      const tables = within(screen.getByRole("main", { name: tab })).getAllByRole("table");
+      expect(tables.length).toBeGreaterThan(0);
+      for (const table of tables) {
+        expect(table.parentElement).toHaveClass("table-scroll");
+        const columnHeaders = table.querySelectorAll("thead th");
+        expect([...columnHeaders].every((header) => header.getAttribute("scope") === "col")).toBe(true);
+      }
+    }
+  });
+
   it("assigns gathering, buildings, installation targets, and ground pickup to Area", async () => {
     const areaState = {
       ...forestState,
