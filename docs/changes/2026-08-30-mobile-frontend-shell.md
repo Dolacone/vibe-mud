@@ -1,6 +1,6 @@
 ---
 title: "Mobile frontend shell"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -10,11 +10,13 @@ source_paths:
   - requirements/BEHAVIOR.md
   - requirements/REQ-012.md
   - web/browser-fixture.html
+  - web/index.html
   - web/src/App.test.tsx
   - web/src/App.tsx
   - web/src/GameShell.test.tsx
   - web/src/GameShell.tsx
   - web/src/browser-fixture.tsx
+  - web/src/shell-contract.test.ts
   - web/src/styles.css
 req_ref: REQ-012
 base_branch: main
@@ -91,15 +93,23 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 ## Browser Verification Evidence
 
 - Command: from `web/`, `npm exec vite -- --host 127.0.0.1 --port 4173`; URL: `http://127.0.0.1:4173/browser-fixture.html`. The fixture renders static state and does not call `/api/me`.
+- The existing `320x568` and `390x844` swipe and scroll results below are default browser layout checks. They are not device safe-area evidence because the browser reported zero insets.
+- Nonzero method: the Browser viewport capability changed width and height but exposed no safe-area setter. The fixture-only root override set `--shell-safe-area-top: 24px` and `--shell-safe-area-bottom: 32px`; Playwright read computed styles and bounds after each CUA scroll. No iOS device was claimed.
 - At `320x568`, row 1 changed `scrollLeft` from `0` to `288` and row 2 changed from `0` to `180` after dragging each horizontal scrollbar. `scrollWidth` was `584` and `680`; each row `clientWidth` was `296`.
 - At `320x568`, content `scrollTop` changed from `0` to `470`. Header bounds stayed `top=0,bottom=97`; navigation bounds stayed `top=496,bottom=568`. `document.documentElement.scrollWidth` and `document.body.scrollWidth` stayed `320`.
 - At `390x844`, row 1 changed `scrollLeft` from `0` to `218` and row 2 changed from `0` to `314.5` after dragging each horizontal scrollbar. `scrollWidth` was `584` and `680`; each row `clientWidth` was `366`.
 - At `390x844`, content `scrollTop` changed from `0` to `461.5`. Header bounds stayed `top=0,bottom=97`; navigation bounds stayed `top=772,bottom=844`. `document.documentElement.scrollWidth` and `document.body.scrollWidth` stayed `390`.
 - With the quantity input focused, reducing the viewport to `320x360` kept focus on `Fixture quantity`; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `288`. Reducing the viewport to `390x500` kept focus on the same input; its bounds were `top=210.4375,bottom=235.4375` and navigation started at `428`. Both controls stayed above navigation and both document widths matched the viewport.
+- With the fixture-only `24px` top and `32px` bottom overrides at `320x568`, computed safe-area values were `24px` and `32px`; header bounds were `top=0,bottom=121`, content bounds were `top=0,bottom=568`, and navigation bounds were `top=485.40625,bottom=568`. Content padding was `top=136px,bottom=104px`; navigation bottom padding was `32px`; document widths were both `320`.
+- At `320x568`, CUA scrolling reached `scrollTop=1154.5` of `1154`; the final visible paragraph ended at `431.9375`, leaving `53.46875px` above navigation. Header and navigation bounds stayed unchanged after scrolling.
+- With the same nonzero overrides at `390x844`, header bounds were `top=0,bottom=121`, content bounds were `top=0,bottom=844`, and navigation bounds were `top=761.40625,bottom=844`; content padding was `top=136px,bottom=104px`; navigation bottom padding was `32px`; document widths were both `390`.
+- At `390x844`, CUA scrolling reached `scrollTop=517.5` of `517`; the final visible paragraph ended at `707.9375`, leaving `53.46875px` above navigation. Header and navigation bounds stayed unchanged after scrolling.
+- With `Fixture quantity` focused and the viewport reduced to `320x360`, focus stayed on the input; its bounds were `top=227.4375,bottom=252.4375`, navigation started at `277.40625`, and clearance was `24.96875px`. At `390x500`, the same bounds were `top=227.4375,bottom=252.4375`, navigation started at `417.40625`, and clearance was `164.96875px`; both document widths matched the viewport.
+- Production contract evidence: both HTML entries contain `viewport-fit=cover`; production CSS maps `env(safe-area-inset-top, 0px)` and `env(safe-area-inset-bottom, 0px)` into inherited custom properties used by header, content clearance, scroll padding, and navigation. The nonzero `24px` and `32px` values exist only in `browser-fixture.tsx`.
 
 ## Review Issues
 
 - [x] [Major] `web/src/App.test.tsx` replaces 49 existing App tests with 14 integration tests and drops equivalent business-behavior coverage. Restore the removed action, availability, transfer, and Building protections in the tabbed UI, including legacy Convert, authoritative unsuccessful states, request deduplication while pending, Resource Drop, transfer conflicts, Building failure and reload behavior, gather/convert/craft/move/rest success and failure handling, and unauthenticated identity clearing. Layout integration does not replace these behavior tests.
-- [ ] [Major] Safe-area handling is inactive in production. `web/index.html` lacks `viewport-fit=cover`, so iOS keeps `env(safe-area-inset-*)` at zero. The fixture has the same omission, and its browser evidence only validates zero-inset desktop viewports. Add the viewport opt-in and device evidence for nonzero top and bottom insets.
+- [x] [Major] Safe-area handling was inactive in production because both HTML entries lacked `viewport-fit=cover`. The shell now opts into the full viewport, maps both environment insets through production custom properties, and verifies nonzero layout with fixture-only overrides; no iOS device evidence is implied.
 - [x] [Major] The prior behavior-coverage finding remains unresolved. Compared with `main`, tabbed tests omit the movement-threshold equality boundary, Active/Expired row status and durability, and global gameplay-action disabling during pending Gather and Convert requests. Restore those business assertions across their owning tabs. Navigation can remain enabled while gameplay controls stay disabled.
 - [x] [Major] When one action is pending, every tab receives only a shared pending boolean. After switching tabs, unrelated controls falsely read `Moving...`, `Gathering...`, `Crafting...`, `Resting...`, or similar. Preserve global disablement, but show a pending label only for the active action kind.

@@ -1,4 +1,6 @@
 :root {
+  --shell-safe-area-top: env(safe-area-inset-top, 0px);
+  --shell-safe-area-bottom: env(safe-area-inset-bottom, 0px);
   color: #e9eef5;
   background: #10151d;
   font-family: system-ui, sans-serif;
@@ -36,7 +38,7 @@ a:focus-visible {
   border-bottom: 1px solid #344052;
   box-sizing: border-box;
   inset: 0 0 auto;
-  padding: env(safe-area-inset-top, 0px) .75rem 0;
+  padding: var(--shell-safe-area-top) .75rem 0;
   position: fixed;
   z-index: 2;
 }
@@ -69,13 +71,13 @@ main.game-shell__content {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: calc(var(--shell-header-space) + env(safe-area-inset-top, 0px)) .75rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
-  scroll-padding-block: 1rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
+  padding: calc(var(--shell-header-space) + var(--shell-safe-area-top)) .75rem calc(var(--shell-navigation-space) + var(--shell-safe-area-bottom));
+  scroll-padding-block: 1rem calc(var(--shell-navigation-space) + var(--shell-safe-area-bottom));
   width: 100%;
 }
 
 .game-shell__content > * {
-  scroll-margin-block: 1rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
+  scroll-margin-block: 1rem calc(var(--shell-navigation-space) + var(--shell-safe-area-bottom));
 }
 
 .game-shell__navigation {
@@ -88,7 +90,7 @@ main.game-shell__content {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   inset-inline: 0;
   min-height: var(--shell-navigation-space);
-  padding: .35rem .5rem env(safe-area-inset-bottom, 0px);
+  padding: .35rem .5rem var(--shell-safe-area-bottom);
   position: fixed;
   z-index: 2;
 }
