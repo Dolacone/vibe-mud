@@ -2259,6 +2259,23 @@ func buildingResponsesFromStore(buildings []Building, availability playerAvailab
 	return responses
 }
 
+func buildingExtensionResponseFromStore(extension BuildingExtension, actions []string) buildingExtensionResponse {
+	response := buildingExtensionResponse{
+		ID:               extension.ID,
+		SlotIndex:        extension.SlotIndex,
+		DefinitionID:     extension.DefinitionID,
+		DisplayName:      extension.DisplayName,
+		Tier:             extension.Tier,
+		Status:           extension.Status,
+		AvailableActions: actions,
+	}
+	if extension.Status == "under_construction" {
+		response.RequiredAP = &extension.RequiredAP
+		response.ContributedAP = &extension.ContributedAP
+	}
+	return response
+}
+
 func buildingResponseFromStore(building Building, availability playerAvailability) buildingResponse {
 	response := buildingResponse{
 		ID: building.ID,
@@ -2281,12 +2298,7 @@ func buildingResponseFromStore(building Building, availability playerAvailabilit
 		response.ContributedAP = &building.ContributedAP
 	}
 	for _, extension := range building.Extensions {
-		extensionResponse := buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]}
-		if extension.Status == "under_construction" {
-			extensionResponse.RequiredAP = &extension.RequiredAP
-			extensionResponse.ContributedAP = &extension.ContributedAP
-		}
-		response.Extensions = append(response.Extensions, extensionResponse)
+		response.Extensions = append(response.Extensions, buildingExtensionResponseFromStore(extension, availability.ExtensionActions[extension.ID]))
 	}
 	if building.DurabilityStatus != "" {
 		status := building.DurabilityStatus
