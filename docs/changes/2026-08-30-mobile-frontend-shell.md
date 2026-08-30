@@ -1,6 +1,6 @@
 ---
 title: "Mobile frontend shell"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -113,3 +113,4 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 - [x] [Major] Safe-area handling was inactive in production because both HTML entries lacked `viewport-fit=cover`. The shell now opts into the full viewport, maps both environment insets through production custom properties, and verifies nonzero layout with fixture-only overrides; no iOS device evidence is implied.
 - [x] [Major] The prior behavior-coverage finding remains unresolved. Compared with `main`, tabbed tests omit the movement-threshold equality boundary, Active/Expired row status and durability, and global gameplay-action disabling during pending Gather and Convert requests. Restore those business assertions across their owning tabs. Navigation can remain enabled while gameplay controls stay disabled.
 - [x] [Major] When one action is pending, every tab receives only a shared pending boolean. After switching tabs, unrelated controls falsely read `Moving...`, `Gathering...`, `Crafting...`, `Resting...`, or similar. Preserve global disablement, but show a pending label only for the active action kind.
+- [ ] [Major] Compared with `main`, the restored App suite still omits the gameplay-table containment and column-scope behavior test. The browser fixture contains no gameplay table. The shell contract only checks CSS strings. Restore equivalent tabbed coverage for `.table-scroll` containment and `scope="col"` headers.
