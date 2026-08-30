@@ -376,11 +376,52 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const actionPendingNow = action.status === "pending";
   const hasAction = (name: string) => currentUser.available_actions.includes(name);
   const feedback = <ActionFeedback action={action} actionKind={actionKind} currentUser={currentUser} />;
+  const tabFeedback = (tab: GameShellTab) => activeTab === tab ? feedback : null;
+  const mapTab = <MapTab
+    currentUser={currentUser}
+    actionPending={actionPendingNow}
+    pendingActionKind={actionKind}
+    hasAction={hasAction}
+    onMove={(target) => void handleMove(target)}
+    feedback={tabFeedback("map")}
+  />;
+  const areaTab = <AreaTab
+    currentUser={currentUser}
+    actionPending={actionPendingNow}
+    pendingActionKind={actionKind}
+    hasAction={hasAction}
+    onGather={() => void handleGather()}
+    onBuild={(recipeID) => void handleBuild(recipeID)}
+    onInstall={(buildingID, slotIndex, definitionID) => void handleInstall(buildingID, slotIndex, definitionID)}
+    onBuildingAction={(kind, request) => void applyBuildingAction(kind, request)}
+    onRepair={(buildingID) => void handleRepair(buildingID)}
+    onTransfer={(operation, request) => void handleTransfer(operation, request)}
+    feedback={tabFeedback("area")}
+  />;
+  const itemsTab = <ItemsTab
+    currentUser={currentUser}
+    actionPending={actionPendingNow}
+    pendingActionKind={actionKind}
+    hasAction={hasAction}
+    onConvert={(methodID, quantity, providerID) => void handleConvert(methodID, quantity, providerID)}
+    onLegacyConvert={() => void handleLegacyConvert()}
+    onCraft={(recipeID) => void handleCraft(recipeID)}
+    onTransfer={(operation, request) => void handleTransfer(operation, request)}
+    feedback={tabFeedback("items")}
+  />;
+  const characterTab = <CharacterTab
+    currentUser={currentUser}
+    actionPending={actionPendingNow}
+    pendingActionKind={actionKind}
+    hasAction={hasAction}
+    onRest={() => void handleRest()}
+    feedback={tabFeedback("character")}
+  />;
   const tabContent = {
-    map: <MapTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onMove={(target) => void handleMove(target)} feedback={activeTab === "map" ? feedback : null} />,
-    area: <AreaTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onGather={() => void handleGather()} onBuild={(recipeID) => void handleBuild(recipeID)} onInstall={(buildingID, slotIndex, definitionID) => void handleInstall(buildingID, slotIndex, definitionID)} onBuildingAction={(kind, request) => void applyBuildingAction(kind, request)} onRepair={(buildingID) => void handleRepair(buildingID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "area" ? feedback : null} />,
-    items: <ItemsTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onConvert={(methodID, quantity, providerID) => void handleConvert(methodID, quantity, providerID)} onLegacyConvert={() => void handleLegacyConvert()} onCraft={(recipeID) => void handleCraft(recipeID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "items" ? feedback : null} />,
-    character: <CharacterTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onRest={() => void handleRest()} feedback={activeTab === "character" ? feedback : null} />,
+    map: mapTab,
+    area: areaTab,
+    items: itemsTab,
+    character: characterTab,
   } satisfies Record<GameShellTab, ReactNode>;
 
   return <GameShell player={{ display_name: currentUser.display_name, ap: currentUser.ap, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
