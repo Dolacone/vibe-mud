@@ -4,6 +4,8 @@
 
 ## 2026-08-29
 
+- Removed completed construction AP from public Building and extension state.
+- Removed duplicate tier suffixes from extension display names.
 - Replaced public Item and Building durability seconds with rounded-up integer percentages.
 - Filtered gameplay Actions, targets, methods, and recipes by authoritative backend state.
 - Kept all eight Resource balances and other player state visible when options are unavailable.
