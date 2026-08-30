@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 2026-08-30
+
+- Replaced the authenticated development page with a mobile-first four-tab game shell.
+- Added fixed player status, swipeable Resource summaries, safe-area support, and bottom navigation.
+- Moved existing gameplay controls into Map, Area, Items, and Character views.
+
 ## 2026-08-29
 
 - Removed completed construction AP from public Building and extension state.

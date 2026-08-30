@@ -9,7 +9,7 @@
 - 已登入玩家可執行後端依目前狀態回傳的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可依後端回傳的 recipe 建立 Building Lv1，由同地點玩家共同施工，完成後不再取得施工數值 -> REQ-010
 - 完成的 Building 會自然耗損，以整數百分比顯示耐久，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
-- 已登入頁面以緊湊表格呈現玩家狀態與 Action，不改變 API 或遊戲規則 -> REQ-012
+- 已登入頁面使用 mobile-first App Shell，以固定核心狀態與地圖、地區、道具、角色四個主分頁呈現遊戲 -> REQ-012
 - 玩家可在目前 Location 免費 Transfer 資產，Item 必須指定狀態，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
 - 每種 Item 與 Resource 具有獨立重量，玩家可超重持有資產，但超重時不能 Move -> REQ-014
 - 所有操作產生的 Item 於 1 小時後失效，以整數百分比顯示耐久，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
