@@ -546,13 +546,13 @@ describe("App", () => {
   });
 
   it("shows construction AP only for in-progress Buildings and extensions", async () => {
-    const building = { ...underConstruction, extensions: [underConstructionSawmill, completedSawmill] };
+    const building = { ...underConstruction, required_ap: 6, contributed_ap: 1, extensions: [{ ...underConstructionSawmill, required_ap: 6, contributed_ap: 1 }, completedSawmill] };
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, available_actions: [...campState.available_actions, "install-extension"], conversion_methods: [sawmillMethod], building_extension_definitions: [sawmillDefinition], buildings: [building] } });
     render(<App />);
 
     const buildingsTable = await screen.findByRole("table", { name: "Buildings" });
-    expect(buildingsTable).toHaveTextContent("Progress: 0/60 AP (0%)");
-    expect(buildingsTable).toHaveTextContent("Sawmill T1: under_construction 12/30 AP (40%)");
+    expect(buildingsTable).toHaveTextContent("Progress: 1/6 AP (16%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: under_construction 1/6 AP (16%)");
     expect(buildingsTable).toHaveTextContent("Sawmill T1: completed");
     expect(buildingsTable).not.toHaveTextContent("Sawmill T1: completed 30/30 AP");
 

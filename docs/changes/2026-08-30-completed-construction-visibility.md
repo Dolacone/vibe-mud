@@ -1,13 +1,21 @@
 ---
 title: "Completed construction visibility"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
 source_paths:
+  - CHANGELOG.md
   - docs/architecture.md
+  - docs/changes/2026-08-29-durability-percentage.md
+  - docs/changes/2026-08-30-completed-construction-visibility.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-010.md
+  - requirements/REQ-011.md
+  - requirements/REQ-015.md
+  - requirements/REQ-016.md
   - web/src/auth.ts
   - web/src/auth.test.ts
   - web/src/App.tsx
@@ -66,6 +74,6 @@ REQ-010 and REQ-016 are the sources of truth. The plan will copy each affected c
 
 ## Review Issues
 
-- [ ] [Major] `source_paths` 只列出 `main...HEAD` 15 個變更檔案中的 7 個。缺少 `CHANGELOG.md`、兩份 change document 與五份 requirements 檔案，因此中繼資料不符合實際 diff。
-- [ ] [Major] 前端施工百分比測試只使用 `0/60` 與 `12/30`。這些數值無法區分向下取整、向上取整或四捨五入，因此 Building 與 extension 的向下取整準則可被改壞而不造成測試失敗。
+- [x] [Major] `source_paths` 只列出 `main...HEAD` 15 個變更檔案中的 7 個。缺少 `CHANGELOG.md`、兩份 change document 與五份 requirements 檔案，因此中繼資料不符合實際 diff。
+- [x] [Major] 前端施工百分比測試只使用 `0/60` 與 `12/30`。這些數值無法區分向下取整、向上取整或四捨五入，因此 Building 與 extension 的向下取整準則可被改壞而不造成測試失敗。
 - [ ] [Minor] `main...HEAD` 修改的 `CHANGELOG.md` 與 `docs/changes/2026-08-29-durability-percentage.md` 仍使用 `last_reviewed: 2026-08-29`，不符合本次 review 要求的 `2026-08-30`。
