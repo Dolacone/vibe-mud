@@ -1,6 +1,6 @@
 ---
 title: "Completed construction visibility"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -63,3 +63,9 @@ REQ-010 and REQ-016 are the sources of truth. The plan will copy each affected c
 - [x] Task 2 未定義施工進度百分比。現有 Building 使用向下取整，extension 未顯示百分比。明定沿用既有 Building 算式，且施工中 Building 與 extension 都顯示百分比。完成後不得計算或顯示施工進度。
 - [x] Task 2 未列出重複 tier 的所有玩家可見路徑。`App.tsx` 目前在已安裝 extension、extension definition 與 Convert provider 選項後再次附加 tier。計畫與測試必須覆蓋所有路徑，避免只修正 Building 表格。
 - [x] `docs/architecture.md` 已修改，但 `last_reviewed` 仍是 `2026-08-29`。更新為 `2026-08-30`，並記錄施工百分比由前端依條件式 AP 欄位計算。
+
+## Review Issues
+
+- [ ] [Major] `source_paths` 只列出 `main...HEAD` 15 個變更檔案中的 7 個。缺少 `CHANGELOG.md`、兩份 change document 與五份 requirements 檔案，因此中繼資料不符合實際 diff。
+- [ ] [Major] 前端施工百分比測試只使用 `0/60` 與 `12/30`。這些數值無法區分向下取整、向上取整或四捨五入，因此 Building 與 extension 的向下取整準則可被改壞而不造成測試失敗。
+- [ ] [Minor] `main...HEAD` 修改的 `CHANGELOG.md` 與 `docs/changes/2026-08-29-durability-percentage.md` 仍使用 `last_reviewed: 2026-08-29`，不符合本次 review 要求的 `2026-08-30`。
