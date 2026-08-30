@@ -9,6 +9,118 @@ body {
   min-width: 320px;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid #75a7ff;
+  outline-offset: 2px;
+}
+
+.game-shell {
+  --shell-header-space: 7rem;
+  --shell-navigation-space: 4.5rem;
+  background: #10151d;
+  display: grid;
+  grid-template-rows: 1fr;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.game-shell__header {
+  background: #182230;
+  border-bottom: 1px solid #344052;
+  box-sizing: border-box;
+  inset: 0 0 auto;
+  padding: env(safe-area-inset-top, 0px) .75rem 0;
+  position: fixed;
+  z-index: 2;
+}
+
+.game-shell__status-row {
+  align-items: center;
+  display: flex;
+  gap: .5rem;
+  min-height: 3rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  white-space: nowrap;
+}
+
+.game-shell__status-item {
+  background: #243246;
+  border: 1px solid #465a74;
+  border-radius: .35rem;
+  flex: 0 0 auto;
+  padding: .45rem .65rem;
+}
+
+main.game-shell__content {
+  box-sizing: border-box;
+  height: 100%;
+  margin: 0;
+  max-width: none;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: calc(var(--shell-header-space) + env(safe-area-inset-top, 0px)) .75rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
+  scroll-padding-block: 1rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
+  width: 100%;
+}
+
+.game-shell__content > * {
+  scroll-margin-block: 1rem calc(var(--shell-navigation-space) + env(safe-area-inset-bottom, 0px));
+}
+
+.game-shell__navigation {
+  align-items: stretch;
+  background: #182230;
+  border-top: 1px solid #344052;
+  bottom: 0;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  inset-inline: 0;
+  min-height: var(--shell-navigation-space);
+  padding: .35rem .5rem env(safe-area-inset-bottom, 0px);
+  position: fixed;
+  z-index: 2;
+}
+
+.game-shell__navigation button {
+  background: transparent;
+  border: 0;
+  border-radius: .35rem;
+  color: #a9b7c9;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 44px;
+  min-width: 44px;
+  padding: .5rem .25rem;
+}
+
+.game-shell__navigation button[aria-current="page"] {
+  background: #2a405d;
+  color: #ffffff;
+}
+
+@media (min-width: 40rem) {
+  .game-shell__header,
+  .game-shell__navigation {
+    padding-inline: max(.75rem, calc((100% - 38rem) / 2));
+  }
+
+  main.game-shell__content {
+    padding-inline: max(.75rem, calc((100% - 38rem) / 2));
+  }
+}
+
 main {
   box-sizing: border-box;
   margin: 0 auto;

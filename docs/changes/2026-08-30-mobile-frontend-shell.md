@@ -6,6 +6,9 @@ doc_type: change
 last_reviewed: 2026-08-30
 source_paths:
   - docs/architecture.md
+  - web/src/GameShell.tsx
+  - web/src/GameShell.test.tsx
+  - web/src/styles.css
 req_ref: REQ-012
 base_branch: main
 scope: "Replace the development table page with a mobile-first four-tab game shell."
@@ -41,7 +44,7 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 
 ## Tasks
 
-- [ ] Task 1 [parallel: no]: Build the fixed mobile shell, status header, and bottom navigation in `web/src/GameShell.tsx` and `web/src/styles.css`. Add component tests in the same commit. Use the stable Resource order Food, Wood, Stone, Metal, Fiber, Hide, Medicinal, Arcane. Display `HP --` until HP exists. Use `100dvh`, top and bottom safe-area insets, one middle vertical scroll region, scroll padding, and focused-control visibility when the software keyboard changes the viewport. Use semantic navigation with labeled native buttons, `aria-current="page"`, visible focus, focus retained on the activated destination, and touch targets of at least 44 by 44 CSS pixels.
+- [x] Task 1 [parallel: no]: Build the fixed mobile shell, status header, and bottom navigation in `web/src/GameShell.tsx` and `web/src/styles.css`. Add component tests in the same commit. Use the stable Resource order Food, Wood, Stone, Metal, Fiber, Hide, Medicinal, Arcane. Display `HP --` until HP exists. Use `100dvh`, top and bottom safe-area insets, one middle vertical scroll region, scroll padding, and focused-control visibility when the software keyboard changes the viewport. Use semantic navigation with labeled native buttons, `aria-current="page"`, visible focus, focus retained on the activated destination, and touch targets of at least 44 by 44 CSS pixels.
   - REQ-012.1: 已登入介面必須使用 mobile-first 的單一 App Shell。
   - REQ-012.2: App Shell 頂端必須固定顯示兩排核心狀態，且不得隨主分頁切換。
   - REQ-012.3: 第一排必須依序顯示玩家名稱、目前 AP 與目前 HP。
