@@ -1,6 +1,6 @@
 ---
 title: "Completed construction visibility"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
