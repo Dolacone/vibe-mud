@@ -63,17 +63,19 @@ export type ConversionMethod = {
   provider_extension_ids: number[];
 };
 
-export type BuildingExtension = {
+type BuildingExtensionBase = {
   id: number;
   slot_index: number;
   definition_id: string;
   display_name: string;
   tier: number;
-  required_ap: number;
-  contributed_ap: number;
-  status: "under_construction" | "completed";
   available_actions: string[];
 };
+
+export type BuildingExtension = BuildingExtensionBase & (
+  | { status: "under_construction"; required_ap: number; contributed_ap: number }
+  | { status: "completed" }
+);
 
 export type ExtensionInstallationTarget = {
   building_id: number;
@@ -134,20 +136,22 @@ export type BuildingRecipe = {
   item_inputs: BuildingItemInput[];
 };
 
-export type Building = {
+type BuildingBase = {
   id: number;
   owner: { id: number; display_name: string };
   recipe: { id: string; display_name: string };
   building_level: number;
-  required_ap: number;
-  contributed_ap: number;
-  status: "under_construction" | "completed";
   extension_slot_count: number;
   durability_status: "active" | "disabled" | null;
   durability_percentage: number | null;
   extensions?: BuildingExtension[];
   available_actions: string[];
 };
+
+export type Building = BuildingBase & (
+  | { status: "under_construction"; required_ap: number; contributed_ap: number }
+  | { status: "completed" }
+);
 
 export type PlayerState = {
   available_actions: string[];
@@ -429,11 +433,6 @@ function isBuilding(value: unknown): value is Building {
     isString((recipe as Record<string, unknown>).id) &&
     isString((recipe as Record<string, unknown>).display_name) &&
     isPositiveInteger(building.building_level) &&
-    isPositiveInteger(building.required_ap) &&
-    typeof building.contributed_ap === "number" &&
-    Number.isInteger(building.contributed_ap) &&
-    building.contributed_ap >= 0 &&
-    building.contributed_ap <= building.required_ap &&
     (building.status === "under_construction" || building.status === "completed") &&
     typeof building.extension_slot_count === "number" &&
     Number.isInteger(building.extension_slot_count) &&
@@ -443,8 +442,9 @@ function isBuilding(value: unknown): value is Building {
     (building.extensions === undefined || (Array.isArray(building.extensions) && building.extensions.every(isBuildingExtension)))
   ) {
     if (building.status === "under_construction") {
-      return building.durability_status === null && building.durability_percentage === null;
+      return isPositiveInteger(building.required_ap) && isNonNegativeInteger(building.contributed_ap) && building.contributed_ap <= building.required_ap && building.durability_status === null && building.durability_percentage === null;
     }
+    if (Object.hasOwn(building, "required_ap") || Object.hasOwn(building, "contributed_ap")) return false;
     if (building.durability_status === "active") {
       return isPositiveInteger(building.durability_percentage) && building.durability_percentage <= 100;
     }
@@ -542,7 +542,9 @@ function isConversionMethods(value: unknown): value is ConversionMethod[] {
 function isBuildingExtension(value: unknown): value is BuildingExtension {
   if (typeof value !== "object" || value === null) return false;
   const extension = value as Record<string, unknown>;
-  return isPositiveInteger(extension.id) && isNonNegativeInteger(extension.slot_index) && isString(extension.definition_id) && isString(extension.display_name) && isPositiveInteger(extension.tier) && isPositiveInteger(extension.required_ap) && isNonNegativeInteger(extension.contributed_ap) && extension.contributed_ap <= extension.required_ap && (extension.status === "under_construction" || extension.status === "completed") && isAvailableActions(extension.available_actions);
+  if (!isPositiveInteger(extension.id) || !isNonNegativeInteger(extension.slot_index) || !isString(extension.definition_id) || !isString(extension.display_name) || !isPositiveInteger(extension.tier) || (extension.status !== "under_construction" && extension.status !== "completed") || !isAvailableActions(extension.available_actions)) return false;
+  if (extension.status === "completed") return !Object.hasOwn(extension, "required_ap") && !Object.hasOwn(extension, "contributed_ap");
+  return isPositiveInteger(extension.required_ap) && isNonNegativeInteger(extension.contributed_ap) && extension.contributed_ap <= extension.required_ap;
 }
 
 function isBuildingExtensionDefinition(value: unknown): value is BuildingExtensionDefinition {

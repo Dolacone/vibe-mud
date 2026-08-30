@@ -54,6 +54,18 @@ const building: Building = {
   available_actions: ["contribute-construction"],
 };
 
+const completedBuilding: Building = {
+  id: 1,
+  owner: { id: 1, display_name: "Player" },
+  recipe: { id: "building_lv1", display_name: "Building Lv1" },
+  building_level: 1,
+  status: "completed",
+  extension_slot_count: 1,
+  durability_status: "active",
+  durability_percentage: 100,
+  available_actions: ["repair-building"],
+};
+
 const campState: PlayerState = {
   available_actions: ["rest", "move", "convert", "craft"],
   location: { id: "camp", display_name: "Camp" },
@@ -663,6 +675,48 @@ describe("building actions", () => {
     await expect(build("building_lv1", malformedFailure)).resolves.toMatchObject({ status: "error" });
   });
 
+  it("accepts conditional construction fields and rejects completed legacy AP fields", async () => {
+    const underConstructionExtension = {
+      id: 7,
+      slot_index: 0,
+      definition_id: "sawmill_t1",
+      display_name: "Sawmill T1",
+      tier: 1,
+      required_ap: 30,
+      contributed_ap: 12,
+      status: "under_construction",
+      available_actions: ["contribute-extension-construction"],
+    };
+    const completedExtension = {
+      id: 8,
+      slot_index: 1,
+      definition_id: "sawmill_t1",
+      display_name: "Sawmill T1",
+      tier: 1,
+      status: "completed",
+      available_actions: [],
+    };
+    const validState = { ...campState, buildings: [{ ...building, extensions: [underConstructionExtension, completedExtension] }] };
+    const validFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...validState }), { status: 200 }));
+    await expect(getCurrentUser(validFetcher)).resolves.toMatchObject({ status: "authenticated" });
+
+    for (const completed of [
+      { ...completedBuilding, required_ap: 0, contributed_ap: 0 },
+      { ...completedBuilding, required_ap: null, contributed_ap: null },
+    ]) {
+      const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, buildings: [completed] }), { status: 200 }));
+      await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
+    }
+
+    for (const completed of [
+      { ...completedExtension, required_ap: 0, contributed_ap: 0 },
+      { ...completedExtension, required_ap: null, contributed_ap: null },
+    ]) {
+      const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...campState, buildings: [{ ...building, extensions: [completed] }] }), { status: 200 }));
+      await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
+    }
+  });
+
   it("rejects local invalid inputs without sending requests", async () => {
     const fetcher = vi.fn();
     await expect(build("  ", fetcher)).resolves.toEqual({ status: "invalid", error: "invalid recipe identifier" });
@@ -672,13 +726,7 @@ describe("building actions", () => {
   });
 
   it("submits only a positive Building identifier and parses durability state", async () => {
-    const completed = {
-      ...building,
-      status: "completed" as const,
-      durability_status: "active" as const,
-      durability_percentage: 100,
-    };
-    const state = { ...campState, ap: 2990, buildings: [completed] };
+    const state = { ...campState, ap: 2990, buildings: [completedBuilding] };
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(state), { status: 200 }));
 
     await expect(repairBuilding(1, fetcher)).resolves.toEqual({ status: "success", ...state });
@@ -692,8 +740,7 @@ describe("building actions", () => {
 
   it("parses disabled durability and rejects inconsistent Building durability fields", async () => {
     const disabled = {
-      ...building,
-      status: "completed" as const,
+      ...completedBuilding,
       durability_status: "disabled" as const,
       durability_percentage: 0,
     };
@@ -702,7 +749,7 @@ describe("building actions", () => {
     await expect(repairBuilding(1, disabledFetcher)).resolves.toEqual({ status: "success", ...disabledState });
 
     const malformedFetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, status: "completed", durability_status: "active", durability_percentage: 0 }] }), { status: 200 }),
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...completedBuilding, durability_status: "active", durability_percentage: 0 }] }), { status: 200 }),
     );
     await expect(repairBuilding(1, malformedFetcher)).resolves.toMatchObject({
       status: "error",
@@ -710,7 +757,7 @@ describe("building actions", () => {
     });
 
     const missingMaximumFetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...campState, buildings: [{ ...building, status: "completed", durability_status: "active", durability_percentage: undefined }] }), { status: 200 }),
+      new Response(JSON.stringify({ ...campState, buildings: [{ ...completedBuilding, durability_status: "active", durability_percentage: undefined }] }), { status: 200 }),
     );
     await expect(repairBuilding(1, missingMaximumFetcher)).resolves.toMatchObject({
       status: "error",

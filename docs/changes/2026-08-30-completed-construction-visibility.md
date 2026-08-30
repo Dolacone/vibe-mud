@@ -1,6 +1,6 @@
 ---
 title: "Completed construction visibility"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -8,6 +8,10 @@ source_paths:
   - docs/architecture.md
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.tsx
+  - web/src/App.test.tsx
 req_ref: REQ-010, REQ-016
 base_branch: main
 scope: "Remove obsolete construction values from completed Buildings and extensions."
@@ -47,7 +51,7 @@ REQ-010 and REQ-016 are the sources of truth. The plan will copy each affected c
   - REQ-010.37: Building 完成後，後端傳給前端的 Building 資訊不得包含已投入 AP、所需 AP 或施工進度。
   - REQ-016.22: 施工中的 extension 必須向前端提供已投入 AP、所需 AP 與進度百分比。
   - REQ-016.23: Extension 完成後，後端傳給前端的 extension 資訊不得包含已投入 AP、所需 AP 或施工進度。
-- [ ] Task 2 [parallel: no]: Parse conditional construction values and hide completed construction details in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit. In-progress Building and extension percentages must use the existing downward-rounded ratio. Completed entities must not calculate or display construction progress. Installed extensions, installation definitions, and Convert provider options must not append tier to the player-facing display name.
+- [x] Task 2 [parallel: no]: Parse conditional construction values and hide completed construction details in `web/src/auth.ts` and `web/src/App.tsx`. Update frontend tests and verify the production build in the same commit. In-progress Building and extension percentages must use the existing downward-rounded ratio. Completed entities must not calculate or display construction progress. Installed extensions, installation definitions, and Convert provider options must not append tier to the player-facing display name.
   - REQ-010.17: 同一 Location 的玩家都能看到施工中 Building 的已投入 AP、所需 AP 與進度百分比。
   - REQ-010.38: Building 完成後，前端不得顯示已完成的施工數值。
   - REQ-016.19: 前端必須顯示空 slot、extension 顯示名稱、目前狀態與玩家可用操作，且不得在顯示名稱後重複附加 tier。

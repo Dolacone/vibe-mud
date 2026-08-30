@@ -93,9 +93,12 @@ const underConstruction = {
 };
 
 const completedActive = {
-  ...underConstruction,
-  contributed_ap: 60,
+  id: 1,
+  owner: { id: 1, display_name: "Ada" },
+  recipe: { id: "building_lv1", display_name: "Building Lv1" },
+  building_level: 1,
   status: "completed" as const,
+  extension_slot_count: 1,
   durability_status: "active" as const,
   durability_percentage: 99,
   available_actions: ["repair-building"],
@@ -105,6 +108,51 @@ const completedDisabled = {
   ...completedActive,
   durability_status: "disabled" as const,
   durability_percentage: 0,
+};
+
+const underConstructionSawmill = {
+  id: 7,
+  slot_index: 0,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  required_ap: 30,
+  contributed_ap: 12,
+  status: "under_construction" as const,
+  available_actions: ["contribute-extension-construction"],
+};
+
+const completedSawmill = {
+  id: 8,
+  slot_index: 1,
+  definition_id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  status: "completed" as const,
+  available_actions: [],
+};
+
+const sawmillDefinition = {
+  id: "sawmill_t1",
+  display_name: "Sawmill T1",
+  tier: 1,
+  package_item: { id: "sawmill_package_t1", display_name: "Sawmill Package T1" },
+  required_ap: 30,
+  installation_targets: [{ building_id: 1, slot_index: 0 }],
+};
+
+const sawmillMethod = {
+  id: "sawmill_wood_t1",
+  display_name: "Sawmill Wood Convert",
+  ap_cost: 30,
+  input: { id: "wood", display_name: "Wood" },
+  max_input_quantity: 6,
+  output_resource: { id: "wood", display_name: "Wood" },
+  resource_quantity_per_input: 1,
+  essence_item: null,
+  essence_chance_bps: 1000,
+  essence_quantity: 1,
+  provider_extension_ids: [8],
 };
 
 const campState = {
@@ -497,6 +545,25 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Build Building Lv1" })).toBeEnabled();
   });
 
+  it("shows construction AP only for in-progress Buildings and extensions", async () => {
+    const building = { ...underConstruction, extensions: [underConstructionSawmill, completedSawmill] };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, available_actions: [...campState.available_actions, "install-extension"], conversion_methods: [sawmillMethod], building_extension_definitions: [sawmillDefinition], buildings: [building] } });
+    render(<App />);
+
+    const buildingsTable = await screen.findByRole("table", { name: "Buildings" });
+    expect(buildingsTable).toHaveTextContent("Progress: 0/60 AP (0%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: under_construction 12/30 AP (40%)");
+    expect(buildingsTable).toHaveTextContent("Sawmill T1: completed");
+    expect(buildingsTable).not.toHaveTextContent("Sawmill T1: completed 30/30 AP");
+
+    const definitionsTable = screen.getByRole("table", { name: "Building extension definitions" });
+    expect(definitionsTable).toHaveTextContent("Sawmill T1");
+    expect(definitionsTable).not.toHaveTextContent("Sawmill T1 T1");
+    const provider = within(screen.getByRole("table", { name: "Convert" })).getByRole("combobox", { name: "Provider for Sawmill Wood Convert" });
+    expect(within(provider).getByRole("option", { name: "Sawmill T1" })).toBeInTheDocument();
+    expect(within(provider).queryByRole("option", { name: "Sawmill T1 T1" })).not.toBeInTheDocument();
+  });
+
   it("starts construction with only the backend recipe identifier and applies authoritative state", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState } });
     build.mockResolvedValue({ status: "success", ...campState, ap: 3000, inventory: [], buildings: [underConstruction] });
@@ -529,7 +596,7 @@ describe("App", () => {
 
   it("allows same-location contribution and caps oversized AP at completion", async () => {
     getCurrentUser.mockResolvedValue({ status: "authenticated", user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 100, buildings: [underConstruction] } });
-    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [{ ...underConstruction, contributed_ap: 60, status: "completed" as const, available_actions: [] }] });
+    contributeConstruction.mockResolvedValue({ status: "success", ...campState, ap: 40, buildings: [completedActive] });
     render(<App />);
 
     const input = await screen.findByRole("spinbutton", { name: "Contribution AP for building 1" });
@@ -538,7 +605,8 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Construction contribution succeeded.")).toBeInTheDocument());
     expect(contributeConstruction).toHaveBeenCalledWith(1, 100);
     expect(screen.getByText("Status: completed")).toBeInTheDocument();
-    expect(screen.getByText("Progress: 60/60 AP (100%)")).toBeInTheDocument();
+    expect(screen.queryByText("Progress: 60/60 AP (100%)")).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Buildings" })).not.toHaveTextContent("60/60 AP");
     expect(screen.queryByRole("spinbutton", { name: "Contribution AP for building 1" })).not.toBeInTheDocument();
   });
 
