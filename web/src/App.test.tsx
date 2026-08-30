@@ -224,6 +224,17 @@ const transferState: auth.PlayerState = {
   ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
 };
 
+const allGameplayState: auth.PlayerState = {
+  ...forestState,
+  available_actions: ["rest", "move", "gather", "convert", "craft", "build"],
+  conversion_option: null,
+  conversion_methods: [handWoodMethod],
+  inventory: [activeItem({ id: "wood", display_name: "Wood" }, 4)],
+  ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 2)],
+  ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 3 }],
+  buildings: [underConstruction, completedWithExtension],
+};
+
 const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", ...state } });
 const renderAuthenticated = async (state: auth.PlayerState = campState, displayName = "Ada") => {
   getCurrentUser.mockResolvedValue(authenticated(state, displayName));
@@ -234,6 +245,12 @@ const selectTab = async (name: "地圖" | "地區" | "道具" | "角色") => {
   fireEvent.click(screen.getByRole("button", { name }));
   await screen.findByRole("heading", { name });
 };
+const gameplayControls = () => [
+  ...screen.getAllByRole("button", { hidden: true }).filter((button) => !button.closest("nav")),
+  ...screen.getAllByRole("spinbutton", { hidden: true }),
+  ...screen.queryAllByRole("combobox", { hidden: true }),
+];
+const navigationButtons = () => screen.getAllByRole("button", { hidden: true }).filter((button) => button.closest("nav"));
 
 describe("App gameplay tab integration", () => {
   beforeEach(() => {
@@ -367,6 +384,13 @@ describe("App gameplay tab integration", () => {
     expect(screen.queryByRole("button", { name: /Move to/ })).not.toBeInTheDocument();
   });
 
+  it("allows movement when carrying weight equals the threshold", async () => {
+    await renderAuthenticated({ ...campState, carried_weight: campState.movement_weight_threshold });
+
+    expect(screen.getByRole("button", { name: "Move to forest_edge" })).toBeEnabled();
+    expect(screen.queryByText("Cannot move while overweight.")).not.toBeInTheDocument();
+  });
+
   it("keeps the shell mounted for request and domain failures", async () => {
     await renderAuthenticated();
     move.mockRejectedValue(new Error("backend unavailable"));
@@ -419,6 +443,11 @@ describe("App gameplay tab integration", () => {
     const inventory = screen.getByRole("table", { name: "Inventory" });
     expect(within(inventory).getByRole("button", { name: "Drop Wood" })).toBeEnabled();
     expect(within(inventory).getByRole("button", { name: "Drop Wood (expired)" })).toBeEnabled();
+    const inventoryRows = inventory.querySelectorAll("tbody > tr");
+    expect(inventoryRows[0]).toHaveTextContent("Status: active");
+    expect(inventoryRows[0]).toHaveTextContent("Durability: 100%");
+    expect(inventoryRows[1]).toHaveTextContent("Status: expired");
+    expect(inventoryRows[1]).toHaveTextContent("Durability: 0%");
     const dropInput = within(inventory).getByRole("spinbutton", { name: "Drop quantity for Wood" });
     fireEvent.change(dropInput, { target: { value: "2" } });
     drop.mockResolvedValue({ status: "success", ...transferState });
@@ -426,6 +455,11 @@ describe("App gameplay tab integration", () => {
     await waitFor(() => expect(drop).toHaveBeenCalledWith({ asset_type: "item", asset_id: "wood", quantity: 2, item_status: "active" }));
 
     await selectTab("地區");
+    const groundItemRows = screen.getByRole("table", { name: "Ground Items" }).querySelectorAll("tbody > tr");
+    expect(groundItemRows[0]).toHaveTextContent("Status: active");
+    expect(groundItemRows[0]).toHaveTextContent("Durability: 100%");
+    expect(groundItemRows[1]).toHaveTextContent("Status: expired");
+    expect(groundItemRows[1]).toHaveTextContent("Durability: 0%");
     expect(screen.getByRole("button", { name: "Pickup Wood Component" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Pickup Wood Component (expired)" })).not.toBeInTheDocument();
     const pickupInput = screen.getByRole("spinbutton", { name: "Pickup quantity for Wood Component" });
@@ -820,6 +854,34 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByRole("button", { name: "Gather" })).toBeEnabled();
   });
 
+  it("disables every gameplay control during pending Gather while keeping navigation enabled", async () => {
+    let resolveGather: ((value: auth.GatherResult) => void) | undefined;
+    gather.mockReturnValue(new Promise((resolve) => { resolveGather = resolve; }));
+    await renderAuthenticated(allGameplayState);
+    await selectTab("地區");
+
+    fireEvent.click(screen.getByRole("button", { name: "Gather" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gathering..." })).toBeDisabled());
+    expect(gameplayControls().length).toBeGreaterThan(0);
+    expect(gameplayControls().every((control) => control.hasAttribute("disabled"))).toBe(true);
+    expect(navigationButtons().every((button) => !button.hasAttribute("disabled"))).toBe(true);
+
+    await selectTab("道具");
+    expect(screen.getByRole("button", { name: "Convert" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Craft Wood Component" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Converting..." })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Crafting..." })).not.toBeInTheDocument();
+    await selectTab("地圖");
+    expect(screen.getByRole("button", { name: "Move to camp" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Moving..." })).not.toBeInTheDocument();
+    await selectTab("角色");
+    expect(screen.getByRole("button", { name: "Rest" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Resting..." })).not.toBeInTheDocument();
+
+    resolveGather?.({ status: "success", ...allGameplayState });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled());
+  });
+
   it("applies authoritative state after converting the last Wood", async () => {
     const stateWithWood = { ...campState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 1)] };
     await renderAuthenticated(stateWithWood);
@@ -911,6 +973,32 @@ describe("App gameplay tab integration", () => {
     resolveConvert?.({ status: "success", ...campState, ap: 2999, resources: resourcesWith("wood", 1) });
     await waitFor(() => expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1"));
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
+  });
+
+  it("disables every gameplay control during pending Convert while keeping navigation enabled", async () => {
+    let resolveConvert: ((value: auth.ConvertResult) => void) | undefined;
+    convert.mockReturnValue(new Promise((resolve) => { resolveConvert = resolve; }));
+    await renderAuthenticated(allGameplayState);
+    await selectTab("道具");
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Converting..." })).toBeDisabled());
+    expect(gameplayControls().length).toBeGreaterThan(0);
+    expect(gameplayControls().every((control) => control.hasAttribute("disabled"))).toBe(true);
+    expect(navigationButtons().every((button) => !button.hasAttribute("disabled"))).toBe(true);
+
+    await selectTab("地區");
+    expect(screen.getByRole("button", { name: "Gather" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Gathering..." })).not.toBeInTheDocument();
+    await selectTab("地圖");
+    expect(screen.getByRole("button", { name: "Move to camp" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Moving..." })).not.toBeInTheDocument();
+    await selectTab("角色");
+    expect(screen.getByRole("button", { name: "Rest" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Resting..." })).not.toBeInTheDocument();
+
+    resolveConvert?.({ status: "success", ...allGameplayState });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled());
   });
 
   it("keeps the authoritative state after an insufficient move", async () => {

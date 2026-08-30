@@ -60,8 +60,9 @@ function ActionFeedback({ action, actionKind, currentUser }: { action: ActionSta
   return <p role="alert">{actionFailurePrefix(actionKind)}: {message}</p>;
 }
 
-function MapTab({ currentUser, actionPending, hasAction, onMove, feedback }: { currentUser: CurrentUser; actionPending: boolean; hasAction: (name: string) => boolean; onMove: (target: string) => void; feedback: ReactNode }) {
+function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMove, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onMove: (target: string) => void; feedback: ReactNode }) {
   const isOverweight = currentUser.carried_weight > currentUser.movement_weight_threshold;
+  const movePending = actionPending && pendingActionKind === "move";
   return (
     <section aria-labelledby="map-heading">
       <h1 id="map-heading">地圖</h1>
@@ -72,7 +73,7 @@ function MapTab({ currentUser, actionPending, hasAction, onMove, feedback }: { c
         <TableScroll>
           <table aria-label="Available routes">
             <thead><tr><th scope="col">Destination</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("move") || currentUser.routes.length === 0 ? <EmptyRow colSpan={3}>No available routes.</EmptyRow> : currentUser.routes.map((route) => <tr key={`${route.origin_id}-${route.destination_id}`}><th scope="row">To {route.destination_id} ({route.ap_cost} AP)</th><td>{route.ap_cost} AP</td><td><button type="button" onClick={() => onMove(route.destination_id)} disabled={actionPending}>{actionPending ? "Moving..." : `Move to ${route.destination_id}`}</button></td></tr>)}</tbody>
+            <tbody>{!hasAction("move") || currentUser.routes.length === 0 ? <EmptyRow colSpan={3}>No available routes.</EmptyRow> : currentUser.routes.map((route) => <tr key={`${route.origin_id}-${route.destination_id}`}><th scope="row">To {route.destination_id} ({route.ap_cost} AP)</th><td>{route.ap_cost} AP</td><td><button type="button" onClick={() => onMove(route.destination_id)} disabled={actionPending}>{movePending ? "Moving..." : `Move to ${route.destination_id}`}</button></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -93,7 +94,13 @@ function MapTab({ currentUser, actionPending, hasAction, onMove, feedback }: { c
   );
 }
 
-function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onInstall, onBuildingAction, onRepair, onTransfer, feedback }: { currentUser: CurrentUser; actionPending: boolean; hasAction: (name: string) => boolean; onGather: () => void; onBuild: (recipeID: string) => void; onInstall: (buildingID: number, slotIndex: number, definitionID: string) => void; onBuildingAction: (kind: "contribute-construction" | "contribute-extension-construction" | "remove-extension", request: () => Promise<BuildResult>) => void; onRepair: (buildingID: number) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; feedback: ReactNode }) {
+function AreaTab({ currentUser, actionPending, pendingActionKind, hasAction, onGather, onBuild, onInstall, onBuildingAction, onRepair, onTransfer, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onGather: () => void; onBuild: (recipeID: string) => void; onInstall: (buildingID: number, slotIndex: number, definitionID: string) => void; onBuildingAction: (kind: "contribute-construction" | "contribute-extension-construction" | "remove-extension", request: () => Promise<BuildResult>) => void; onRepair: (buildingID: number) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; feedback: ReactNode }) {
+  const gatherPending = actionPending && pendingActionKind === "gather";
+  const buildPending = actionPending && pendingActionKind === "build";
+  const contributePending = actionPending && pendingActionKind === "contribute-construction";
+  const extensionContributePending = actionPending && pendingActionKind === "contribute-extension-construction";
+  const repairPending = actionPending && pendingActionKind === "repair-building";
+  const pickupPending = actionPending && pendingActionKind === "pickup";
   return (
     <section aria-labelledby="area-heading">
       <h1 id="area-heading">地區</h1>
@@ -102,7 +109,7 @@ function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onI
         <TableScroll>
           <table aria-label="Gather">
             <thead><tr><th scope="col">Yield</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("gather") || currentUser.gathering_option === null ? <EmptyRow colSpan={3}>No gathering action available.</EmptyRow> : <tr><th scope="row">Yield: {currentUser.gathering_option.quantity} {currentUser.gathering_option.item.display_name}; Cost: {currentUser.gathering_option.ap_cost} AP</th><td>{currentUser.gathering_option.ap_cost} AP</td><td><button type="button" onClick={onGather} disabled={actionPending}>{actionPending ? "Gathering..." : "Gather"}</button></td></tr>}</tbody>
+            <tbody>{!hasAction("gather") || currentUser.gathering_option === null ? <EmptyRow colSpan={3}>No gathering action available.</EmptyRow> : <tr><th scope="row">Yield: {currentUser.gathering_option.quantity} {currentUser.gathering_option.item.display_name}; Cost: {currentUser.gathering_option.ap_cost} AP</th><td>{currentUser.gathering_option.ap_cost} AP</td><td><button type="button" onClick={onGather} disabled={actionPending}>{gatherPending ? "Gathering..." : "Gather"}</button></td></tr>}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -112,7 +119,7 @@ function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onI
         <TableScroll>
           <table aria-label="Building recipes">
             <thead><tr><th scope="col">Recipe</th><th scope="col">Required AP</th><th scope="col">Extension slots</th><th scope="col">Resource inputs</th><th scope="col">Item inputs</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("build") || (currentUser.building_recipes ?? []).length === 0 ? <EmptyRow colSpan={6}>No building recipes available.</EmptyRow> : (currentUser.building_recipes ?? []).map((recipe) => <tr key={recipe.id}><th scope="row">{recipe.display_name}</th><td>Required AP: {recipe.required_ap}</td><td>Extension slots: {recipe.extension_slot_count}</td><td>{formatInputs(recipe.resource_inputs)}</td><td>{formatInputs(recipe.item_inputs)}</td><td><button type="button" onClick={() => onBuild(recipe.id)} disabled={actionPending}>{actionPending ? "Building..." : `Build ${recipe.display_name}`}</button></td></tr>)}</tbody>
+            <tbody>{!hasAction("build") || (currentUser.building_recipes ?? []).length === 0 ? <EmptyRow colSpan={6}>No building recipes available.</EmptyRow> : (currentUser.building_recipes ?? []).map((recipe) => <tr key={recipe.id}><th scope="row">{recipe.display_name}</th><td>Required AP: {recipe.required_ap}</td><td>Extension slots: {recipe.extension_slot_count}</td><td>{formatInputs(recipe.resource_inputs)}</td><td>{formatInputs(recipe.item_inputs)}</td><td><button type="button" onClick={() => onBuild(recipe.id)} disabled={actionPending}>{buildPending ? "Building..." : `Build ${recipe.display_name}`}</button></td></tr>)}</tbody>
           </table>
         </TableScroll>
         <h3>Current location buildings</h3>
@@ -123,7 +130,7 @@ function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onI
             <tbody>{(currentUser.buildings ?? []).length === 0 ? <EmptyRow colSpan={6}>No buildings at this location.</EmptyRow> : (currentUser.buildings ?? []).map((building) => {
               const extensions = building.extensions ?? [];
               const buildingProgress = building.status === "under_construction" ? <span>Progress: {building.contributed_ap}/{building.required_ap} AP ({Math.floor((building.contributed_ap / building.required_ap) * 100)}%)</span> : null;
-              return <tr key={building.id}><th scope="row">{building.recipe.display_name}</th><td>Owner: {building.owner.display_name}</td><td>Status: {building.status}</td><td>{buildingProgress}{buildingProgress && <br />}<span>Empty extension slots: {Math.max(0, building.extension_slot_count - extensions.length)}</span>{extensions.map((extension) => <div key={extension.id}>{extension.display_name}: {extension.status}{extension.status === "under_construction" && ` ${extension.contributed_ap}/${extension.required_ap} AP (${Math.floor((extension.contributed_ap / extension.required_ap) * 100)}%)`} {extension.available_actions.includes("contribute-extension-construction") && <BuildingContribution buildingID={extension.id} disabled={actionPending} onSubmit={(ap) => onBuildingAction("contribute-extension-construction", () => contributeExtensionConstruction(extension.id, ap))} />}{extension.available_actions.includes("remove-extension") && <button type="button" onClick={() => onBuildingAction("remove-extension", () => removeExtension(extension.id))} disabled={actionPending}>Remove extension</button>}</div>)}</td><td>{building.status === "completed" && building.durability_status !== null && building.durability_percentage !== null ? <><span>Durability status: {building.durability_status}</span><br /><span>Durability: {building.durability_percentage}%</span></> : "-"}</td><td>{building.available_actions.includes("repair-building") && <button type="button" onClick={() => onRepair(building.id)} disabled={actionPending}>{actionPending ? "Repairing..." : `Repair building ${building.id}`}</button>}{building.available_actions.includes("contribute-construction") && <BuildingContribution buildingID={building.id} disabled={actionPending} onSubmit={(ap) => onBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />}</td></tr>;
+              return <tr key={building.id}><th scope="row">{building.recipe.display_name}</th><td>Owner: {building.owner.display_name}</td><td>Status: {building.status}</td><td>{buildingProgress}{buildingProgress && <br />}<span>Empty extension slots: {Math.max(0, building.extension_slot_count - extensions.length)}</span>{extensions.map((extension) => <div key={extension.id}>{extension.display_name}: {extension.status}{extension.status === "under_construction" && ` ${extension.contributed_ap}/${extension.required_ap} AP (${Math.floor((extension.contributed_ap / extension.required_ap) * 100)}%)`} {extension.available_actions.includes("contribute-extension-construction") && <BuildingContribution buildingID={extension.id} disabled={actionPending} pending={extensionContributePending} onSubmit={(ap) => onBuildingAction("contribute-extension-construction", () => contributeExtensionConstruction(extension.id, ap))} />}{extension.available_actions.includes("remove-extension") && <button type="button" onClick={() => onBuildingAction("remove-extension", () => removeExtension(extension.id))} disabled={actionPending}>Remove extension</button>}</div>)}</td><td>{building.status === "completed" && building.durability_status !== null && building.durability_percentage !== null ? <><span>Durability status: {building.durability_status}</span><br /><span>Durability: {building.durability_percentage}%</span></> : "-"}</td><td>{building.available_actions.includes("repair-building") && <button type="button" onClick={() => onRepair(building.id)} disabled={actionPending}>{repairPending ? "Repairing..." : `Repair building ${building.id}`}</button>}{building.available_actions.includes("contribute-construction") && <BuildingContribution buildingID={building.id} disabled={actionPending} pending={contributePending} onSubmit={(ap) => onBuildingAction("contribute-construction", () => contributeConstruction(building.id, ap))} />}</td></tr>;
             })}</tbody>
           </table>
         </TableScroll>
@@ -134,14 +141,14 @@ function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onI
         <TableScroll>
           <table aria-label="Ground Items">
             <thead><tr><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Durability</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.ground_items.length === 0 ? <EmptyRow colSpan={5}>Ground items are empty.</EmptyRow> : currentUser.ground_items.map((entry) => <tr key={`${entry.item.id}-${entry.durability_status}`}><th scope="row">{entry.item.display_name}</th><td>{entry.quantity}</td><td>Status: {entry.durability_status}</td><td>Durability: {entry.durability_percentage}%</td><td>{entry.durability_status === "active" && <TransferQuantity operation="pickup" assetType="item" assetID={entry.item.id} itemStatus={entry.durability_status} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPending} onSubmit={(quantity) => onTransfer("pickup", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: entry.durability_status })} />}</td></tr>)}</tbody>
+            <tbody>{currentUser.ground_items.length === 0 ? <EmptyRow colSpan={5}>Ground items are empty.</EmptyRow> : currentUser.ground_items.map((entry) => <tr key={`${entry.item.id}-${entry.durability_status}`}><th scope="row">{entry.item.display_name}</th><td>{entry.quantity}</td><td>Status: {entry.durability_status}</td><td>Durability: {entry.durability_percentage}%</td><td>{entry.durability_status === "active" && <TransferQuantity operation="pickup" assetType="item" assetID={entry.item.id} itemStatus={entry.durability_status} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPending} pending={pickupPending} onSubmit={(quantity) => onTransfer("pickup", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: entry.durability_status })} />}</td></tr>)}</tbody>
           </table>
         </TableScroll>
         <h3>Ground Resources</h3>
         <TableScroll>
           <table aria-label="Ground Resources">
             <thead><tr><th scope="col">Resource</th><th scope="col">Quantity</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.ground_resources.length === 0 ? <EmptyRow colSpan={3}>Ground resources are empty.</EmptyRow> : currentUser.ground_resources.map((entry) => <tr key={entry.resource.id}><th scope="row">{entry.resource.display_name}</th><td>{entry.quantity}</td><td><TransferQuantity operation="pickup" assetType="resource" assetID={entry.resource.id} displayName={entry.resource.display_name} max={entry.quantity} disabled={actionPending} onSubmit={(quantity) => onTransfer("pickup", { asset_type: "resource", asset_id: entry.resource.id, quantity })} /></td></tr>)}</tbody>
+            <tbody>{currentUser.ground_resources.length === 0 ? <EmptyRow colSpan={3}>Ground resources are empty.</EmptyRow> : currentUser.ground_resources.map((entry) => <tr key={entry.resource.id}><th scope="row">{entry.resource.display_name}</th><td>{entry.quantity}</td><td><TransferQuantity operation="pickup" assetType="resource" assetID={entry.resource.id} displayName={entry.resource.display_name} max={entry.quantity} disabled={actionPending} pending={pickupPending} onSubmit={(quantity) => onTransfer("pickup", { asset_type: "resource", asset_id: entry.resource.id, quantity })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -150,7 +157,10 @@ function AreaTab({ currentUser, actionPending, hasAction, onGather, onBuild, onI
   );
 }
 
-function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyConvert, onCraft, onTransfer, feedback }: { currentUser: CurrentUser; actionPending: boolean; hasAction: (name: string) => boolean; onConvert: (methodID: string, quantity: number, providerID?: number) => void; onLegacyConvert: () => void; onCraft: (recipeID: string) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; feedback: ReactNode }) {
+function ItemsTab({ currentUser, actionPending, pendingActionKind, hasAction, onConvert, onLegacyConvert, onCraft, onTransfer, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onConvert: (methodID: string, quantity: number, providerID?: number) => void; onLegacyConvert: () => void; onCraft: (recipeID: string) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; feedback: ReactNode }) {
+  const convertPending = actionPending && pendingActionKind === "convert";
+  const craftPending = actionPending && pendingActionKind === "craft";
+  const dropPending = actionPending && pendingActionKind === "drop";
   return (
     <section aria-labelledby="items-heading">
       <h1 id="items-heading">道具</h1>
@@ -159,7 +169,7 @@ function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyCo
         <TableScroll>
           <table aria-label="Inventory">
             <thead><tr><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Durability</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.inventory.length === 0 ? <EmptyRow colSpan={5}>Inventory is empty.</EmptyRow> : currentUser.inventory.map((entry) => <tr key={`${entry.item.id}-${entry.durability_status}`}><th scope="row">{entry.item.display_name}</th><td>{entry.item.display_name}: {entry.quantity}</td><td>Status: {entry.durability_status}</td><td>Durability: {entry.durability_percentage}%</td><td><TransferQuantity operation="drop" assetType="item" assetID={entry.item.id} itemStatus={entry.durability_status} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: entry.durability_status })} /></td></tr>)}</tbody>
+            <tbody>{currentUser.inventory.length === 0 ? <EmptyRow colSpan={5}>Inventory is empty.</EmptyRow> : currentUser.inventory.map((entry) => <tr key={`${entry.item.id}-${entry.durability_status}`}><th scope="row">{entry.item.display_name}</th><td>{entry.item.display_name}: {entry.quantity}</td><td>Status: {entry.durability_status}</td><td>Durability: {entry.durability_percentage}%</td><td><TransferQuantity operation="drop" assetType="item" assetID={entry.item.id} itemStatus={entry.durability_status} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPending} pending={dropPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: entry.durability_status })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -168,7 +178,7 @@ function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyCo
         <TableScroll>
           <table aria-label="Resources">
             <thead><tr><th scope="col">Resource</th><th scope="col">Quantity</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.resources.map((entry) => <tr key={entry.resource.id}><th scope="row">{entry.resource.display_name}</th><td>{entry.resource.display_name}: {entry.quantity}</td><td><TransferQuantity operation="drop" assetType="resource" assetID={entry.resource.id} displayName={entry.resource.display_name} max={entry.quantity} disabled={actionPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "resource", asset_id: entry.resource.id, quantity })} /></td></tr>)}</tbody>
+            <tbody>{currentUser.resources.map((entry) => <tr key={entry.resource.id}><th scope="row">{entry.resource.display_name}</th><td>{entry.resource.display_name}: {entry.quantity}</td><td><TransferQuantity operation="drop" assetType="resource" assetID={entry.resource.id} displayName={entry.resource.display_name} max={entry.quantity} disabled={actionPending} pending={dropPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "resource", asset_id: entry.resource.id, quantity })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -177,7 +187,7 @@ function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyCo
         <TableScroll>
           <table aria-label="Convert">
             <thead><tr><th scope="col">Method</th><th scope="col">Cost</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Essence chance</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("convert") || ((currentUser.conversion_methods ?? []).length === 0 && currentUser.conversion_option === null) ? <EmptyRow colSpan={6}>No conversion action available.</EmptyRow> : (currentUser.conversion_methods ?? []).length > 0 ? (currentUser.conversion_methods ?? []).map((method) => <ConversionRow key={method.id} method={method} buildings={currentUser.buildings} disabled={actionPending} onSubmit={(quantity, providerID) => onConvert(method.id, quantity, providerID)} />) : <LegacyConversionRow option={currentUser.conversion_option!} disabled={actionPending} onSubmit={onLegacyConvert} />}</tbody>
+            <tbody>{!hasAction("convert") || ((currentUser.conversion_methods ?? []).length === 0 && currentUser.conversion_option === null) ? <EmptyRow colSpan={6}>No conversion action available.</EmptyRow> : (currentUser.conversion_methods ?? []).length > 0 ? (currentUser.conversion_methods ?? []).map((method) => <ConversionRow key={method.id} method={method} buildings={currentUser.buildings} disabled={actionPending} pending={convertPending} onSubmit={(quantity, providerID) => onConvert(method.id, quantity, providerID)} />) : <LegacyConversionRow option={currentUser.conversion_option!} disabled={actionPending} pending={convertPending} onSubmit={onLegacyConvert} />}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -186,7 +196,7 @@ function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyCo
         <TableScroll>
           <table aria-label="Craft">
             <thead><tr><th scope="col">Recipe</th><th scope="col">AP cost</th><th scope="col">Resource inputs</th><th scope="col">Item inputs</th><th scope="col">Output</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("craft") || (currentUser.crafting_recipes ?? []).length === 0 ? <EmptyRow colSpan={6}>No crafting recipes available.</EmptyRow> : (currentUser.crafting_recipes ?? []).map((recipe) => <tr key={recipe.id}><th scope="row">{recipe.display_name}</th><td>AP cost: {recipe.base_ap_cost}</td><td>{formatInputs(recipe.resource_inputs)}</td><td>{formatInputs(recipe.item_inputs)}</td><td>Output: {recipe.output.display_name}: {recipe.output_quantity}</td><td><button type="button" onClick={() => onCraft(recipe.id)} disabled={actionPending}>{actionPending ? "Crafting..." : `Craft ${recipe.display_name}`}</button></td></tr>)}</tbody>
+            <tbody>{!hasAction("craft") || (currentUser.crafting_recipes ?? []).length === 0 ? <EmptyRow colSpan={6}>No crafting recipes available.</EmptyRow> : (currentUser.crafting_recipes ?? []).map((recipe) => <tr key={recipe.id}><th scope="row">{recipe.display_name}</th><td>AP cost: {recipe.base_ap_cost}</td><td>{formatInputs(recipe.resource_inputs)}</td><td>{formatInputs(recipe.item_inputs)}</td><td>Output: {recipe.output.display_name}: {recipe.output_quantity}</td><td><button type="button" onClick={() => onCraft(recipe.id)} disabled={actionPending}>{craftPending ? "Crafting..." : `Craft ${recipe.display_name}`}</button></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -195,7 +205,8 @@ function ItemsTab({ currentUser, actionPending, hasAction, onConvert, onLegacyCo
   );
 }
 
-function CharacterTab({ currentUser, actionPending, hasAction, onRest, feedback }: { currentUser: CurrentUser; actionPending: boolean; hasAction: (name: string) => boolean; onRest: () => void; feedback: ReactNode }) {
+function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction, onRest, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onRest: () => void; feedback: ReactNode }) {
+  const restPending = actionPending && pendingActionKind === "rest";
   return (
     <section aria-labelledby="character-heading">
       <h1 id="character-heading">角色</h1>
@@ -216,7 +227,7 @@ function CharacterTab({ currentUser, actionPending, hasAction, onRest, feedback 
         <TableScroll>
           <table aria-label="Rest">
             <thead><tr><th scope="col">Action</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{!hasAction("rest") ? <EmptyRow colSpan={3}>No actions available.</EmptyRow> : <tr><th scope="row">Rest</th><td>1 AP</td><td><button type="button" onClick={onRest} disabled={actionPending}>{actionPending ? "Resting..." : "Rest"}</button></td></tr>}</tbody>
+            <tbody>{!hasAction("rest") ? <EmptyRow colSpan={3}>No actions available.</EmptyRow> : <tr><th scope="row">Rest</th><td>1 AP</td><td><button type="button" onClick={onRest} disabled={actionPending}>{restPending ? "Resting..." : "Rest"}</button></td></tr>}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -237,7 +248,7 @@ function CharacterTab({ currentUser, actionPending, hasAction, onRest, feedback 
   );
 }
 
-function TransferQuantity({ operation, assetType, assetID, itemStatus, displayName, max, disabled, onSubmit }: { operation: "drop" | "pickup"; assetType: TransferAssetType; assetID: string; itemStatus?: ItemStatus; displayName: string; max: number; disabled: boolean; onSubmit: (quantity: number) => void }) {
+function TransferQuantity({ operation, assetType, assetID, itemStatus, displayName, max, disabled, pending, onSubmit }: { operation: "drop" | "pickup"; assetType: TransferAssetType; assetID: string; itemStatus?: ItemStatus; displayName: string; max: number; disabled: boolean; pending: boolean; onSubmit: (quantity: number) => void }) {
   const [quantity, setQuantity] = useState("1");
   const parsedQuantity = Number(quantity);
   const valid = Number.isInteger(parsedQuantity) && parsedQuantity > 0;
@@ -250,26 +261,26 @@ function TransferQuantity({ operation, assetType, assetID, itemStatus, displayNa
         {operationLabel} quantity{statusSuffix}
         <input aria-label={`${operationLabel} quantity for ${displayName}${statusSuffix}`} type="number" min="1" step="1" max={max} value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled || unavailable} />
       </label>
-      <button type="submit" aria-label={`${operationLabel} ${displayName}${statusSuffix}`} disabled={disabled || unavailable || !valid}>{disabled ? (operation === "drop" ? "Dropping..." : "Picking up...") : operationLabel}</button>
+      <button type="submit" aria-label={`${operationLabel} ${displayName}${statusSuffix}`} disabled={disabled || unavailable || !valid}>{pending ? (operation === "drop" ? "Dropping..." : "Picking up...") : operationLabel}</button>
     </form>
   );
 }
 
-function ConversionRow({ method, buildings, disabled, onSubmit }: { method: ConversionMethod; buildings: CurrentUser["buildings"]; disabled: boolean; onSubmit: (quantity: number, providerID?: number) => void }) {
+function ConversionRow({ method, buildings, disabled, pending, onSubmit }: { method: ConversionMethod; buildings: CurrentUser["buildings"]; disabled: boolean; pending: boolean; onSubmit: (quantity: number, providerID?: number) => void }) {
   const [quantity, setQuantity] = useState("1");
   const [provider, setProvider] = useState("");
   const parsed = Number(quantity);
   const valid = Number.isInteger(parsed) && parsed > 0 && parsed <= method.max_input_quantity;
   const providerRequired = method.provider_extension_ids.length > 0;
   const providers = (buildings ?? []).flatMap((building) => (building.extensions ?? []).filter((extension) => method.provider_extension_ids.includes(extension.id)));
-  return <tr><th scope="row">{method.display_name}</th><td>{method.ap_cost} AP</td><td>{method.input.display_name}, max {method.max_input_quantity}</td><td>{method.resource_quantity_per_input} {method.output_resource.display_name}</td><td>{method.essence_item?.display_name ?? "None"}: {method.essence_chance_bps / 100}%</td><td><span>Provider extension IDs: {method.provider_extension_ids.length === 0 ? "None" : method.provider_extension_ids.join(", ")}</span><input aria-label={`Quantity for ${method.display_name}`} type="number" min="1" max={method.max_input_quantity} step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled} />{providerRequired && <select aria-label={`Provider for ${method.display_name}`} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled}><option value="">Select provider</option>{providers.map((extension) => <option key={extension.id} value={extension.id}>{extension.display_name}</option>)}</select>}<button type="button" onClick={() => valid && (!providerRequired || provider !== "") && onSubmit(parsed, provider ? Number(provider) : undefined)} disabled={disabled || !valid || (providerRequired && provider === "")}>{disabled ? "Converting..." : "Convert"}</button></td></tr>;
+  return <tr><th scope="row">{method.display_name}</th><td>{method.ap_cost} AP</td><td>{method.input.display_name}, max {method.max_input_quantity}</td><td>{method.resource_quantity_per_input} {method.output_resource.display_name}</td><td>{method.essence_item?.display_name ?? "None"}: {method.essence_chance_bps / 100}%</td><td><span>Provider extension IDs: {method.provider_extension_ids.length === 0 ? "None" : method.provider_extension_ids.join(", ")}</span><input aria-label={`Quantity for ${method.display_name}`} type="number" min="1" max={method.max_input_quantity} step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} disabled={disabled} />{providerRequired && <select aria-label={`Provider for ${method.display_name}`} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={disabled}><option value="">Select provider</option>{providers.map((extension) => <option key={extension.id} value={extension.id}>{extension.display_name}</option>)}</select>}<button type="button" onClick={() => valid && (!providerRequired || provider !== "") && onSubmit(parsed, provider ? Number(provider) : undefined)} disabled={disabled || !valid || (providerRequired && provider === "")}>{pending ? "Converting..." : "Convert"}</button></td></tr>;
 }
 
-function LegacyConversionRow({ option, disabled, onSubmit }: { option: NonNullable<CurrentUser["conversion_option"]>; disabled: boolean; onSubmit: () => void }) {
-  return <tr><th scope="row">{option.item.display_name} to {option.resource.display_name}</th><td>{option.ap_cost} AP</td><td>{option.input_quantity} {option.item.display_name}</td><td>{option.resource_yield} {option.resource.display_name}</td><td>None</td><td><button type="button" onClick={onSubmit} disabled={disabled}>{disabled ? "Converting..." : "Convert"}</button></td></tr>;
+function LegacyConversionRow({ option, disabled, pending, onSubmit }: { option: NonNullable<CurrentUser["conversion_option"]>; disabled: boolean; pending: boolean; onSubmit: () => void }) {
+  return <tr><th scope="row">{option.item.display_name} to {option.resource.display_name}</th><td>{option.ap_cost} AP</td><td>{option.input_quantity} {option.item.display_name}</td><td>{option.resource_yield} {option.resource.display_name}</td><td>None</td><td><button type="button" onClick={onSubmit} disabled={disabled}>{pending ? "Converting..." : "Convert"}</button></td></tr>;
 }
 
-function BuildingContribution({ buildingID, disabled, onSubmit }: { buildingID: number; disabled: boolean; onSubmit: (ap: number) => void }) {
+function BuildingContribution({ buildingID, disabled, pending, onSubmit }: { buildingID: number; disabled: boolean; pending: boolean; onSubmit: (ap: number) => void }) {
   const [ap, setAP] = useState("");
   const parsedAP = Number(ap);
   const valid = Number.isInteger(parsedAP) && parsedAP > 0;
@@ -279,7 +290,7 @@ function BuildingContribution({ buildingID, disabled, onSubmit }: { buildingID: 
         Contribution AP
         <input aria-label={`Contribution AP for building ${buildingID}`} type="number" min="1" step="1" value={ap} onChange={(event) => setAP(event.target.value)} disabled={disabled} />
       </label>
-      <button type="submit" aria-label={`Contribute AP to building ${buildingID}`} disabled={disabled || !valid}>{disabled ? "Contributing..." : "Contribute AP"}</button>
+      <button type="submit" aria-label={`Contribute AP to building ${buildingID}`} disabled={disabled || !valid}>{pending ? "Contributing..." : "Contribute AP"}</button>
     </form>
   );
 }
@@ -366,10 +377,10 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
   const hasAction = (name: string) => currentUser.available_actions.includes(name);
   const feedback = <ActionFeedback action={action} actionKind={actionKind} currentUser={currentUser} />;
   const tabContent = {
-    map: <MapTab currentUser={currentUser} actionPending={actionPendingNow} hasAction={hasAction} onMove={(target) => void handleMove(target)} feedback={activeTab === "map" ? feedback : null} />,
-    area: <AreaTab currentUser={currentUser} actionPending={actionPendingNow} hasAction={hasAction} onGather={() => void handleGather()} onBuild={(recipeID) => void handleBuild(recipeID)} onInstall={(buildingID, slotIndex, definitionID) => void handleInstall(buildingID, slotIndex, definitionID)} onBuildingAction={(kind, request) => void applyBuildingAction(kind, request)} onRepair={(buildingID) => void handleRepair(buildingID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "area" ? feedback : null} />,
-    items: <ItemsTab currentUser={currentUser} actionPending={actionPendingNow} hasAction={hasAction} onConvert={(methodID, quantity, providerID) => void handleConvert(methodID, quantity, providerID)} onLegacyConvert={() => void handleLegacyConvert()} onCraft={(recipeID) => void handleCraft(recipeID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "items" ? feedback : null} />,
-    character: <CharacterTab currentUser={currentUser} actionPending={actionPendingNow} hasAction={hasAction} onRest={() => void handleRest()} feedback={activeTab === "character" ? feedback : null} />,
+    map: <MapTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onMove={(target) => void handleMove(target)} feedback={activeTab === "map" ? feedback : null} />,
+    area: <AreaTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onGather={() => void handleGather()} onBuild={(recipeID) => void handleBuild(recipeID)} onInstall={(buildingID, slotIndex, definitionID) => void handleInstall(buildingID, slotIndex, definitionID)} onBuildingAction={(kind, request) => void applyBuildingAction(kind, request)} onRepair={(buildingID) => void handleRepair(buildingID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "area" ? feedback : null} />,
+    items: <ItemsTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onConvert={(methodID, quantity, providerID) => void handleConvert(methodID, quantity, providerID)} onLegacyConvert={() => void handleLegacyConvert()} onCraft={(recipeID) => void handleCraft(recipeID)} onTransfer={(operation, request) => void handleTransfer(operation, request)} feedback={activeTab === "items" ? feedback : null} />,
+    character: <CharacterTab currentUser={currentUser} actionPending={actionPendingNow} pendingActionKind={actionKind} hasAction={hasAction} onRest={() => void handleRest()} feedback={activeTab === "character" ? feedback : null} />,
   } satisfies Record<GameShellTab, ReactNode>;
 
   return <GameShell player={{ display_name: currentUser.display_name, ap: currentUser.ap, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
