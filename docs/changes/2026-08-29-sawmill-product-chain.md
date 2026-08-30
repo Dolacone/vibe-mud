@@ -3,7 +3,7 @@ title: "Sawmill product chain"
 status: Done
 created: 2026-08-29
 doc_type: change
-last_reviewed: 2026-08-30
+last_reviewed: 2026-08-29
 source_paths:
   - CHANGELOG.md
   - docs/architecture.md

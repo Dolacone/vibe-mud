@@ -3,7 +3,7 @@ title: "Unix seconds storage"
 status: Done
 created: 2026-08-28
 doc_type: change
-last_reviewed: 2026-08-30
+last_reviewed: 2026-08-28
 source_paths:
   - CHANGELOG.md
   - docs/architecture.md
