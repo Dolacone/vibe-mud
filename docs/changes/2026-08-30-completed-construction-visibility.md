@@ -76,4 +76,4 @@ REQ-010 and REQ-016 are the sources of truth. The plan will copy each affected c
 
 - [x] [Major] `source_paths` 只列出 `main...HEAD` 15 個變更檔案中的 7 個。缺少 `CHANGELOG.md`、兩份 change document 與五份 requirements 檔案，因此中繼資料不符合實際 diff。
 - [x] [Major] 前端施工百分比測試只使用 `0/60` 與 `12/30`。這些數值無法區分向下取整、向上取整或四捨五入，因此 Building 與 extension 的向下取整準則可被改壞而不造成測試失敗。
-- [ ] [Minor] `main...HEAD` 修改的 `CHANGELOG.md` 與 `docs/changes/2026-08-29-durability-percentage.md` 仍使用 `last_reviewed: 2026-08-29`，不符合本次 review 要求的 `2026-08-30`。
+- [x] [Minor] `main...HEAD` 修改的 `CHANGELOG.md` 與 `docs/changes/2026-08-29-durability-percentage.md` 仍使用 `last_reviewed: 2026-08-29`，不符合本次 review 要求的 `2026-08-30`。
