@@ -808,8 +808,12 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 		if err := json.Unmarshal(failure.Body.Bytes(), &failureBody); err != nil {
 			t.Fatal(err)
 		}
-		if failureBody["ap"] != float64(maxAP-60) || failureBody["buildings"].([]any)[0].(map[string]any)["contributed_ap"] != float64(60) {
+		failureBuilding := failureBody["buildings"].([]any)[0].(map[string]any)
+		if failureBody["ap"] != float64(maxAP-60) || failureBuilding["status"] != "completed" {
 			t.Fatalf("rejected contribution changed state = %#v", failureBody)
+		}
+		if _, ok := failureBuilding["contributed_ap"]; ok {
+			t.Fatalf("completed rejected contribution exposed construction AP = %#v", failureBuilding)
 		}
 	}
 }
@@ -864,19 +868,33 @@ func buildingFromResponse(t *testing.T, body []byte) map[string]any {
 
 func assertBuildingResponseContract(t *testing.T, building map[string]any, contributedAP float64, status string) {
 	t.Helper()
-	wantKeys := []string{"available_actions", "building_level", "contributed_ap", "durability_percentage", "durability_status", "extension_slot_count", "extensions", "id", "owner", "recipe", "required_ap", "status"}
+	wantKeys := []string{"available_actions", "building_level", "durability_percentage", "durability_status", "extension_slot_count", "extensions", "id", "owner", "recipe", "status"}
+	if status == "under_construction" {
+		wantKeys = append(wantKeys, "contributed_ap", "required_ap")
+		sort.Strings(wantKeys)
+	}
 	if !reflect.DeepEqual(sortedMapKeys(building), wantKeys) {
 		t.Fatalf("building keys = %#v, want %#v", sortedMapKeys(building), wantKeys)
 	}
-	if building["id"] != float64(1) || building["building_level"] != float64(1) || building["required_ap"] != float64(60) || building["contributed_ap"] != contributedAP || building["status"] != status || building["extension_slot_count"] != float64(1) {
+	if building["id"] != float64(1) || building["building_level"] != float64(1) || building["status"] != status || building["extension_slot_count"] != float64(1) {
 		t.Fatalf("building contract = %#v", building)
 	}
 	if status == "under_construction" {
+		if building["required_ap"] != float64(60) || building["contributed_ap"] != contributedAP {
+			t.Fatalf("under-construction AP = %#v/%#v", building["required_ap"], building["contributed_ap"])
+		}
 		if building["durability_status"] != nil || building["durability_percentage"] != nil {
 			t.Fatalf("under-construction durability = %#v/%#v", building["durability_status"], building["durability_percentage"])
 		}
 	} else if building["durability_status"] != "active" || building["durability_percentage"] != float64(100) {
 		t.Fatalf("completed durability = %#v/%#v", building["durability_status"], building["durability_percentage"])
+	}
+	if status != "under_construction" {
+		for _, key := range []string{"contributed_ap", "required_ap"} {
+			if _, ok := building[key]; ok {
+				t.Fatalf("completed building exposes construction key %q: %#v", key, building)
+			}
+		}
 	}
 	owner, ok := building["owner"].(map[string]any)
 	if !ok || !reflect.DeepEqual(sortedMapKeys(owner), []string{"display_name", "id"}) || owner["id"] != float64(1) || owner["display_name"] != "Person" {
@@ -885,6 +903,88 @@ func assertBuildingResponseContract(t *testing.T, building map[string]any, contr
 	recipe, ok := building["recipe"].(map[string]any)
 	if !ok || !reflect.DeepEqual(sortedMapKeys(recipe), []string{"display_name", "id"}) || recipe["id"] != "building_lv1" || recipe["display_name"] != "Building Lv1" {
 		t.Fatalf("building recipe contract = %#v", building["recipe"])
+	}
+}
+
+func TestBuildingAPIConditionallyExposesConstructionAPForBuildingsAndExtensions(t *testing.T) {
+	fixture := newBuildingAPIFixture(t, "building-api-conditional-construction")
+	prepareBuilding(t, fixture, "under_construction", 12)
+	buildingID := preparedBuildingID(t, fixture)
+	if _, err := fixture.store.db.Exec(`INSERT INTO building_extensions (building_id, slot_index, definition_id, display_name, tier, required_ap, contributed_ap, status) VALUES (?, 0, 'sawmill_t1', 'Sawmill T1', 1, 30, 12, 'under_construction')`, buildingID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	getState := func(requestID string) (map[string]any, string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		logOutput := captureStdout(t, func() {
+			fixture.server.Routes().ServeHTTP(response, fixture.request(http.MethodGet, "/api/me", "", requestID))
+		})
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+		}
+		return buildingFromResponse(t, response.Body.Bytes()), logOutput
+	}
+
+	building, logOutput := getState("building-api-conditional-under-construction")
+	assertBuildingResponseContract(t, building, 12, "under_construction")
+	extensions, ok := building["extensions"].([]any)
+	if !ok || len(extensions) != 1 {
+		t.Fatalf("under-construction extensions = %#v", building["extensions"])
+	}
+	extension := extensions[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(extension), []string{"available_actions", "contributed_ap", "definition_id", "display_name", "id", "required_ap", "slot_index", "status", "tier"}) || extension["required_ap"] != float64(30) || extension["contributed_ap"] != float64(12) || extension["status"] != "under_construction" {
+		t.Fatalf("under-construction extension contract = %#v", extension)
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=GET /api/me outcome=success") {
+		t.Fatalf("state response log = %q", logOutput)
+	}
+	after, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("response shaping changed authoritative state: before=%+v after=%+v", before, after)
+	}
+
+	if _, err := fixture.store.db.Exec(`UPDATE buildings SET status = 'completed', contributed_ap = 60, durability_expires_at = ? WHERE id = ?`, fixture.now.Add(time.Duration(buildingDefaultDurabilitySeconds)*time.Second).Unix(), buildingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE building_extensions SET status = 'completed', contributed_ap = 30 WHERE building_id = ?`, buildingID); err != nil {
+		t.Fatal(err)
+	}
+	completedBefore, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	building, logOutput = getState("building-api-conditional-completed")
+	assertBuildingResponseContract(t, building, 60, "completed")
+	extensions, ok = building["extensions"].([]any)
+	if !ok || len(extensions) != 1 {
+		t.Fatalf("completed extensions = %#v", building["extensions"])
+	}
+	extension = extensions[0].(map[string]any)
+	if !reflect.DeepEqual(sortedMapKeys(extension), []string{"available_actions", "definition_id", "display_name", "id", "slot_index", "status", "tier"}) || extension["status"] != "completed" {
+		t.Fatalf("completed extension contract = %#v", extension)
+	}
+	for _, key := range []string{"contributed_ap", "required_ap", "percentage"} {
+		if _, ok := extension[key]; ok {
+			t.Fatalf("completed extension exposes construction key %q: %#v", key, extension)
+		}
+	}
+	if !strings.Contains(logOutput, "user_id=1 action=building_durability_calculation outcome=success") || !strings.Contains(logOutput, "user_id=1 action=GET /api/me outcome=success") {
+		t.Fatalf("completed state response log = %q", logOutput)
+	}
+	completedAfter, err := fixture.store.GetPlayerState(fixture.identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(completedBefore, completedAfter) {
+		t.Fatalf("completed response shaping changed authoritative state: before=%+v after=%+v", completedBefore, completedAfter)
 	}
 }
 

@@ -2185,8 +2185,8 @@ type buildingResponse struct {
 	Owner                buildingOwnerResponse          `json:"owner"`
 	Recipe               buildingRecipeIdentityResponse `json:"recipe"`
 	BuildingLevel        int                            `json:"building_level"`
-	RequiredAP           int                            `json:"required_ap"`
-	ContributedAP        int                            `json:"contributed_ap"`
+	RequiredAP           *int                           `json:"required_ap,omitempty"`
+	ContributedAP        *int                           `json:"contributed_ap,omitempty"`
 	Status               string                         `json:"status"`
 	ExtensionSlotCount   int                            `json:"extension_slot_count"`
 	DurabilityStatus     *string                        `json:"durability_status"`
@@ -2201,8 +2201,8 @@ type buildingExtensionResponse struct {
 	DefinitionID     string   `json:"definition_id"`
 	DisplayName      string   `json:"display_name"`
 	Tier             int      `json:"tier"`
-	RequiredAP       int      `json:"required_ap"`
-	ContributedAP    int      `json:"contributed_ap"`
+	RequiredAP       *int     `json:"required_ap,omitempty"`
+	ContributedAP    *int     `json:"contributed_ap,omitempty"`
 	Status           string   `json:"status"`
 	AvailableActions []string `json:"available_actions"`
 }
@@ -2271,15 +2271,22 @@ func buildingResponseFromStore(building Building, availability playerAvailabilit
 			DisplayName: building.Recipe.DisplayName,
 		},
 		BuildingLevel:      building.BuildingLevel,
-		RequiredAP:         building.RequiredAP,
-		ContributedAP:      building.ContributedAP,
 		Status:             building.Status,
 		ExtensionSlotCount: building.ExtensionSlotCount,
 		Extensions:         make([]buildingExtensionResponse, 0, len(building.Extensions)),
 		AvailableActions:   availability.BuildingActions[building.ID],
 	}
+	if building.Status == "under_construction" {
+		response.RequiredAP = &building.RequiredAP
+		response.ContributedAP = &building.ContributedAP
+	}
 	for _, extension := range building.Extensions {
-		response.Extensions = append(response.Extensions, buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, RequiredAP: extension.RequiredAP, ContributedAP: extension.ContributedAP, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]})
+		extensionResponse := buildingExtensionResponse{ID: extension.ID, SlotIndex: extension.SlotIndex, DefinitionID: extension.DefinitionID, DisplayName: extension.DisplayName, Tier: extension.Tier, Status: extension.Status, AvailableActions: availability.ExtensionActions[extension.ID]}
+		if extension.Status == "under_construction" {
+			extensionResponse.RequiredAP = &extension.RequiredAP
+			extensionResponse.ContributedAP = &extension.ContributedAP
+		}
+		response.Extensions = append(response.Extensions, extensionResponse)
 	}
 	if building.DurabilityStatus != "" {
 		status := building.DurabilityStatus

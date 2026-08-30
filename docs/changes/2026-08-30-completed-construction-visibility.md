@@ -6,6 +6,8 @@ doc_type: change
 last_reviewed: 2026-08-30
 source_paths:
   - docs/architecture.md
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-010, REQ-016
 base_branch: main
 scope: "Remove obsolete construction values from completed Buildings and extensions."
@@ -41,7 +43,7 @@ REQ-010 and REQ-016 are the sources of truth. The plan will copy each affected c
 
 ## Tasks
 
-- [ ] Task 1 [parallel: no]: Emit conditional construction fields for public Building and extension responses in `internal/authapi/server.go`. Update backend tests in the same commit. In-progress responses must retain integer `contributed_ap` and `required_ap`. Completed responses must omit both keys rather than return `null`. Response shaping must not clear stored snapshots or alter logs.
+- [x] Task 1 [parallel: no]: Emit conditional construction fields for public Building and extension responses in `internal/authapi/server.go`. Update backend tests in the same commit. In-progress responses must retain integer `contributed_ap` and `required_ap`. Completed responses must omit both keys rather than return `null`. Response shaping must not clear stored snapshots or alter logs.
   - REQ-010.37: Building 完成後，後端傳給前端的 Building 資訊不得包含已投入 AP、所需 AP 或施工進度。
   - REQ-016.22: 施工中的 extension 必須向前端提供已投入 AP、所需 AP 與進度百分比。
   - REQ-016.23: Extension 完成後，後端傳給前端的 extension 資訊不得包含已投入 AP、所需 AP 或施工進度。
