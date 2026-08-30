@@ -1,6 +1,6 @@
 ---
 title: "Mobile frontend shell"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-30
 doc_type: change
 last_reviewed: 2026-08-30
@@ -100,3 +100,6 @@ REQ-012 is the source of truth. The plan will copy every criterion into one owni
 ## Review Issues
 
 - [x] [Major] `web/src/App.test.tsx` replaces 49 existing App tests with 14 integration tests and drops equivalent business-behavior coverage. Restore the removed action, availability, transfer, and Building protections in the tabbed UI, including legacy Convert, authoritative unsuccessful states, request deduplication while pending, Resource Drop, transfer conflicts, Building failure and reload behavior, gather/convert/craft/move/rest success and failure handling, and unauthenticated identity clearing. Layout integration does not replace these behavior tests.
+- [ ] [Major] Safe-area handling is inactive in production. `web/index.html` lacks `viewport-fit=cover`, so iOS keeps `env(safe-area-inset-*)` at zero. The fixture has the same omission, and its browser evidence only validates zero-inset desktop viewports. Add the viewport opt-in and device evidence for nonzero top and bottom insets.
+- [ ] [Major] The prior behavior-coverage finding remains unresolved. Compared with `main`, tabbed tests omit the movement-threshold equality boundary, Active/Expired row status and durability, and global gameplay-action disabling during pending Gather and Convert requests. Restore those business assertions across their owning tabs. Navigation can remain enabled while gameplay controls stay disabled.
+- [ ] [Major] When one action is pending, every tab receives only a shared pending boolean. After switching tabs, unrelated controls falsely read `Moving...`, `Gathering...`, `Crafting...`, `Resting...`, or similar. Preserve global disablement, but show a pending label only for the active action kind.
