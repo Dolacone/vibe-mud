@@ -97,6 +97,13 @@ func newTestServerWithFrontend(t *testing.T, provider *fakeProvider, now *time.T
 	return server, store
 }
 
+func nameTestPlayer(t *testing.T, store *Store, identity Identity) {
+	t.Helper()
+	if _, err := store.SetPlayerName(identity.ID, "Test Player "+strconv.FormatInt(identity.ID, 10)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func playerResourceQuantity(state PlayerState, resourceID string) int {
 	for _, resource := range state.Resources {
 		if resource.Resource.ID == resourceID {
@@ -559,6 +566,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +586,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 20 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 21 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["player_name"] != "Test Player 1" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
 	}
 	if actions, ok := meBody["available_actions"].([]any); !ok || !reflect.DeepEqual(actions, []any{"rest", "move"}) {
@@ -674,6 +682,7 @@ func TestBuildingAPIUsesBackendRecipeAndAuthoritativeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -834,6 +843,7 @@ func newBuildingAPIFixture(t *testing.T, subject string) buildingAPIFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	sessionToken := subject + "-session-token"
 	if err := store.CreateSession(identity.ID, sessionToken, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
@@ -1672,6 +1682,7 @@ func TestCraftAPIUsesRecipeWhitelistAndReturnsAuthoritativeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1738,6 +1749,7 @@ func TestCraftAPILogsSuccessWithoutSensitiveValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1769,6 +1781,7 @@ func TestCraftAPILogsRejectionReasonAndSanitizesInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1798,6 +1811,7 @@ func TestGatherAPIUpdatesStateAndMeResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1857,6 +1871,7 @@ func TestGatherAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1912,6 +1927,7 @@ func TestGatherAPIRejectsLocationAndInsufficientAPWithState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1960,6 +1976,7 @@ func TestConvertAPIUpdatesStateAndUsesBackendOwnedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2022,6 +2039,7 @@ func TestConvertAPIRejectsProviderForGlobalMethodWithoutChangingState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2062,6 +2080,7 @@ func TestLegacyConvertAPIUsesEmptyObjectContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2111,6 +2130,7 @@ func TestConvertAPIRejectsInvalidPayloadAndPreservesState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2171,6 +2191,7 @@ func TestConvertAPIRejectsLocationAndMissingWoodWithState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2240,6 +2261,7 @@ func TestConvertAPIRejectsInsufficientAPWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2286,6 +2308,7 @@ func TestMoveAPIUpdatesLocationAndAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2329,6 +2352,7 @@ func TestMoveAPIRejectsInvalidInputAndLogsSafeReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2377,6 +2401,7 @@ func TestMoveAPIInsufficientAPPreservesState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -2418,6 +2443,7 @@ func TestMoveAPIRejectsOverweightWithAuthoritativeStateAndSafeComputationLog(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if _, err := store.db.Exec("INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 11)", identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -2471,6 +2497,7 @@ func TestUnknownActionIsRejectedAndLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2517,6 +2544,7 @@ func TestRestInsufficientAPReturnsConflictWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if _, err := store.db.Exec("UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?", now.Add(maxAP*time.Minute).Unix(), identity.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -2561,6 +2589,7 @@ func TestRestRejectsForeignOriginBeforeChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2616,6 +2645,7 @@ func TestAccessLogIncludesRequestIDAndOmitsSessionSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2653,6 +2683,7 @@ func TestGroundTransferAPIReturnsTypedStateAndKeepsTransferOutOfActions(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2786,6 +2817,7 @@ func TestGroundTransferAPIRejectsStrictInputAndReturnsAuthoritativeState(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
+			nameTestPlayer(t, store, identity)
 			if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 				t.Fatal(err)
 			}
@@ -2833,6 +2865,7 @@ func TestGroundTransferAPIDomainFailuresAndAuthenticationContract(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2899,6 +2932,7 @@ func TestItemDurabilityAPIExposesStatesAndRejectsExpiredPickup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2970,6 +3004,181 @@ INSERT INTO ground_items (location_id, item_id, durability_status, status_expire
 	}
 }
 
+func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-api", "player@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "player-name-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: defaultSessionCookieName, Value: "player-name-session"}
+	handler := server.Routes()
+	request := func(method, path, body, requestID string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Request-ID", requestID)
+		req.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	beforeResponse := request(http.MethodGet, "/api/me", "", "player-name-before")
+	if beforeResponse.Code != http.StatusOK {
+		t.Fatalf("unnamed GET /api/me status = %d: %s", beforeResponse.Code, beforeResponse.Body.String())
+	}
+	var before map[string]any
+	if err := json.Unmarshal(beforeResponse.Body.Bytes(), &before); err != nil {
+		t.Fatal(err)
+	}
+	if value, exists := before["player_name"]; !exists || value != nil {
+		t.Fatalf("unnamed player_name = %#v", value)
+	}
+	unauthenticated := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPut, "/api/player/name", strings.NewReader(`{"player_name":"Alice"}`)))
+	if unauthenticated.Code != http.StatusUnauthorized || unauthenticated.Body.String() != "{\"error\":\"authentication required\"}\n" {
+		t.Fatalf("unauthenticated name update = %d/%q", unauthenticated.Code, unauthenticated.Body.String())
+	}
+	updated := request(http.MethodPut, "/api/player/name", `{"player_name":"  Alice  "}`, "player-name-update")
+	if updated.Code != http.StatusOK {
+		t.Fatalf("name update status = %d: %s", updated.Code, updated.Body.String())
+	}
+	var updatedBody map[string]any
+	if err := json.Unmarshal(updated.Body.Bytes(), &updatedBody); err != nil {
+		t.Fatal(err)
+	}
+	if updatedBody["player_name"] != "Alice" || len(updatedBody) != len(before) {
+		t.Fatalf("name update body = %#v", updatedBody)
+	}
+	delete(before, "player_name")
+	delete(updatedBody, "player_name")
+	if !reflect.DeepEqual(updatedBody, before) {
+		t.Fatalf("name update changed gameplay state: before=%#v after=%#v", before, updatedBody)
+	}
+	read := request(http.MethodGet, "/api/me", "", "player-name-read")
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"player_name":"Alice"`) {
+		t.Fatalf("named GET /api/me = %d: %s", read.Code, read.Body.String())
+	}
+	if err := store.CreateSession(identity.ID, "player-name-new-session", now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	newSessionRequest := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	newSessionRequest.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "player-name-new-session"})
+	newSessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(newSessionResponse, newSessionRequest)
+	if newSessionResponse.Code != http.StatusOK || !strings.Contains(newSessionResponse.Body.String(), `"player_name":"Alice"`) {
+		t.Fatalf("new session GET /api/me = %d: %s", newSessionResponse.Code, newSessionResponse.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{"malformed", `{`},
+		{"unknown", `{"player_name":"Bob","extra":true}`},
+		{"duplicate", `{"player_name":"Bob","player_name":"Carol"}`},
+		{"trailing", `{"player_name":"Bob"} null`},
+		{"missing", `{}`},
+		{"null", `{"player_name":null}`},
+		{"number", `{"player_name":7}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := request(http.MethodPut, "/api/player/name", test.body, "player-name-input-"+test.name)
+			if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid player name input\"}\n" {
+				t.Fatalf("invalid input response = %d/%q", response.Code, response.Body.String())
+			}
+		})
+	}
+	for _, name := range []string{"   ", "abcdefghijklmnopq"} {
+		response := request(http.MethodPut, "/api/player/name", `{"player_name":"`+name+`"}`, "player-name-invalid")
+		if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid player name\"}\n" {
+			t.Fatalf("semantic invalid response = %d/%q", response.Code, response.Body.String())
+		}
+	}
+	unchanged := request(http.MethodGet, "/api/me", "", "player-name-unchanged")
+	if unchanged.Code != http.StatusOK || !strings.Contains(unchanged.Body.String(), `"player_name":"Alice"`) {
+		t.Fatalf("rejected name changed state = %d/%s", unchanged.Code, unchanged.Body.String())
+	}
+}
+
+func TestPlayerNameAPIRejectsNormalizedDuplicatesAndLogsWithoutNames(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-api-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-api-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(first.ID, "player-name-first-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(second.ID, "player-name-second-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Routes()
+	setName := func(session, value, requestID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/player/name", strings.NewReader(`{"player_name":"`+value+`"}`))
+		req.Header.Set("X-Request-ID", requestID)
+		req.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: session})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	logOutput := captureStdout(t, func() {
+		response := setName("player-name-first-session", "Alice", "player-name-success")
+		if response.Code != http.StatusOK {
+			t.Fatalf("name success status = %d: %s", response.Code, response.Body.String())
+		}
+	})
+	if !strings.Contains(logOutput, "user_id=1 action=player_name outcome=success request_id=player-name-success") || strings.Contains(logOutput, "Alice") {
+		t.Fatalf("name success log = %q", logOutput)
+	}
+	duplicateLog := captureStdout(t, func() {
+		response := setName("player-name-second-session", "ＡＬＩＣＥ", "player-name-duplicate")
+		if response.Code != http.StatusConflict || response.Body.String() != "{\"error\":\"player name unavailable\"}\n" {
+			t.Fatalf("duplicate response = %d/%q", response.Code, response.Body.String())
+		}
+	})
+	if !strings.Contains(duplicateLog, "user_id=2 action=player_name outcome=error reason=unavailable request_id=player-name-duplicate") || strings.Contains(duplicateLog, "ＡＬＩＣＥ") {
+		t.Fatalf("duplicate name log = %q", duplicateLog)
+	}
+}
+
+func TestUnnamedPlayerCannotUseActionOrTransferEndpoints(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-gate", "gate@example.com", "Gate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "player-name-gate-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{
+		"/api/actions/rest", "/api/actions/move", "/api/actions/gather", "/api/actions/convert", "/api/actions/craft",
+		"/api/actions/build", "/api/actions/contribute-construction", "/api/actions/install-extension",
+		"/api/actions/contribute-extension-construction", "/api/actions/remove-extension", "/api/actions/repair-building",
+		"/api/transfers/drop", "/api/transfers/pickup",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "player-name-gate-session"})
+			response := httptest.NewRecorder()
+			server.Routes().ServeHTTP(response, request)
+			if response.Code != http.StatusConflict || response.Body.String() != "{\"error\":\"player name required\"}\n" {
+				t.Fatalf("unnamed %s response = %d/%q", path, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestDurabilityPercentageAPIUsesCeilingCapAndZero(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)
@@ -2977,6 +3186,7 @@ func TestDurabilityPercentageAPIUsesCeilingCapAndZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nameTestPlayer(t, store, identity)
 	if err := store.CreateSession(identity.ID, "session-secret", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}

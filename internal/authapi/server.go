@@ -39,9 +39,10 @@ type ProviderIdentity struct {
 }
 
 type currentUserResponse struct {
-	ID          int64  `json:"id"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
+	ID          int64   `json:"id"`
+	DisplayName string  `json:"display_name"`
+	Email       string  `json:"email"`
+	PlayerName  *string `json:"player_name"`
 	playerStateResponse
 }
 
@@ -89,6 +90,20 @@ type moveResponse struct {
 type moveRequest struct {
 	Target string
 }
+
+type playerNameRequest struct {
+	PlayerName string
+}
+
+const (
+	playerNameAction             = "player_name"
+	playerNameReasonInvalidJSON  = "invalid_json"
+	playerNameReasonUnknownField = "unknown_field"
+	playerNameReasonDuplicate    = "duplicate_field"
+	playerNameReasonExtraValue   = "extra_json_value"
+	playerNameReasonMissing      = "missing_player_name"
+	playerNameReasonInvalid      = "invalid_player_name"
+)
 
 type itemResponse struct {
 	ID          string `json:"id"`
@@ -370,19 +385,20 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Get("/auth/google/login", s.login)
 	r.Get("/auth/google/callback", s.callback)
 	r.Get("/api/me", s.me)
-	r.Post("/api/actions/rest", s.rest)
-	r.Post("/api/actions/move", s.move)
-	r.Post("/api/actions/gather", s.gather)
-	r.Post("/api/actions/convert", s.convert)
-	r.Post("/api/actions/craft", s.craft)
-	r.Post("/api/actions/build", s.build)
-	r.Post("/api/actions/contribute-construction", s.contributeConstruction)
-	r.Post("/api/actions/install-extension", s.installExtension)
-	r.Post("/api/actions/contribute-extension-construction", s.contributeExtensionConstruction)
-	r.Post("/api/actions/remove-extension", s.removeExtension)
-	r.Post("/api/actions/repair-building", s.repairBuilding)
-	r.Post("/api/transfers/drop", s.drop)
-	r.Post("/api/transfers/pickup", s.pickup)
+	r.Put("/api/player/name", s.updatePlayerName)
+	r.Post("/api/actions/rest", s.requirePlayerName(s.rest))
+	r.Post("/api/actions/move", s.requirePlayerName(s.move))
+	r.Post("/api/actions/gather", s.requirePlayerName(s.gather))
+	r.Post("/api/actions/convert", s.requirePlayerName(s.convert))
+	r.Post("/api/actions/craft", s.requirePlayerName(s.craft))
+	r.Post("/api/actions/build", s.requirePlayerName(s.build))
+	r.Post("/api/actions/contribute-construction", s.requirePlayerName(s.contributeConstruction))
+	r.Post("/api/actions/install-extension", s.requirePlayerName(s.installExtension))
+	r.Post("/api/actions/contribute-extension-construction", s.requirePlayerName(s.contributeExtensionConstruction))
+	r.Post("/api/actions/remove-extension", s.requirePlayerName(s.removeExtension))
+	r.Post("/api/actions/repair-building", s.requirePlayerName(s.repairBuilding))
+	r.Post("/api/transfers/drop", s.requirePlayerName(s.drop))
+	r.Post("/api/transfers/pickup", s.requirePlayerName(s.pickup))
 	return r
 }
 
@@ -504,6 +520,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
 		return
 	}
+	profile, err := s.store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+		return
+	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
 	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
@@ -512,9 +533,84 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		ID:                  identity.ID,
 		DisplayName:         identity.DisplayName,
 		Email:               identity.Email,
+		PlayerName:          profile.PlayerName,
 		playerStateResponse: playerStateResponseFromStore(state, identity.ID),
 	}
 	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) updatePlayerName(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.logActionWithID(requestID(r), "anonymous", playerNameAction, "error")
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	request, reason := decodePlayerNameRequest(r.Body)
+	if reason != "" {
+		s.logRejection(r, session.UserID, playerNameAction, reason)
+		s.writeError(w, http.StatusBadRequest, "invalid player name input")
+		return
+	}
+	if _, err := s.store.SetPlayerName(session.UserID, request.PlayerName); errors.Is(err, ErrInvalidPlayerName) {
+		s.logRejection(r, session.UserID, playerNameAction, playerNameReasonInvalid)
+		s.writeError(w, http.StatusBadRequest, "invalid player name")
+		return
+	} else if errors.Is(err, ErrPlayerNameUnavailable) {
+		s.logRejection(r, session.UserID, playerNameAction, "unavailable")
+		s.writeError(w, http.StatusConflict, "player name unavailable")
+		return
+	} else if err != nil {
+		s.logRejection(r, session.UserID, playerNameAction, "internal_error")
+		s.writeError(w, http.StatusInternalServerError, "player name unavailable")
+		return
+	}
+	identity, err := s.store.GetIdentity(session.UserID)
+	if err != nil {
+		s.logRejection(r, session.UserID, playerNameAction, "internal_error")
+		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+		return
+	}
+	state, err := s.store.GetPlayerState(identity.ID)
+	if err != nil {
+		s.logRejection(r, session.UserID, playerNameAction, "internal_error")
+		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+		return
+	}
+	profile, err := s.store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		s.logRejection(r, session.UserID, playerNameAction, "internal_error")
+		s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+		return
+	}
+	s.logAction(r, session.UserID, playerNameAction, "success")
+	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	s.logCarryingWeightComputation(r, identity.ID, state)
+	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
+	s.logItemDurability(r, fmt.Sprintf("%d", identity.ID), state)
+	s.writeJSON(w, http.StatusOK, currentUserResponse{
+		ID:                  identity.ID,
+		DisplayName:         identity.DisplayName,
+		Email:               identity.Email,
+		PlayerName:          profile.PlayerName,
+		playerStateResponse: playerStateResponseFromStore(state, identity.ID),
+	})
+}
+
+func (s *Server) requirePlayerName(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, err := s.authenticatedSession(r)
+		if err != nil {
+			next(w, r)
+			return
+		}
+		profile, err := s.store.GetPlayerProfile(session.UserID)
+		if err == nil && profile.PlayerName == nil {
+			s.writeError(w, http.StatusConflict, "player name required")
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) convert(w http.ResponseWriter, r *http.Request) {
@@ -1279,6 +1375,63 @@ func (s *Server) authenticatedSession(r *http.Request) (Session, error) {
 		return Session{}, ErrSessionNotFound
 	}
 	return s.store.GetSession(cookie.Value)
+}
+
+func decodePlayerNameRequest(body io.Reader) (playerNameRequest, string) {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return playerNameRequest{}, playerNameReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return playerNameRequest{}, playerNameReasonInvalidJSON
+	}
+	var request playerNameRequest
+	seen := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return playerNameRequest{}, playerNameReasonInvalidJSON
+		}
+		field, ok := key.(string)
+		if !ok {
+			return playerNameRequest{}, playerNameReasonInvalidJSON
+		}
+		if field != "player_name" {
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return playerNameRequest{}, playerNameReasonInvalidJSON
+			}
+			return playerNameRequest{}, playerNameReasonUnknownField
+		}
+		if seen {
+			return playerNameRequest{}, playerNameReasonDuplicate
+		}
+		seen = true
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return playerNameRequest{}, playerNameReasonInvalidJSON
+		}
+		name, ok := value.(string)
+		if !ok {
+			return playerNameRequest{}, playerNameReasonInvalid
+		}
+		request.PlayerName = name
+	}
+	if token, err = decoder.Token(); err != nil {
+		return playerNameRequest{}, playerNameReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return playerNameRequest{}, playerNameReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return playerNameRequest{}, playerNameReasonExtraValue
+	}
+	if !seen {
+		return playerNameRequest{}, playerNameReasonMissing
+	}
+	return request, ""
 }
 
 func decodeMoveRequest(body io.Reader) (moveRequest, string) {
@@ -2399,7 +2552,7 @@ func resourceResponsesFromStore(resources []PlayerResource) []resourceResponse {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && origin != s.frontendOrigin && r.Method == http.MethodPost {
+		if origin != "" && origin != s.frontendOrigin && (r.Method == http.MethodPost || r.Method == http.MethodPut) {
 			s.writeError(w, http.StatusForbidden, "origin not allowed")
 			return
 		}
@@ -2408,7 +2561,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Add("Vary", "Origin")
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return

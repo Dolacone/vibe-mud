@@ -5,12 +5,15 @@ created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
 source_paths:
+  - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
   - go.mod
   - go.sum
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server.go
+  - internal/authapi/server_test.go
 req_ref: REQ-002, REQ-012, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024
 base_branch: main
 scope: "Tracks persistent player names, forced initial naming, in-game renaming, and the split of tab-specific frontend requirements."
