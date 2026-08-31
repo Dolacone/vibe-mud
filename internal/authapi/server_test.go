@@ -3103,6 +3103,14 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 	if renameBody["player_name"] != "Bob" || !reflect.DeepEqual(withoutPlayerName(renameBody), beforeState) {
 		t.Fatalf("rename changed authoritative state: before=%#v after=%#v", beforeState, renameBody)
 	}
+	beforeRejectedResponse := request(http.MethodGet, "/api/me", "", "player-name-before-rejected")
+	if beforeRejectedResponse.Code != http.StatusOK {
+		t.Fatalf("before rejected name GET /api/me status = %d: %s", beforeRejectedResponse.Code, beforeRejectedResponse.Body.String())
+	}
+	var beforeRejected map[string]any
+	if err := json.Unmarshal(beforeRejectedResponse.Body.Bytes(), &beforeRejected); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, test := range []struct {
 		name string
@@ -3128,6 +3136,17 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 		if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid player name\"}\n" {
 			t.Fatalf("semantic invalid response = %d/%q", response.Code, response.Body.String())
 		}
+		afterRejectedResponse := request(http.MethodGet, "/api/me", "", "player-name-after-rejected")
+		if afterRejectedResponse.Code != http.StatusOK {
+			t.Fatalf("after rejected name GET /api/me status = %d: %s", afterRejectedResponse.Code, afterRejectedResponse.Body.String())
+		}
+		var afterRejected map[string]any
+		if err := json.Unmarshal(afterRejectedResponse.Body.Bytes(), &afterRejected); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(beforeRejected, afterRejected) {
+			t.Fatalf("semantic rejection changed authoritative state: before=%#v after=%#v", beforeRejected, afterRejected)
+		}
 	}
 	unchanged := request(http.MethodGet, "/api/me", "", "player-name-unchanged")
 	if unchanged.Code != http.StatusOK || !strings.Contains(unchanged.Body.String(), `"player_name":"Bob"`) {
@@ -3146,6 +3165,24 @@ func TestPlayerNameAPIRejectsNormalizedDuplicatesAndLogsWithoutNames(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(5*time.Minute).Unix(), second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 3)`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7)`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetPlayerName(first.ID, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetPlayerName(second.ID, "Bob"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CreateSession(first.ID, "player-name-first-session", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -3160,6 +3197,25 @@ func TestPlayerNameAPIRejectsNormalizedDuplicatesAndLogsWithoutNames(t *testing.
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
 		return response
+	}
+	getCurrentUser := func(session, requestID string) map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Request-ID", requestID)
+		req.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: session})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET /api/me status = %d: %s", response.Code, response.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	beforeDuplicate := getCurrentUser("player-name-second-session", "player-name-before-duplicate")
+	if beforeDuplicate["player_name"] != "Bob" {
+		t.Fatalf("duplicate target initial player_name = %#v", beforeDuplicate["player_name"])
 	}
 	logOutput := captureStdout(t, func() {
 		response := setName("player-name-first-session", "Alice", "player-name-success")
@@ -3178,6 +3234,10 @@ func TestPlayerNameAPIRejectsNormalizedDuplicatesAndLogsWithoutNames(t *testing.
 	})
 	if !strings.Contains(duplicateLog, "user_id=2 action=player_name outcome=error reason=unavailable request_id=player-name-duplicate") || strings.Contains(duplicateLog, "ＡＬＩＣＥ") {
 		t.Fatalf("duplicate name log = %q", duplicateLog)
+	}
+	afterDuplicate := getCurrentUser("player-name-second-session", "player-name-after-duplicate")
+	if !reflect.DeepEqual(beforeDuplicate, afterDuplicate) {
+		t.Fatalf("duplicate rejection changed authoritative state: before=%#v after=%#v", beforeDuplicate, afterDuplicate)
 	}
 }
 
