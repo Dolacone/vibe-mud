@@ -306,7 +306,7 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Player name
 - 中文名稱：玩家名稱
-- 定義：玩家初次進入遊戲時選擇的持久化遊戲名稱。它必須通過長度與唯一性規則。
+- 定義：玩家初次進入遊戲時選擇的持久化遊戲名稱。它會去除首尾空白，依 ASCII 字元 1 點與其他 Unicode 字元 2 點計算 1 至 16 點長度，並通過 NFKC 與 ASCII 英文字母大小寫規則判定唯一性。
 - 範例：`Dolacone` 與 `旅人` 都是 Player name。後者使用 4 個中文字，占 8 點長度。
 - 對應行為：[REQ-020 - Player name](../requirements/REQ-020.md)
 - 與相似名詞的差異：Player name 是遊戲內公開名稱。Google 顯示名稱、email 與 application user ID 屬於登入身分資料。

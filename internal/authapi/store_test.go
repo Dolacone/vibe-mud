@@ -52,6 +52,206 @@ func inventoryQuantity(state PlayerState, itemID string) int {
 	return 0
 }
 
+func TestPlayerProfileInitializesUnnamedAndPersistsAcrossReads(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-profile", "player@example.com", "Google Name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.UserID != identity.ID || profile.PlayerName != nil || profile.NormalizedName != nil || profile.UpdatedAt.IsZero() {
+		t.Fatalf("initial player profile = %+v, want unnamed profile", profile)
+	}
+	store.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	updated, err := store.SetPlayerName(identity.ID, "  Dolacone  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PlayerName == nil || *updated.PlayerName != "Dolacone" || updated.NormalizedName == nil || *updated.NormalizedName != "dolacone" {
+		t.Fatalf("updated player profile = %+v", updated)
+	}
+	read, err := store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.PlayerName == nil || *read.PlayerName != "Dolacone" || read.NormalizedName == nil || *read.NormalizedName != "dolacone" || !read.UpdatedAt.Equal(updated.UpdatedAt) {
+		t.Fatalf("persisted player profile = %+v", read)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM player_profiles WHERE user_id = ?`, identity.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("player profile count = %d, want 1", count)
+	}
+}
+
+func TestNewStoreBackfillsUnnamedProfilesForExistingUsers(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:auth-store-profile-backfill?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE identities (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	issuer TEXT NOT NULL,
+	subject TEXT NOT NULL,
+	email TEXT NOT NULL,
+	display_name TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE (issuer, subject)
+);
+INSERT INTO identities (issuer, subject, email, display_name, created_at, updated_at) VALUES (1, 'legacy', 'legacy@example.com', 'Legacy', 100, 100);`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := store.GetPlayerProfile(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.PlayerName != nil || profile.NormalizedName != nil {
+		t.Fatalf("backfilled profile = %+v, want unnamed profile", profile)
+	}
+}
+
+func TestPlayerNameValidationUsesWeightedLengthAndRejectsControls(t *testing.T) {
+	store, _ := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-length", "length@example.com", "Length")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{"abcdefghijklmnop", true},
+		{"abcdefghijklmnopq", false},
+		{"旅旅旅旅旅旅旅旅", true},
+		{"旅旅旅旅旅旅旅旅旅", false},
+		{"abcdefghijklmn旅", true},
+		{"abcdefghijklm旅人", false},
+		{"\nname", false},
+		{"name\x00", false},
+		{"   ", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.SetPlayerName(identity.ID, test.name)
+			if test.valid && err != nil {
+				t.Fatalf("SetPlayerName(%q) error = %v", test.name, err)
+			}
+			if !test.valid && !errors.Is(err, ErrInvalidPlayerName) {
+				t.Fatalf("SetPlayerName(%q) error = %v, want ErrInvalidPlayerName", test.name, err)
+			}
+		})
+	}
+}
+
+func TestPlayerNameUniquenessNormalizesNFKCAndASCIIEnglishCaseOnly(t *testing.T) {
+	store, _ := newTestStore(t)
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetPlayerName(first.ID, "Ａlice"); err != nil {
+		t.Fatal(err)
+	}
+	for _, duplicate := range []string{"alice", "ALICE"} {
+		if _, err := store.SetPlayerName(second.ID, duplicate); !errors.Is(err, ErrPlayerNameUnavailable) {
+			t.Fatalf("SetPlayerName(%q) error = %v, want ErrPlayerNameUnavailable", duplicate, err)
+		}
+	}
+	if _, err := store.SetPlayerName(second.ID, "É"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetPlayerName(first.ID, "é"); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := store.GetPlayerProfile(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.PlayerName == nil || *profile.PlayerName != "é" || profile.NormalizedName == nil || *profile.NormalizedName != "é" {
+		t.Fatalf("non-English case profile = %+v", profile)
+	}
+}
+
+func TestRejectedPlayerNameLeavesExistingProfileUnchanged(t *testing.T) {
+	store, _ := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-reject", "reject@example.com", "Reject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	if _, err := store.SetPlayerName(identity.ID, "Original"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetPlayerName(identity.ID, "bad\x00name"); !errors.Is(err, ErrInvalidPlayerName) {
+		t.Fatalf("invalid name error = %v, want ErrInvalidPlayerName", err)
+	}
+	after, err := store.GetPlayerProfile(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("invalid name changed profile: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestConcurrentDuplicatePlayerNamesAllowOneWriter(t *testing.T) {
+	store, _ := newTestStore(t)
+	first, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-concurrent-first", "first@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-concurrent-second", "second@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	errCh := make(chan error, 2)
+	for _, userID := range []int64{first.ID, second.ID} {
+		wait.Add(1)
+		go func(userID int64) {
+			defer wait.Done()
+			_, err := store.SetPlayerName(userID, "Concurrent")
+			errCh <- err
+		}(userID)
+	}
+	wait.Wait()
+	close(errCh)
+	var success, unavailable int
+	for err := range errCh {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrPlayerNameUnavailable):
+			unavailable++
+		default:
+			t.Fatalf("concurrent name error = %v", err)
+		}
+	}
+	if success != 1 || unavailable != 1 {
+		t.Fatalf("concurrent outcomes = success %d unavailable %d, want one each", success, unavailable)
+	}
+}
+
 func TestBuildAtomicallyConsumesInputsAndSnapshotsRecipe(t *testing.T) {
 	store, db := newTestStore(t)
 	owner, err := store.UpsertIdentity("https://accounts.google.com", "subject-build-start", "owner@example.com", "Owner")

@@ -11,7 +11,10 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
 	_ "modernc.org/sqlite"
 )
 
@@ -45,6 +48,8 @@ var (
 	ErrTransferAssetNotFound       = errors.New("transfer asset not found")
 	ErrInsufficientTransferAsset   = errors.New("insufficient transfer asset")
 	ErrResourceDropNotAllowed      = errors.New("resource drop is not allowed")
+	ErrInvalidPlayerName           = errors.New("invalid player name")
+	ErrPlayerNameUnavailable       = errors.New("player name unavailable")
 )
 
 type Store struct {
@@ -61,6 +66,13 @@ type Identity struct {
 	DisplayName string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type PlayerProfile struct {
+	UserID         int64
+	PlayerName     *string
+	NormalizedName *string
+	UpdatedAt      time.Time
 }
 
 type OAuthAttempt struct {
@@ -354,6 +366,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 	expires_at INTEGER NOT NULL,
 	created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS player_profiles (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	player_name TEXT,
+	normalized_name TEXT UNIQUE,
+	updated_at INTEGER NOT NULL,
+	CHECK (
+		(player_name IS NULL AND normalized_name IS NULL) OR
+		(player_name IS NOT NULL AND normalized_name IS NOT NULL)
+	)
+);
 CREATE TABLE IF NOT EXISTS player_ap (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	full_timestamp INTEGER NOT NULL
@@ -627,6 +649,12 @@ SELECT id, 'camp' FROM identities`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player locations: %w", err)
 	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_profiles (user_id, updated_at)
+SELECT id, ? FROM identities`, migrationNow.Unix()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player profiles: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
@@ -645,6 +673,7 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		{table: "oauth_attempts", column: "consumed_at"},
 		{table: "sessions", column: "expires_at"},
 		{table: "sessions", column: "created_at"},
+		{table: "player_profiles", column: "updated_at"},
 		{table: "player_ap", column: "full_timestamp"},
 	}
 	var convertedValues int64
@@ -928,12 +957,142 @@ ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 		_ = tx.Rollback()
 		return Identity{}, fmt.Errorf("initialize player location: %w", err)
 	}
+	if _, err := tx.Exec(`
+INSERT INTO player_profiles (user_id, updated_at) VALUES (?, ?)
+ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player profile: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return Identity{}, fmt.Errorf("commit upsert identity: %w", err)
 	}
 	identity.CreatedAt = unixSeconds(createdAt)
 	identity.UpdatedAt = unixSeconds(updatedAt)
 	return identity, nil
+}
+
+func normalizePlayerName(playerName string) (string, string, error) {
+	for _, character := range playerName {
+		if unicode.IsControl(character) {
+			return "", "", ErrInvalidPlayerName
+		}
+	}
+	trimmed := strings.TrimSpace(playerName)
+	if trimmed == "" || !utf8.ValidString(trimmed) {
+		return "", "", ErrInvalidPlayerName
+	}
+	normalized := norm.NFKC.String(trimmed)
+	length := 0
+	for _, character := range normalized {
+		if unicode.IsControl(character) {
+			return "", "", ErrInvalidPlayerName
+		}
+		if character < utf8.RuneSelf {
+			length++
+		} else {
+			length += 2
+		}
+		if length > 16 {
+			return "", "", ErrInvalidPlayerName
+		}
+	}
+	if length == 0 {
+		return "", "", ErrInvalidPlayerName
+	}
+	normalized = strings.Map(func(character rune) rune {
+		if character >= 'A' && character <= 'Z' {
+			return character + ('a' - 'A')
+		}
+		return character
+	}, normalized)
+	return trimmed, normalized, nil
+}
+
+func (s *Store) GetPlayerProfile(userID int64) (PlayerProfile, error) {
+	if userID <= 0 {
+		return PlayerProfile{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	var profile PlayerProfile
+	var playerName, normalizedName sql.NullString
+	var updatedAt int64
+	err := s.db.QueryRow(`
+SELECT user_id, player_name, normalized_name, updated_at
+FROM player_profiles WHERE user_id = ?`, userID).Scan(&profile.UserID, &playerName, &normalizedName, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerProfile{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		return PlayerProfile{}, fmt.Errorf("get player profile: %w", err)
+	}
+	if playerName.Valid {
+		value := playerName.String
+		profile.PlayerName = &value
+	}
+	if normalizedName.Valid {
+		value := normalizedName.String
+		profile.NormalizedName = &value
+	}
+	profile.UpdatedAt = unixSeconds(updatedAt)
+	return profile, nil
+}
+
+func (s *Store) GetPlayerName(userID int64) (*string, error) {
+	profile, err := s.GetPlayerProfile(userID)
+	if err != nil {
+		return nil, err
+	}
+	return profile.PlayerName, nil
+}
+
+func (s *Store) SetPlayerName(userID int64, playerName string) (PlayerProfile, error) {
+	if userID <= 0 {
+		return PlayerProfile{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	displayName, normalizedName, err := normalizePlayerName(playerName)
+	if err != nil {
+		return PlayerProfile{}, err
+	}
+	now := s.now().UTC().Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerProfile{}, fmt.Errorf("begin player name update: %w", err)
+	}
+	var existingUserID int64
+	err = tx.QueryRow(`SELECT user_id FROM player_profiles WHERE normalized_name = ? AND user_id <> ?`, normalizedName, userID).Scan(&existingUserID)
+	if err == nil {
+		_ = tx.Rollback()
+		return PlayerProfile{}, ErrPlayerNameUnavailable
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return PlayerProfile{}, fmt.Errorf("check player name availability: %w", err)
+	}
+	result, err := tx.Exec(`
+UPDATE player_profiles
+SET player_name = ?, normalized_name = ?, updated_at = ?
+WHERE user_id = ?`, displayName, normalizedName, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: player_profiles.normalized_name") {
+			return PlayerProfile{}, ErrPlayerNameUnavailable
+		}
+		return PlayerProfile{}, fmt.Errorf("update player name: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerProfile{}, fmt.Errorf("count player name update: %w", err)
+	}
+	if rowsAffected != 1 {
+		_ = tx.Rollback()
+		return PlayerProfile{}, ErrIdentityNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return PlayerProfile{}, fmt.Errorf("commit player name update: %w", err)
+	}
+	value := displayName
+	normalizedValue := normalizedName
+	return PlayerProfile{UserID: userID, PlayerName: &value, NormalizedName: &normalizedValue, UpdatedAt: unixSeconds(now)}, nil
 }
 
 func (s *Store) GetAP(userID int64) (int, error) {

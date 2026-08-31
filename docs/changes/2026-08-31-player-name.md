@@ -5,27 +5,12 @@ created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
 source_paths:
-  - requirements/BEHAVIOR.md
-  - requirements/REQ-002.md
-  - requirements/REQ-012.md
-  - requirements/REQ-020.md
-  - requirements/REQ-021.md
-  - requirements/REQ-022.md
-  - requirements/REQ-023.md
-  - requirements/REQ-024.md
-  - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
   - go.mod
   - go.sum
   - internal/authapi/store.go
   - internal/authapi/store_test.go
-  - internal/authapi/server.go
-  - internal/authapi/server_test.go
-  - web/src/auth.ts
-  - web/src/auth.test.ts
-  - web/src/App.tsx
-  - web/src/App.test.tsx
 req_ref: REQ-002, REQ-012, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024
 base_branch: main
 scope: "Tracks persistent player names, forced initial naming, in-game renaming, and the split of tab-specific frontend requirements."
@@ -60,7 +45,7 @@ REQ-002, REQ-012, and REQ-020 through REQ-024 are the sources of truth.
 
 Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> Task 4 frontend flow`. Task 4 also verifies the extracted tab requirements against the existing interface.
 
-- [ ] Task 1 [parallel: no]: Add the `player_profiles` schema, existing-user initialization, Player name normalization, weighted-length validation, unique normalized keys, reads, and atomic writes in `internal/authapi/store.go`. Add Store tests in the same commit for initial unnamed profiles, persistence, mixed ASCII and Unicode length boundaries, control characters, NFKC collisions, ASCII English case collisions, non-English case distinctions, concurrent duplicate attempts, and unchanged state after rejection. Add `golang.org/x/text/unicode/norm` only for deterministic NFKC normalization. Fold only ASCII `A` through `Z` for the REQ-defined English case comparison. Keep `docs/schemas.md` and `docs/terminology.md` aligned.
+- [x] Task 1 [parallel: no]: Add the `player_profiles` schema, existing-user initialization, Player name normalization, weighted-length validation, unique normalized keys, reads, and atomic writes in `internal/authapi/store.go`. Add Store tests in the same commit for initial unnamed profiles, persistence, mixed ASCII and Unicode length boundaries, control characters, NFKC collisions, ASCII English case collisions, non-English case distinctions, concurrent duplicate attempts, and unchanged state after rejection. Add `golang.org/x/text/unicode/norm` only for deterministic NFKC normalization. Fold only ASCII `A` through `Z` for the REQ-defined English case comparison. Keep `docs/schemas.md` and `docs/terminology.md` aligned.
   - REQ-020.1: 每個應用程式使用者必須具有獨立於 Google 顯示名稱的持久化 Player name。
   - REQ-020.3: 初次命名與後續改名必須使用相同的名稱規則。
   - REQ-020.4: 系統必須去除名稱首尾空白，並以 ASCII 字元 1 點、其他 Unicode 字元 2 點計算名稱長度。

@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS identities (
 
 ## player_profiles
 
-用途：保存玩家選擇的 Player name。系統保留玩家輸入並去除首尾空白後的顯示值，另存 NFKC 與 ASCII 英文字母小寫化的比對值。
+用途：保存玩家選擇的 Player name。系統保留玩家輸入並去除首尾空白後的顯示值，另存 NFKC 與只將 ASCII A-Z 小寫化的比對值。名稱必須有 1 至 16 點長度，ASCII 字元各 1 點，其他 Unicode 字元各 2 點，且不得含控制字元。
 
 ```sql
 CREATE TABLE IF NOT EXISTS player_profiles (
