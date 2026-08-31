@@ -614,6 +614,32 @@ function isCurrentUser(value: unknown): value is CurrentUser {
   );
 }
 
+function currentUserFromResponse(body: CurrentUser): CurrentUser {
+  return {
+    id: body.id,
+    display_name: body.display_name,
+    email: body.email,
+    player_name: body.player_name,
+    available_actions: body.available_actions,
+    ap: body.ap,
+    carried_weight: body.carried_weight,
+    movement_weight_threshold: body.movement_weight_threshold,
+    location: body.location,
+    routes: body.routes,
+    inventory: body.inventory,
+    ground_items: body.ground_items,
+    ground_resources: body.ground_resources,
+    gathering_option: body.gathering_option,
+    conversion_option: body.conversion_option,
+    conversion_methods: body.conversion_methods,
+    building_extension_definitions: body.building_extension_definitions,
+    resources: body.resources,
+    crafting_recipes: body.crafting_recipes,
+    building_recipes: body.building_recipes,
+    buildings: body.buildings,
+  };
+}
+
 function isRestResponse(value: unknown): value is PlayerState {
   return isPlayerState(value);
 }
@@ -702,32 +728,7 @@ export async function getCurrentUser(
     if (!isCurrentUser(body)) {
       return { status: "error", error: new Error("identity response is invalid") };
     }
-    return {
-      status: "authenticated",
-      user: {
-        id: body.id,
-        display_name: body.display_name,
-        email: body.email,
-        player_name: body.player_name,
-        available_actions: body.available_actions,
-        ap: body.ap,
-        carried_weight: body.carried_weight,
-        movement_weight_threshold: body.movement_weight_threshold,
-        location: body.location,
-        routes: body.routes,
-        inventory: body.inventory,
-        ground_items: body.ground_items,
-        ground_resources: body.ground_resources,
-        gathering_option: body.gathering_option,
-        conversion_option: body.conversion_option,
-        conversion_methods: body.conversion_methods,
-        building_extension_definitions: body.building_extension_definitions,
-        resources: body.resources,
-        crafting_recipes: body.crafting_recipes,
-        building_recipes: body.building_recipes,
-        buildings: body.buildings,
-      },
-    };
+    return { status: "authenticated", user: currentUserFromResponse(body) };
   } catch (error) {
     return {
       status: "error",
@@ -782,32 +783,7 @@ export async function updatePlayerName(
     if (!isCurrentUser(body)) {
       return { status: "error", error: new Error("player name response is invalid") };
     }
-    return {
-      status: "success",
-      user: {
-        id: body.id,
-        display_name: body.display_name,
-        email: body.email,
-        player_name: body.player_name,
-        available_actions: body.available_actions,
-        ap: body.ap,
-        carried_weight: body.carried_weight,
-        movement_weight_threshold: body.movement_weight_threshold,
-        location: body.location,
-        routes: body.routes,
-        inventory: body.inventory,
-        ground_items: body.ground_items,
-        ground_resources: body.ground_resources,
-        gathering_option: body.gathering_option,
-        conversion_option: body.conversion_option,
-        conversion_methods: body.conversion_methods,
-        building_extension_definitions: body.building_extension_definitions,
-        resources: body.resources,
-        crafting_recipes: body.crafting_recipes,
-        building_recipes: body.building_recipes,
-        buildings: body.buildings,
-      },
-    };
+    return { status: "success", user: currentUserFromResponse(body) };
   } catch (error) {
     return {
       status: "error",
