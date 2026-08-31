@@ -78,6 +78,8 @@ The prior draft issues are obsolete because REQ-019 now defines only automated m
 
 - [x] [Major] `REQ-019.4` 的 production container 驗收未完成。`bash scripts/test-container.sh` 在 `docker build` 因 `/var/run/docker.sock` 無 Docker daemon 而退出 1。入口文件、Manifest、所有宣告圖示與 client-side route 尚未由 production image 驗證。已使用 Podman Docker-compatible backend 完成驗證。
 
+Independent re-review reran the full container harness with the Podman Docker-compatible backend. It exited 0 with no remaining findings.
+
 ## Blocked (Resolved)
 
 [Logic Conflict] Production container 驗收需要持續可用的 Docker-compatible daemon，但先前環境無法維持 Podman machine 的 socket 連線。此阻塞已解除。
