@@ -1,10 +1,14 @@
 ---
 title: "PWA standalone"
-status: Draft
+status: Ready-to-implement
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
-source_paths: []
+source_paths:
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-019.md
+  - docs/architecture.md
+  - docs/changes/2026-08-31-pwa-standalone.md
 req_ref: REQ-019
 base_branch: main
 scope: "Tracks standalone mobile installation and launch behavior."
@@ -12,19 +16,15 @@ scope: "Tracks standalone mobile installation and launch behavior."
 
 ## Problem Statement
 
-The mobile frontend opens as a normal browser shortcut with browser chrome. Players need an installable home-screen entry that launches the existing game in a standalone window.
+The frontend lacks the public metadata and production assets that browsers need to offer a PWA shortcut and standalone launch.
 
 ## Recommended Direction
 
 Add standards-based PWA metadata for iOS Safari and Android Chrome. Use standalone display mode without adding offline gameplay or a Service Worker.
 
-## Key Assumptions
-
-- Fly.io continues to serve the frontend and backend from one HTTPS origin.
-- The existing mobile App Shell remains the installed experience.
-- Google OAuth continues to use the existing same-origin callback.
-
 ## Acceptance Criteria
+
+REQ-019 is the source of truth. The plan copies every criterion into the owning tasks below.
 
 ## MVP Scope / Not Doing
 
@@ -35,4 +35,27 @@ Add standards-based PWA metadata for iOS Safari and Android Chrome. Use standalo
 
 ## Tasks
 
+### Dependency graph
+
+`Task 1 PWA metadata and assets -> Task 2 production-container and route verification`
+
+- [ ] Task 1 [parallel: no]: Add the public PWA metadata unit in `web/index.html` and `web/public/manifest.webmanifest`. Create 180, 192, and 512 pixel PNG icons under `web/public/icons/`. Declare `name`, `short_name`, `start_url: "/"`, `scope: "/"`, `display: "standalone"`, and 192 plus 512 pixel icons with the 512 pixel icon supporting `any maskable`. Add the manifest link, `theme-color`, `apple-mobile-web-app-capable=yes`, `apple-mobile-web-app-title=Vibe MUD`, `apple-mobile-web-app-status-bar-style=black-translucent`, and the 180 pixel `apple-touch-icon` link. Add `web/src/pwa-contract.test.ts` in the same commit to parse the production files, verify metadata and icon dimensions, and assert no Service Worker registration. Update `docs/architecture.md` in the same commit. This task has two source/logic files: `web/index.html` and `web/public/manifest.webmanifest`; icons are assets and the test is not a source/logic file.
+  - REQ-019.2: Manifest 必須宣告 `Vibe MUD` 名稱、遊戲圖示、根啟動路徑、根 scope 與 `standalone` 顯示模式。
+  - REQ-019.3: 前端入口文件必須公開提供 iOS home-screen 名稱、圖示、啟用 web app 與狀態列 metadata。
+
+- [ ] Task 2 [parallel: no]: Update `cmd/server/static.go` to serve `.webmanifest` responses as `application/manifest+json`, with a focused Go test in the same commit. Extend `scripts/test-container.sh` as the automated production verification. Build and run the production image, fetch `/`, `/manifest.webmanifest`, every manifest-declared icon, and a client-side frontend route through the Go static handler, then assert status, content type, and response content. Assert the built frontend contains no Service Worker registration, and run the Go and frontend test suites. Record command results in this change document. Keep Google login, API routes, existing safe-area styles, fixed status rows, and fixed bottom navigation unchanged. Do not perform or require iOS or Android device access, production deployment, OAuth account access, standalone chrome checks, or manual interaction checks. This task has two source/logic files: `cmd/server/static.go` and `scripts/test-container.sh`.
+  - REQ-019.1: 前端 origin 必須公開提供 Web App Manifest，且瀏覽器可以讀取正確的 manifest content type。
+  - REQ-019.4: Production container 必須提供入口文件、Manifest 與 Manifest 宣告的全部圖示。
+  - REQ-019.5: 玩家直接使用瀏覽器開啟根網址或前端路徑時，遊戲必須繼續作為一般網頁運作。
+  - REQ-019.6: 此 MVP 不得註冊 Service Worker，也不提供離線遊戲、背景同步或推播通知。
+  - REQ-019.7: 實際 iOS Safari 與 Android Chrome 的安裝、獨立視窗、Google 登入及遊戲操作不屬於自動驗收範圍。
+
 ## Review Issues
+
+The prior draft issues are obsolete because REQ-019 now defines only automated metadata and container acceptance. The plan keeps real-device installation, standalone chrome, OAuth, and mobile interaction checks out of scope.
+
+## Plan Review Issues
+
+- [x] Replaced the prior plan with a dependency-ordered, automatically verifiable two-task plan traced to the updated REQ-019.1 through REQ-019.7 criteria.
+- [x] REQ-019.1 is assigned to Task 1, but its origin response and content type are only exercised by Task 2. The current Go static handler does not set a Manifest content type, and Go 1.22 has no built-in `.webmanifest` mapping, so `http.ServeContent` depends on runtime MIME data that the plan does not control. Assign REQ-019.1 to Task 2, explicitly set `application/manifest+json` in `cmd/server/static.go`, add the corresponding Go test in the same commit, and keep Task 2 within the two-file source/logic limit.
+- [x] `source_paths` omits `requirements/REQ-019.md` and `requirements/BEHAVIOR.md`, although both differ from `main` on this branch. Add the files already changed by capture, then append implementation paths only when their tasks modify them.
