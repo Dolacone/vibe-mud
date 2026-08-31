@@ -2782,20 +2782,18 @@ func TestGroundTransfersPersistByLocationAndKeepAPUnchanged(t *testing.T) {
 	}
 	if _, err := db.Exec(`
 INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 5);
-INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7);`, identity.ID, identity.ID); err != nil {
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7);
+INSERT INTO ground_resources (location_id, resource_id, quantity) VALUES ('camp', 'wood', 4);`, identity.ID, identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetPlayerState(identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(before.GroundItems) != 0 || len(before.GroundResources) != 0 {
-		t.Fatalf("initial ground holdings = %+v, want empty", before)
+	if len(before.GroundItems) != 0 || groundResourceQuantity(before, "wood") != 4 {
+		t.Fatalf("initial ground holdings = %+v, want ground Resource", before)
 	}
 	if _, err := store.Drop(identity.ID, "item", "wood", 3, "active"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Drop(identity.ID, "resource", "wood", 4, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Drop(identity.ID, "item", "wood", 1, "active"); err != nil {
@@ -2805,7 +2803,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	if err != nil {
 		t.Fatal(err)
 	}
-	if afterDrop.AP != before.AP || groundItemQuantity(afterDrop, "wood") != 4 || groundResourceQuantity(afterDrop, "wood") != 4 || inventoryQuantity(afterDrop, "wood") != 1 || resourceQuantity(afterDrop, "wood") != 3 {
+	if afterDrop.AP != before.AP || groundItemQuantity(afterDrop, "wood") != 4 || groundResourceQuantity(afterDrop, "wood") != 4 || inventoryQuantity(afterDrop, "wood") != 1 || resourceQuantity(afterDrop, "wood") != 7 {
 		t.Fatalf("drop state = %+v, want merged location holdings and unchanged AP", afterDrop)
 	}
 	otherState, err := store.GetPlayerState(other.ID)
@@ -2869,7 +2867,7 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	if err != nil {
 		t.Fatal(err)
 	}
-	if groundResourceQuantity(picked, "wood") != 0 || resourceQuantity(picked, "wood") != 7 {
+	if groundResourceQuantity(picked, "wood") != 0 || resourceQuantity(picked, "wood") != 11 {
 		t.Fatalf("pickup resource state = %+v, want complete Resource transfer", picked)
 	}
 	var groundRows int
@@ -2878,6 +2876,31 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	}
 	if groundRows != 0 {
 		t.Fatalf("zero quantity ground rows remain: %d", groundRows)
+	}
+}
+
+func TestResourceDropIsRejectedWithoutMutation(t *testing.T) {
+	store, db := newTestStore(t)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-resource-drop-reject", "person@example.com", "Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7); INSERT INTO ground_resources (location_id, resource_id, quantity) VALUES ('camp', 'wood', 3)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Drop(identity.ID, "resource", "wood", 2, ""); !errors.Is(err, ErrResourceDropNotAllowed) {
+		t.Fatalf("resource drop error = %v, want ErrResourceDropNotAllowed", err)
+	}
+	after, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("resource drop changed AP or holdings: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -2908,9 +2931,9 @@ func TestGroundTransferRejectsInvalidOrInsufficientSourcesWithoutMutation(t *tes
 		{name: "zero quantity", assetType: "item", assetID: "wood", quantity: 0, wantErr: ErrInvalidArgument},
 		{name: "unknown type", assetType: "currency", assetID: "wood", quantity: 1, wantErr: ErrInvalidArgument},
 		{name: "unknown item", assetType: "item", assetID: "missing", quantity: 1, wantErr: ErrTransferAssetNotFound},
-		{name: "unknown resource", assetType: "resource", assetID: "missing", quantity: 1, wantErr: ErrTransferAssetNotFound},
+		{name: "resource drop", assetType: "resource", assetID: "missing", quantity: 1, wantErr: ErrResourceDropNotAllowed},
 		{name: "insufficient item", assetType: "item", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
-		{name: "insufficient resource", assetType: "resource", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
+		{name: "resource drop with insufficient source", assetType: "resource", assetID: "wood", quantity: 3, wantErr: ErrResourceDropNotAllowed},
 		{name: "insufficient ground item", pickup: true, assetType: "item", assetID: "wood", quantity: 1, wantErr: ErrInsufficientTransferAsset},
 		{name: "insufficient ground resource", pickup: true, assetType: "resource", assetID: "wood", quantity: 3, wantErr: ErrInsufficientTransferAsset},
 	}

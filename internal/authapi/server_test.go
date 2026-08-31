@@ -2658,7 +2658,8 @@ func TestGroundTransferAPIReturnsTypedStateAndKeepsTransferOutOfActions(t *testi
 	}
 	if _, err := store.db.Exec(`
 INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 5);
-INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7)`, identity.ID, identity.ID); err != nil {
+INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7);
+INSERT INTO ground_resources (location_id, resource_id, quantity) VALUES ('camp', 'wood', 2)`, identity.ID, identity.ID); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Routes()
@@ -2711,9 +2712,23 @@ INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood',
 	resourceDrop.Header.Set("X-Request-ID", "ground-resource-drop-request")
 	resourceDrop.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "session-secret"})
 	resourceDropResponse := httptest.NewRecorder()
+	resourceDropBefore, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resourceDropLog := captureStdout(t, func() { handler.ServeHTTP(resourceDropResponse, resourceDrop) })
-	if resourceDropResponse.Code != http.StatusOK || !strings.Contains(resourceDropLog, "asset_type=resource asset_id=wood quantity=2 outcome=success") {
+	if resourceDropResponse.Code != http.StatusBadRequest || !strings.Contains(resourceDropLog, "user_id=1 action=transfer-drop location_id=camp asset_type=resource asset_id=wood quantity=2 outcome=error reason=resource_drop_not_allowed request_id=ground-resource-drop-request") {
 		t.Fatalf("resource drop status/log = %d/%q", resourceDropResponse.Code, resourceDropLog)
+	}
+	if strings.Contains(resourceDropLog, "session-secret") {
+		t.Fatalf("resource drop log leaked session secret: %q", resourceDropLog)
+	}
+	resourceDropAfter, err := store.GetPlayerState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resourceDropAfter, resourceDropBefore) {
+		t.Fatalf("resource drop changed state: before=%+v after=%+v", resourceDropBefore, resourceDropAfter)
 	}
 	pickup := httptest.NewRequest(http.MethodPost, "/api/transfers/pickup", strings.NewReader(`{"asset_type":"resource","asset_id":"wood","quantity":1}`))
 	pickup.Header.Set("X-Request-ID", "ground-pickup-request")

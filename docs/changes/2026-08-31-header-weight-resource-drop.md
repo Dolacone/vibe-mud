@@ -13,6 +13,10 @@ source_paths:
   - docs/architecture.md
   - docs/terminology.md
   - docs/changes/2026-08-31-header-weight-resource-drop.md
+  - internal/authapi/server.go
+  - internal/authapi/store.go
+  - internal/authapi/server_test.go
+  - internal/authapi/store_test.go
 req_ref: REQ-007, REQ-012, REQ-013, REQ-014
 base_branch: main
 scope: "Tracks fixed header content, weight presentation, duplicate state removal, and Resource Drop removal."
@@ -51,7 +55,7 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 
 ## Tasks
 
-- [ ] Task 1 [parallel: no]: Reject Resource Drop in `internal/authapi/server.go` and `internal/authapi/store.go`. Add API and Store tests in the same commit. Verify AP, player Resource, and ground Resource remain unchanged after rejection. Verify the rejection log contains user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without credentials. Add regressions for Active and Expired Item Drop, Resource Pickup, and existing ground Resource visibility.
+- [x] Task 1 [parallel: no]: Reject Resource Drop in `internal/authapi/server.go` and `internal/authapi/store.go`. Add API and Store tests in the same commit. Verify AP, player Resource, and ground Resource remain unchanged after rejection. Verify the rejection log contains user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without credentials. Add regressions for Active and Expired Item Drop, Resource Pickup, and existing ground Resource visibility.
   - REQ-013.1: 每個 Location 必須具有獨立的地面 Item 與 Resource 狀態。
   - REQ-013.2: 地面資產不得限制總重量、quantity 或堆疊數量。
   - REQ-013.3: 地面資產不得具有 owner、存取權限或預留機制。
@@ -109,6 +113,12 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
   - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource。有效 Item 與 Resource 必須提供 Pickup。玩家持有的有效或失效 Item 必須提供 Drop，Resource 不得提供 Drop。
   - REQ-013.22: Item Transfer 必須指定 `active` 或 `expired` 堆疊。Resource Pickup 不得指定 Item 狀態。
   - REQ-013.23: Item 狀態缺少、不合法或不適用時，Transfer 必須失敗，且所有狀態保持不變。
+
+## Task 1 Verification
+
+- `CGO_ENABLED=0 go test ./internal/authapi -run 'TestGroundTransfer|TestResourceDrop|TestItemTransfers'` passed.
+- Resource Drop is rejected by Store and API with unchanged AP, player Resource, and ground Resource state.
+- Rejection logs include user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without session credentials.
 
 ## Review Issues
 

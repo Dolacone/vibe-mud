@@ -44,6 +44,7 @@ var (
 	ErrExtensionCompleted          = errors.New("extension is already completed")
 	ErrTransferAssetNotFound       = errors.New("transfer asset not found")
 	ErrInsufficientTransferAsset   = errors.New("insufficient transfer asset")
+	ErrResourceDropNotAllowed      = errors.New("resource drop is not allowed")
 )
 
 type Store struct {
@@ -1801,6 +1802,9 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 	status, err := transferItemStatus(assetType, itemStatus)
 	if err != nil {
 		return PlayerState{}, err
+	}
+	if assetType == "resource" {
+		return PlayerState{}, ErrResourceDropNotAllowed
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
