@@ -3011,6 +3011,18 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.Exec(`UPDATE player_ap SET full_timestamp = ? WHERE user_id = ?`, now.Add(5*time.Minute).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 3)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO player_resources (user_id, resource_id, quantity) VALUES (?, 'wood', 7)`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CreateSession(identity.ID, "player-name-session", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -3037,6 +3049,16 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 	if value, exists := before["player_name"]; !exists || value != nil {
 		t.Fatalf("unnamed player_name = %#v", value)
 	}
+	withoutPlayerName := func(body map[string]any) map[string]any {
+		state := make(map[string]any, len(body)-1)
+		for key, value := range body {
+			if key != "player_name" {
+				state[key] = value
+			}
+		}
+		return state
+	}
+	beforeState := withoutPlayerName(before)
 	unauthenticated := httptest.NewRecorder()
 	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPut, "/api/player/name", strings.NewReader(`{"player_name":"Alice"}`)))
 	if unauthenticated.Code != http.StatusUnauthorized || unauthenticated.Body.String() != "{\"error\":\"authentication required\"}\n" {
@@ -3053,9 +3075,7 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 	if updatedBody["player_name"] != "Alice" || len(updatedBody) != len(before) {
 		t.Fatalf("name update body = %#v", updatedBody)
 	}
-	delete(before, "player_name")
-	delete(updatedBody, "player_name")
-	if !reflect.DeepEqual(updatedBody, before) {
+	if !reflect.DeepEqual(withoutPlayerName(updatedBody), beforeState) {
 		t.Fatalf("name update changed gameplay state: before=%#v after=%#v", before, updatedBody)
 	}
 	read := request(http.MethodGet, "/api/me", "", "player-name-read")
@@ -3071,6 +3091,17 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 	handler.ServeHTTP(newSessionResponse, newSessionRequest)
 	if newSessionResponse.Code != http.StatusOK || !strings.Contains(newSessionResponse.Body.String(), `"player_name":"Alice"`) {
 		t.Fatalf("new session GET /api/me = %d: %s", newSessionResponse.Code, newSessionResponse.Body.String())
+	}
+	rename := request(http.MethodPut, "/api/player/name", `{"player_name":"Bob"}`, "player-name-rename")
+	if rename.Code != http.StatusOK {
+		t.Fatalf("rename status = %d: %s", rename.Code, rename.Body.String())
+	}
+	var renameBody map[string]any
+	if err := json.Unmarshal(rename.Body.Bytes(), &renameBody); err != nil {
+		t.Fatal(err)
+	}
+	if renameBody["player_name"] != "Bob" || !reflect.DeepEqual(withoutPlayerName(renameBody), beforeState) {
+		t.Fatalf("rename changed authoritative state: before=%#v after=%#v", beforeState, renameBody)
 	}
 
 	for _, test := range []struct {
@@ -3099,7 +3130,7 @@ func TestPlayerNameAPIUsesExactContractAndPreservesAuthoritativeState(t *testing
 		}
 	}
 	unchanged := request(http.MethodGet, "/api/me", "", "player-name-unchanged")
-	if unchanged.Code != http.StatusOK || !strings.Contains(unchanged.Body.String(), `"player_name":"Alice"`) {
+	if unchanged.Code != http.StatusOK || !strings.Contains(unchanged.Body.String(), `"player_name":"Bob"`) {
 		t.Fatalf("rejected name changed state = %d/%s", unchanged.Code, unchanged.Body.String())
 	}
 }
