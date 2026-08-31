@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type DropRequest, type PickupRequest, type PlayerState } from "./auth";
+import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, updatePlayerName, type Building, type BuildingRecipe, type CraftingRecipe, type DropRequest, type PickupRequest, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -131,7 +131,7 @@ const transferState: PlayerState = {
 describe("getCurrentUser", () => {
   it("asks the backend for the current identity with a same-origin credentialed request", async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...campState, role: "admin" }), {
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, role: "admin" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -139,7 +139,7 @@ describe("getCurrentUser", () => {
 
     await expect(getCurrentUser(fetcher)).resolves.toEqual({
       status: "authenticated",
-      user: { id: 1, display_name: "Ada", email: "ada@example.com", ...campState },
+      user: { id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState },
     });
     expect(fetcher).toHaveBeenCalledWith("/api/me", {
       method: "GET",
@@ -165,11 +165,11 @@ describe("getCurrentUser", () => {
 
   it("accepts numeric backend IDs and rejects string IDs", async () => {
     const numeric = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 42, display_name: "Ada", email: "ada@example.com", ...campState, ap: 0 }), { status: 200 }),
+      new Response(JSON.stringify({ id: 42, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, ap: 0 }), { status: 200 }),
     );
     await expect(getCurrentUser(numeric)).resolves.toEqual({
       status: "authenticated",
-      user: { id: 42, display_name: "Ada", email: "ada@example.com", ...campState, ap: 0 },
+      user: { id: 42, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, ap: 0 },
     });
 
     const stringID = vi.fn().mockResolvedValue(
@@ -187,7 +187,7 @@ describe("getCurrentUser", () => {
       ],
     };
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...state }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated", user: state });
@@ -202,7 +202,7 @@ describe("getCurrentUser", () => {
       ],
     };
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...state }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
@@ -213,7 +213,7 @@ describe("getCurrentUser", () => {
       throw new Error("browser storage must not be read");
     });
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap: 1 }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, ap: 1 }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated" });
@@ -225,7 +225,7 @@ describe("getCurrentUser", () => {
     "rejects %s AP in the identity response (%s)",
     async (ap) => {
       const fetcher = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ap }), { status: 200 }),
+        new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, ap }), { status: 200 }),
       );
 
       await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
@@ -239,10 +239,58 @@ describe("getCurrentUser", () => {
     ["non-positive movement threshold", { movement_weight_threshold: 0 }],
   ])("rejects %s because the UI needs authoritative movement limits", async (_label, override) => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...campState, ...override }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...campState, ...override }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "error" });
+  });
+});
+
+describe("player name client", () => {
+  const namedUser = { id: 1, display_name: "Ada", email: "ada@example.com", player_name: "Alice", ...campState };
+  const unnamedUser = { ...namedUser, player_name: null };
+
+  it.each([
+    ["named", namedUser],
+    ["unnamed", unnamedUser],
+  ])("parses the authoritative %s identity", async (_label, user) => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(user), { status: 200 }));
+    await expect(getCurrentUser(fetcher)).resolves.toEqual({ status: "authenticated", user });
+  });
+
+  it("serializes the exact update request and uses the authoritative success body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(namedUser), { status: 200 }));
+    await expect(updatePlayerName("Alice", fetcher)).resolves.toEqual({ status: "success", user: namedUser });
+    expect(fetcher).toHaveBeenCalledWith("/api/player/name", {
+      method: "PUT",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ player_name: "Alice" }),
+    });
+  });
+
+  it.each([
+    ["invalid player name input", "invalid player name input"],
+    ["invalid player name", "invalid player name"],
+  ])("maps %s to an invalid outcome", async (_label, error) => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error }), { status: 400 }));
+    await expect(updatePlayerName("Alice", fetcher)).resolves.toEqual({ status: "invalid", error });
+  });
+
+  it("maps an unavailable name and unauthenticated session", async () => {
+    const unavailable = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "player name unavailable" }), { status: 409 }));
+    await expect(updatePlayerName("Alice", unavailable)).resolves.toEqual({ status: "unavailable", error: "player name unavailable" });
+    const unauthenticated = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    await expect(updatePlayerName("Alice", unauthenticated)).resolves.toEqual({ status: "unauthenticated" });
+  });
+
+  it("rejects unexpected statuses, error bodies, and success bodies", async () => {
+    const unexpectedStatus = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "player name unavailable" }), { status: 500 }));
+    await expect(updatePlayerName("Alice", unexpectedStatus)).resolves.toMatchObject({ status: "error" });
+    const unexpectedBody = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "other" }), { status: 409 }));
+    await expect(updatePlayerName("Alice", unexpectedBody)).resolves.toMatchObject({ status: "error" });
+    const malformedSuccess = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...namedUser, player_name: 7 }), { status: 200 }));
+    await expect(updatePlayerName("Alice", malformedSuccess)).resolves.toMatchObject({ status: "error" });
   });
 });
 
@@ -697,7 +745,7 @@ describe("building actions", () => {
       available_actions: [],
     };
     const validState = { ...campState, buildings: [{ ...building, extensions: [underConstructionExtension, completedExtension] }] };
-    const validFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...validState }), { status: 200 }));
+    const validFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...validState }), { status: 200 }));
     await expect(getCurrentUser(validFetcher)).resolves.toMatchObject({ status: "authenticated" });
 
     for (const completed of [
@@ -782,12 +830,12 @@ describe("building actions", () => {
 describe("ground transfers", () => {
   it("parses typed ground Items and Resources as part of the identity state", async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...transferState }), { status: 200 }),
+      new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...transferState }), { status: 200 }),
     );
 
     await expect(getCurrentUser(fetcher)).resolves.toEqual({
       status: "authenticated",
-      user: { id: 1, display_name: "Ada", email: "ada@example.com", ...transferState },
+      user: { id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...transferState },
     });
   });
 
@@ -885,7 +933,7 @@ describe("ground transfers", () => {
 
   it("parses expired stacks as zero durability without accepting the old seconds contract", async () => {
     const state = { ...transferState, inventory: [expiredItem({ id: "wood", display_name: "Wood" }, 2)] };
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", ...state }), { status: 200 }));
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 1, display_name: "Ada", email: "ada@example.com", player_name: null, ...state }), { status: 200 }));
 
     await expect(getCurrentUser(fetcher)).resolves.toMatchObject({ status: "authenticated", user: state });
 

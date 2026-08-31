@@ -14,6 +14,9 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - web/src/auth.ts
+  - web/src/auth.test.ts
+  - web/src/App.test.tsx
 req_ref: REQ-002, REQ-012, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024
 base_branch: main
 scope: "Tracks persistent player names, forced initial naming, in-game renaming, and the split of tab-specific frontend requirements."
@@ -71,7 +74,7 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
   - REQ-020.12: Backend 必須把初次命名與改名的 access 及結果寫入 stdout，並包含 user ID、action、outcome 與 request ID。
   - REQ-020.13: Backend log 不得包含輸入名稱、Google 身分資料、credentials、session、OAuth 資料、cookie 或 secrets。
 
-- [ ] Task 3 [parallel: no]: Extend `web/src/auth.ts` with `player_name: string|null` parsing and a typed Player name update client. Send `PUT /api/player/name` with exact JSON `{"player_name":"..."}`. Parse HTTP 200 as the same complete current-user shape used by `GET /api/me`. Map HTTP 400 `invalid player name input` and `invalid player name` to invalid outcomes. Map HTTP 409 `player name unavailable` to an unavailable outcome. Treat HTTP 401 as unauthenticated. Reject every unexpected status, error body, or success body without inventing player state. Add client contract tests in the same commit for named and unnamed identity responses, exact serialization, authoritative success, each rejection class, and invalid response rejection.
+- [x] Task 3 [parallel: no]: Extend `web/src/auth.ts` with `player_name: string|null` parsing and a typed Player name update client. Send `PUT /api/player/name` with exact JSON `{"player_name":"..."}`. Parse HTTP 200 as the same complete current-user shape used by `GET /api/me`. Map HTTP 400 `invalid player name input` and `invalid player name` to invalid outcomes. Map HTTP 409 `player name unavailable` to an unavailable outcome. Treat HTTP 401 as unauthenticated. Reject every unexpected status, error body, or success body without inventing player state. Add client contract tests in the same commit for named and unnamed identity responses, exact serialization, authoritative success, each rejection class, and invalid response rejection.
   - REQ-002.5: 前端必須向後端查詢目前登入的應用程式使用者，不得從前端狀態或 Google 回應自行推定身分。
   - REQ-002.6: 有效 session 存在時，前端必須顯示已登入遊戲介面。
   - REQ-002.7: 有效 session 不存在時，前端必須顯示未登入狀態與登入操作，不得顯示先前取得的使用者身分。
@@ -114,7 +117,12 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
   - REQ-024.2: `角色` 必須提供修改 Player name 的操作。
   - REQ-024.3: 既有 Rest 操作必須保留在 `角色`，直到後續 REQ 指定其他位置。
   - REQ-024.4: `角色` 不得顯示應用程式 user ID、Google 顯示名稱或 email。
-  - REQ-024.5: `角色` 不得顯示尚未實作的裝備、技能或等級 placeholder。
+- REQ-024.5: `角色` 不得顯示尚未實作的裝備、技能或等級 placeholder。
+
+## Verification
+
+- Task 3: `npm test` passed with 5 test files and 153 tests.
+- Task 3: `npm run build` passed with TypeScript compilation and Vite production output.
 
 ## Review Issues
 

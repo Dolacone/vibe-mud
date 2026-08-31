@@ -235,7 +235,7 @@ const allGameplayState: auth.PlayerState = {
   buildings: [underConstruction, completedWithExtension],
 };
 
-const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", ...state } });
+const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", player_name: null, ...state } });
 const renderAuthenticated = async (state: auth.PlayerState = campState, displayName = "Ada") => {
   getCurrentUser.mockResolvedValue(authenticated(state, displayName));
   render(<App />);
