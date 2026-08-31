@@ -139,7 +139,7 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
 
 ## Review Issues
 
-- [ ] [Major] `normalizePlayerName` 在 NFKC 後計算點數，違反顯示名稱的 ASCII 與 Unicode 計分規則。九個全形 ASCII 字元會正規化成九個 ASCII 字元並通過，但原輸入應計 18 點並拒絕。現有邊界測試未涵蓋會改變字元類別的 NFKC 輸入。
+- [x] [Major] `normalizePlayerName` 在 NFKC 後計算點數，違反顯示名稱的 ASCII 與 Unicode 計分規則。九個全形 ASCII 字元會正規化成九個 ASCII 字元並通過，但原輸入應計 18 點並拒絕。現有邊界測試未涵蓋會改變字元類別的 NFKC 輸入。
 - [ ] [Major] `requirePlayerName` 在 Player profile 查詢失敗或遺失時放行 Action 與 Transfer。命名閘門因此採 fail-open，未命名玩家可在 profile 缺漏或資料庫讀取錯誤時執行遊戲操作。
 - [ ] [Major] 角色改名收到 HTTP 401 時，前端只顯示 session 過期訊息。它仍保留 App Shell 與先前 Player name，違反 REQ-002.7 的未登入畫面及身分清除要求。Task 4 也缺少此結果與一般錯誤結果的 App 測試。
 

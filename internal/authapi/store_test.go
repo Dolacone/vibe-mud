@@ -136,6 +136,8 @@ func TestPlayerNameValidationUsesWeightedLengthAndRejectsControls(t *testing.T) 
 		{"abcdefghijklmnopq", false},
 		{"旅旅旅旅旅旅旅旅", true},
 		{"旅旅旅旅旅旅旅旅旅", false},
+		{"ＡＢＣＤＥＦＧＨ", true},
+		{"ＡＢＣＤＥＦＧＨＩ", false},
 		{"abcdefghijklmn旅", true},
 		{"abcdefghijklm旅人", false},
 		{"\nname", false},

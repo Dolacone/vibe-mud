@@ -981,12 +981,8 @@ func normalizePlayerName(playerName string) (string, string, error) {
 	if trimmed == "" || !utf8.ValidString(trimmed) {
 		return "", "", ErrInvalidPlayerName
 	}
-	normalized := norm.NFKC.String(trimmed)
 	length := 0
-	for _, character := range normalized {
-		if unicode.IsControl(character) {
-			return "", "", ErrInvalidPlayerName
-		}
+	for _, character := range trimmed {
 		if character < utf8.RuneSelf {
 			length++
 		} else {
@@ -999,6 +995,7 @@ func normalizePlayerName(playerName string) (string, string, error) {
 	if length == 0 {
 		return "", "", ErrInvalidPlayerName
 	}
+	normalized := norm.NFKC.String(trimmed)
 	normalized = strings.Map(func(character rune) rune {
 		if character >= 'A' && character <= 'Z' {
 			return character + ('a' - 'A')
