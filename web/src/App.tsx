@@ -347,8 +347,13 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     }
   };
   const handleTransfer = (operation: "drop" | "pickup", request: TransferRequest) => {
-    const transfer = operation === "drop" ? drop : pickup;
-    return runAction(operation, () => transfer(request), applyTransferResult);
+    if (operation === "drop") {
+      if (request.asset_type !== "item") {
+        return runAction(operation, () => Promise.resolve({ status: "invalid" as const, error: "invalid transfer input" }), applyTransferResult);
+      }
+      return runAction(operation, () => drop(request), applyTransferResult);
+    }
+    return runAction(operation, () => pickup(request), applyTransferResult);
   };
 
   const actionPendingNow = action.status === "pending";

@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -19,6 +19,8 @@ source_paths:
   - internal/authapi/store_test.go
   - web/src/App.tsx
   - web/src/App.test.tsx
+  - web/src/auth.ts
+  - web/src/auth.test.ts
   - web/src/GameShell.tsx
   - web/src/GameShell.test.tsx
   - web/src/browser-fixture.tsx
@@ -114,11 +116,18 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
   - REQ-013.19: Transfer 完成後，前端必須顯示後端回傳的最新玩家與地面狀態。
   - REQ-014.5: Item Drop 維持不消耗 AP，且不受目前重量限制。
 
-- [ ] Task 3 [parallel: no]: Narrow `DropRequest` in `web/src/auth.ts` to Item Transfer only after Task 2 removes every Resource Drop caller. Keep `PickupRequest` compatible with Item and Resource. Add frontend contract tests in the same commit that reject Resource Drop at the type boundary and preserve Resource Pickup serialization.
+- [x] Task 3 [parallel: no]: Narrow `DropRequest` in `web/src/auth.ts` to Item Transfer only after Task 2 removes every Resource Drop caller. Keep `PickupRequest` compatible with Item and Resource. Add frontend contract tests in the same commit that reject Resource Drop at the type boundary and preserve Resource Pickup serialization.
   - REQ-013.6: 後端必須拒絕玩家把 Resource Drop 至任何 Location，且所有狀態保持不變。
   - REQ-013.18: 前端必須用表格顯示地面 Item 與 Resource。有效 Item 與 Resource 必須提供 Pickup。玩家持有的有效或失效 Item 必須提供 Drop，Resource 不得提供 Drop。
   - REQ-013.22: Item Transfer 必須指定 `active` 或 `expired` 堆疊。Resource Pickup 不得指定 Item 狀態。
   - REQ-013.23: Item 狀態缺少、不合法或不適用時，Transfer 必須失敗，且所有狀態保持不變。
+
+## Task 3 Verification
+
+- `npm test -- --run` passed: 146 tests.
+- `npm run build` passed: TypeScript compilation and Vite production build.
+- `DropRequest` accepts only Item transfers, while `PickupRequest` accepts Item and Resource transfers.
+- Contract tests reject Resource Drop at the TypeScript boundary and preserve Resource Pickup JSON serialization.
 
 ## Task 1 Verification
 

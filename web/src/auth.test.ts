@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type PlayerState } from "./auth";
+import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, type Building, type BuildingRecipe, type CraftingRecipe, type DropRequest, type PickupRequest, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -830,14 +830,21 @@ describe("ground transfers", () => {
     });
   });
 
-  it("supports Item Pickup and Resource Drop through their dedicated Transfer endpoints", async () => {
+  it("supports Item Pickup through its dedicated Transfer endpoint", async () => {
     const pickupFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
     await expect(pickup({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "active" }, pickupFetcher)).resolves.toEqual({ status: "success", ...transferState });
     expect(pickupFetcher).toHaveBeenCalledWith("/api/transfers/pickup", expect.objectContaining({ body: JSON.stringify({ asset_type: "item", asset_id: "wood", quantity: 1, item_status: "active" }) }));
+  });
 
-    const dropFetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(transferState), { status: 200 }));
-    await expect(drop({ asset_type: "resource", asset_id: "stone", quantity: 1 }, dropFetcher)).resolves.toEqual({ status: "success", ...transferState });
-    expect(dropFetcher).toHaveBeenCalledWith("/api/transfers/drop", expect.objectContaining({ body: JSON.stringify({ asset_type: "resource", asset_id: "stone", quantity: 1 }) }));
+  it("rejects Resource Drop at the type boundary while retaining Resource Pickup serialization", () => {
+    const itemDrop: DropRequest = { asset_type: "item", asset_id: "wood", quantity: 1, item_status: "active" };
+    const resourcePickup: PickupRequest = { asset_type: "resource", asset_id: "stone", quantity: 1 };
+    expect(itemDrop.asset_type).toBe("item");
+    expect(resourcePickup).toEqual({ asset_type: "resource", asset_id: "stone", quantity: 1 });
+
+    // @ts-expect-error Resource Drop is rejected by the frontend contract.
+    const resourceDrop: DropRequest = { asset_type: "resource", asset_id: "stone", quantity: 1 };
+    expect(resourceDrop.asset_type).toBe("resource");
   });
 
   it("returns authoritative state for handled HTTP 400 and 409 failures", async () => {
