@@ -1,6 +1,6 @@
 ---
 title: "Player name and tab requirements"
-status: Reviewed
+status: Refactored
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -8,6 +8,7 @@ source_paths:
   - docs/architecture.md
   - docs/schemas.md
   - docs/terminology.md
+  - docs/changes/2026-08-31-player-name.md
   - go.mod
   - go.sum
   - internal/authapi/store.go
@@ -136,6 +137,12 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
 - Task 4: `npm test -- --run src/GameShell.test.tsx` passed with 6 tests.
 - Task 4: `npm test` passed with 5 test files and 158 tests.
 - Task 4: `npm run build` passed with TypeScript compilation and Vite production output.
+- Refactor: shared current-user response mapping in `web/src/auth.ts` without changing behavior.
+- Refactor verification: `go test -ldflags='-linkmode=external' ./...` passed.
+- Refactor verification: `npm test -- --run` passed with 5 test files and 161 tests.
+- Refactor verification: `npm run build` passed with TypeScript compilation and Vite production output.
+- Doc audit: inspected `docs/index.md`, `docs/architecture.md`, `docs/schemas.md`, and `docs/terminology.md` against implementation. No documentation updates were required.
+- Doc audit verification: `python3 /Users/kevin.twu/Dropbox/agents/skills/doc-audit/scripts/doc_health_check.py` reported zero coverage, link, and metadata issues.
 
 ## Review Issues
 
