@@ -1843,22 +1843,6 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("add ground item: %w", err)
 		}
-	case "resource":
-		if err := requireResourceTx(tx, assetID); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, err
-		}
-		if err := consumeTransferQuantityTx(tx, "player_resources", "user_id", userID, "resource_id", assetID, quantity, "dropped resource"); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, err
-		}
-		if _, err := tx.Exec(`
-INSERT INTO ground_resources (location_id, resource_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources.quantity + excluded.quantity`, locationID, assetID, quantity); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("add ground resource: %w", err)
-		}
 	}
 	state, err := s.getPlayerStateTx(tx, userID, now)
 	if err != nil {
