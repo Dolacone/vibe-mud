@@ -1,6 +1,6 @@
 ---
 title: "PWA standalone"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -75,6 +75,8 @@ REQ-019 is the source of truth. The plan copies every criterion into the owning 
 ## Review Issues
 
 The prior draft issues are obsolete because REQ-019 now defines only automated metadata and container acceptance. The plan keeps real-device installation, standalone chrome, OAuth, and mobile interaction checks out of scope.
+
+- [ ] [Major] `REQ-019.4` 的 production container 驗收未完成。`bash scripts/test-container.sh` 在 `docker build` 因 `/var/run/docker.sock` 無 Docker daemon 而退出 1。入口文件、Manifest、所有宣告圖示與 client-side route 尚未由 production image 驗證。
 
 ## Plan Review Issues
 
