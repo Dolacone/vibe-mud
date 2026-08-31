@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -136,6 +136,8 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 - Rejection logs include user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without session credentials.
 
 ## Review Issues
+
+- [ ] [Minor] `Store.Drop` 已先拒絕 Resource，卻保留不可達的 Resource 寫入分支。兩種策略互相衝突，後續調整 guard 會意外恢復禁用行為。
 
 ## Task 2 Verification
 
