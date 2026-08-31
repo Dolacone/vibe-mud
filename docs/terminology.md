@@ -1,7 +1,7 @@
 ---
 title: "Game Terminology"
 doc_type: glossary
-last_reviewed: 2026-08-29
+last_reviewed: 2026-08-31
 source_paths: []
 scope: "Canonical game terms used by the application."
 ---
@@ -362,9 +362,9 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Transfer: Drop
 - 中文名稱：放置
-- 定義：把玩家持有的 Active Item、Expired Item 或 Resource quantity 轉移至目前 Location 的公共地面。
+- 定義：把玩家持有的 Active Item 或 Expired Item quantity 轉移至目前 Location 的公共地面。Resource 不提供 Drop。
 - 對應行為：[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
-- 與相似名詞的差異：Drop 的來源是玩家持有狀態。Pickup 的來源是地面資產。
+- 與相似名詞的差異：Drop 的來源是玩家持有的 Item。Resource 只能透過 Pickup 從地面轉入玩家狀態。
 
 ### Transfer: Pickup
 
