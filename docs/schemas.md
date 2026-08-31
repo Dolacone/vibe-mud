@@ -1,7 +1,7 @@
 ---
 title: "SQLite Schemas"
 doc_type: schema
-last_reviewed: 2026-08-29
+last_reviewed: 2026-08-31
 source_paths:
   - internal/authapi/store.go
 ---
@@ -30,6 +30,7 @@ source_paths:
 | Table | 用途 | 生命週期 | 與相似 table 的差異 |
 |---|---|---|---|
 | `identities` | 保存 Google SSO 對應的應用程式使用者。 | 使用者首次登入時建立，後續登入更新。 | 它是永久身分，不是可撤銷的登入 session。 |
+| `player_profiles` | 保存遊戲內 Player name 與唯一性比對值。 | 身分建立時初始化，初次命名或改名時更新。 | 它保存遊戲身分，不保存 Google 顯示名稱或登入資料。 |
 | `oauth_attempts` | 保存尚未完成的 OAuth handshake。 | 登入開始時建立，完成時消耗，逾時後失效。 | 它只驗證一次 OAuth callback，不代表登入狀態。 |
 | `sessions` | 保存應用程式登入 session。 | OAuth 完成時建立，到期後失效。 | 它代表已登入瀏覽器，不保存 Google OAuth token。 |
 | `player_ap` | 保存玩家恢復至滿 AP 的時間。 | 身分建立時建立，消耗 AP 時更新。 | 它只保存 `full_timestamp`，不保存 AP 現值。 |
@@ -84,6 +85,32 @@ CREATE TABLE IF NOT EXISTS identities (
 | `updated_at` | 身分最近一次成功登入更新時間。 |
 
 索引與約束：primary key 為 `id`。`UNIQUE (issuer, subject)` 防止同一 provider identity 建立重複使用者。沒有 email unique constraint。
+
+## player_profiles
+
+用途：保存玩家選擇的 Player name。系統保留玩家輸入並去除首尾空白後的顯示值，另存 NFKC 與只將 ASCII A-Z 小寫化的比對值。名稱必須有 1 至 16 點長度，ASCII 字元各 1 點，其他 Unicode 字元各 2 點，且不得含控制字元。
+
+```sql
+CREATE TABLE IF NOT EXISTS player_profiles (
+    user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+    player_name TEXT,
+    normalized_name TEXT UNIQUE,
+    updated_at INTEGER NOT NULL,
+    CHECK (
+        (player_name IS NULL AND normalized_name IS NULL) OR
+        (player_name IS NOT NULL AND normalized_name IS NOT NULL)
+    )
+);
+```
+
+| Column | 用途 |
+|---|---|
+| `user_id` | 玩家 ID。每個 application user 只有一筆 profile。 |
+| `player_name` | 玩家可見名稱。`NULL` 代表尚未完成初次命名。 |
+| `normalized_name` | NFKC 與 ASCII 英文字母小寫化的唯一性比對值。未命名時為 `NULL`。 |
+| `updated_at` | Profile 初始化或最近一次命名成功的 UTC Unix seconds。 |
+
+索引與約束：`user_id` 是 primary key。`normalized_name` 的 unique constraint 防止同名。成對 `NULL` constraint 防止只保存顯示值或比對值。Store 初始化會為既有 `identities` 補上未命名 profile。
 
 ## oauth_attempts
 

@@ -47,6 +47,7 @@ scope: "Canonical game terms used by the application."
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Movement weight threshold](#movement-weight-threshold) | - | 移動負重門檻 | [REQ-014](../requirements/REQ-014.md) |
 | [Package Item](#package-item) | - | 擴充套件物品 | [REQ-016](../requirements/REQ-016.md) |
+| [Player name](#player-name) | - | 玩家名稱 | [REQ-020](../requirements/REQ-020.md) |
 | [Resource](#resource) | - | 資源 | [REQ-007](../requirements/REQ-007.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md) |
 | [Recipe](#recipe) | - | 配方 | [REQ-009](../requirements/REQ-009.md) |
 | [Sawmill T1](#sawmill-t1) | - | 鋸木廠 T1 | [REQ-017](../requirements/REQ-017.md) |
@@ -300,6 +301,15 @@ scope: "Canonical game terms used by the application."
 - 定義：Craft 產生並保存在 Inventory 的 Active Item。Building owner 安裝 extension 時消耗它。
 - 對應行為：[REQ-016 - Building extension lifecycle](../requirements/REQ-016.md)
 - 與相似名詞的差異：Package Item 可以持有與 Transfer。安裝後的 Building extension 屬於 Building。
+
+### Player name
+
+- 正式英文名稱：Player name
+- 中文名稱：玩家名稱
+- 定義：玩家初次進入遊戲時選擇的持久化遊戲名稱。它會去除首尾空白，依 ASCII 字元 1 點與其他 Unicode 字元 2 點計算 1 至 16 點長度，並通過 NFKC 與 ASCII 英文字母大小寫規則判定唯一性。
+- 範例：`Dolacone` 與 `旅人` 都是 Player name。後者使用 4 個中文字，占 8 點長度。
+- 對應行為：[REQ-020 - Player name](../requirements/REQ-020.md)
+- 與相似名詞的差異：Player name 是遊戲內公開名稱。Google 顯示名稱、email 與 application user ID 屬於登入身分資料。
 
 ### Resource
 

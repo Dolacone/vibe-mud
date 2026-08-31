@@ -10,6 +10,9 @@
 - Moved carrying weight into the fixed header with green, yellow, and red thresholds.
 - Removed duplicate weight and Resource balances from gameplay tabs.
 - Rejected Resource Drop while retaining Item Drop and Resource Pickup.
+- Added unique Player names with required initial naming and later renaming.
+- Limited Player names with a weighted cap equal to 8 Chinese or 16 ASCII characters.
+- Updated Character to show Player name and Rest without login identity or progression placeholders.
 
 ## 2026-08-30
 

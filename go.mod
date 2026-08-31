@@ -6,6 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.10.0
 	github.com/go-chi/chi/v5 v5.1.0
 	golang.org/x/oauth2 v0.24.0
+	golang.org/x/text v0.14.0
 	modernc.org/sqlite v1.35.0
 )
 

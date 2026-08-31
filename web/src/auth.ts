@@ -177,10 +177,18 @@ export type CurrentUser = PlayerState & {
   id: number;
   display_name: string;
   email: string;
+  player_name: string | null;
 };
 
 export type AuthResult =
   | { status: "authenticated"; user: CurrentUser }
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type PlayerNameResult =
+  | { status: "success"; user: CurrentUser }
+  | { status: "invalid"; error: "invalid player name input" | "invalid player name" }
+  | { status: "unavailable"; error: "player name unavailable" }
   | { status: "unauthenticated" }
   | { status: "error"; error: Error };
 
@@ -601,8 +609,35 @@ function isCurrentUser(value: unknown): value is CurrentUser {
     typeof user.id === "number" &&
     typeof user.display_name === "string" &&
     typeof user.email === "string" &&
+    (isString(user.player_name) || user.player_name === null) &&
     isPlayerState(user)
   );
+}
+
+function currentUserFromResponse(body: CurrentUser): CurrentUser {
+  return {
+    id: body.id,
+    display_name: body.display_name,
+    email: body.email,
+    player_name: body.player_name,
+    available_actions: body.available_actions,
+    ap: body.ap,
+    carried_weight: body.carried_weight,
+    movement_weight_threshold: body.movement_weight_threshold,
+    location: body.location,
+    routes: body.routes,
+    inventory: body.inventory,
+    ground_items: body.ground_items,
+    ground_resources: body.ground_resources,
+    gathering_option: body.gathering_option,
+    conversion_option: body.conversion_option,
+    conversion_methods: body.conversion_methods,
+    building_extension_definitions: body.building_extension_definitions,
+    resources: body.resources,
+    crafting_recipes: body.crafting_recipes,
+    building_recipes: body.building_recipes,
+    buildings: body.buildings,
+  };
 }
 
 function isRestResponse(value: unknown): value is PlayerState {
@@ -693,35 +728,66 @@ export async function getCurrentUser(
     if (!isCurrentUser(body)) {
       return { status: "error", error: new Error("identity response is invalid") };
     }
-    return {
-      status: "authenticated",
-      user: {
-        id: body.id,
-        display_name: body.display_name,
-        email: body.email,
-        available_actions: body.available_actions,
-        ap: body.ap,
-        carried_weight: body.carried_weight,
-        movement_weight_threshold: body.movement_weight_threshold,
-        location: body.location,
-        routes: body.routes,
-        inventory: body.inventory,
-        ground_items: body.ground_items,
-        ground_resources: body.ground_resources,
-        gathering_option: body.gathering_option,
-        conversion_option: body.conversion_option,
-        conversion_methods: body.conversion_methods,
-        building_extension_definitions: body.building_extension_definitions,
-        resources: body.resources,
-        crafting_recipes: body.crafting_recipes,
-        building_recipes: body.building_recipes,
-        buildings: body.buildings,
-      },
-    };
+    return { status: "authenticated", user: currentUserFromResponse(body) };
   } catch (error) {
     return {
       status: "error",
       error: error instanceof Error ? error : new Error("identity request failed"),
+    };
+  }
+}
+
+function isPlayerNameError<T extends string>(value: unknown, expected: T): value is { error: T } {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return Object.keys(body).length === 1 && body.error === expected;
+}
+
+export async function updatePlayerName(
+  playerName: string,
+  fetcher: typeof fetch = fetch,
+): Promise<PlayerNameResult> {
+  try {
+    const response = await fetcher("/api/player/name", {
+      method: "PUT",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ player_name: playerName }),
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (isPlayerNameError(body, "invalid player name input")) return { status: "invalid", error: body.error };
+      if (isPlayerNameError(body, "invalid player name")) return { status: "invalid", error: body.error };
+      return { status: "error", error: new Error("player name response is invalid") };
+    }
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isPlayerNameError(body, "player name unavailable")) {
+        return { status: "error", error: new Error("player name response is invalid") };
+      }
+      return { status: "unavailable", error: body.error };
+    }
+
+    if (response.status !== 200) {
+      return {
+        status: "error",
+        error: new Error(`player name request failed with status ${response.status}`),
+      };
+    }
+
+    const body: unknown = await response.json();
+    if (!isCurrentUser(body)) {
+      return { status: "error", error: new Error("player name response is invalid") };
+    }
+    return { status: "success", user: currentUserFromResponse(body) };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error : new Error("player name request failed"),
     };
   }
 }
