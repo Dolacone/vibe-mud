@@ -61,7 +61,6 @@ function ActionFeedback({ action, actionKind, currentUser }: { action: ActionSta
 }
 
 function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMove, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onMove: (target: string) => void; feedback: ReactNode }) {
-  const isOverweight = currentUser.carried_weight > currentUser.movement_weight_threshold;
   const movePending = actionPending && pendingActionKind === "move";
   return (
     <section aria-labelledby="map-heading">
@@ -76,18 +75,6 @@ function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMo
             <tbody>{!hasAction("move") || currentUser.routes.length === 0 ? <EmptyRow colSpan={3}>No available routes.</EmptyRow> : currentUser.routes.map((route) => <tr key={`${route.origin_id}-${route.destination_id}`}><th scope="row">To {route.destination_id} ({route.ap_cost} AP)</th><td>{route.ap_cost} AP</td><td><button type="button" onClick={() => onMove(route.destination_id)} disabled={actionPending}>{movePending ? "Moving..." : `Move to ${route.destination_id}`}</button></td></tr>)}</tbody>
           </table>
         </TableScroll>
-      </section>
-      <section aria-labelledby="movement-heading">
-        <h2 id="movement-heading">Movement weight</h2>
-        <TableScroll>
-          <table aria-label="Movement weight">
-            <tbody>
-              <tr><th scope="row">Carrying weight</th><td>{currentUser.carried_weight}</td></tr>
-              <tr><th scope="row">Movement weight threshold</th><td>{currentUser.movement_weight_threshold}</td></tr>
-            </tbody>
-          </table>
-        </TableScroll>
-        {isOverweight && <p role="alert">Cannot move while overweight.</p>}
       </section>
       {feedback}
     </section>
@@ -170,15 +157,6 @@ function ItemsTab({ currentUser, actionPending, pendingActionKind, hasAction, on
           <table aria-label="Inventory">
             <thead><tr><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Status</th><th scope="col">Durability</th><th scope="col">Controls</th></tr></thead>
             <tbody>{currentUser.inventory.length === 0 ? <EmptyRow colSpan={5}>Inventory is empty.</EmptyRow> : currentUser.inventory.map((entry) => <tr key={`${entry.item.id}-${entry.durability_status}`}><th scope="row">{entry.item.display_name}</th><td>{entry.item.display_name}: {entry.quantity}</td><td>Status: {entry.durability_status}</td><td>Durability: {entry.durability_percentage}%</td><td><TransferQuantity operation="drop" assetType="item" assetID={entry.item.id} itemStatus={entry.durability_status} displayName={entry.item.display_name} max={entry.quantity} disabled={actionPending} pending={dropPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "item", asset_id: entry.item.id, quantity, item_status: entry.durability_status })} /></td></tr>)}</tbody>
-          </table>
-        </TableScroll>
-      </section>
-      <section aria-labelledby="resources-heading">
-        <h2 id="resources-heading">Resources</h2>
-        <TableScroll>
-          <table aria-label="Resources">
-            <thead><tr><th scope="col">Resource</th><th scope="col">Quantity</th><th scope="col">Controls</th></tr></thead>
-            <tbody>{currentUser.resources.map((entry) => <tr key={entry.resource.id}><th scope="row">{entry.resource.display_name}</th><td>{entry.resource.display_name}: {entry.quantity}</td><td><TransferQuantity operation="drop" assetType="resource" assetID={entry.resource.id} displayName={entry.resource.display_name} max={entry.quantity} disabled={actionPending} pending={dropPending} onSubmit={(quantity) => onTransfer("drop", { asset_type: "resource", asset_id: entry.resource.id, quantity })} /></td></tr>)}</tbody>
           </table>
         </TableScroll>
       </section>
@@ -424,7 +402,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     character: characterTab,
   } satisfies Record<GameShellTab, ReactNode>;
 
-  return <GameShell player={{ display_name: currentUser.display_name, ap: currentUser.ap, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
+  return <GameShell player={{ ap: currentUser.ap, carried_weight: currentUser.carried_weight, movement_weight_threshold: currentUser.movement_weight_threshold, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
 }
 
 export default function App() {

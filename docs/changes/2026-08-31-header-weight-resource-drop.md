@@ -17,6 +17,12 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/server_test.go
   - internal/authapi/store_test.go
+  - web/src/App.tsx
+  - web/src/App.test.tsx
+  - web/src/GameShell.tsx
+  - web/src/GameShell.test.tsx
+  - web/src/browser-fixture.tsx
+  - web/src/styles.css
 req_ref: REQ-007, REQ-012, REQ-013, REQ-014
 base_branch: main
 scope: "Tracks fixed header content, weight presentation, duplicate state removal, and Resource Drop removal."
@@ -80,7 +86,7 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
   - REQ-013.22: Item Transfer 必須指定 `active` 或 `expired` 堆疊。Resource Pickup 不得指定 Item 狀態。
   - REQ-013.23: Item 狀態缺少、不合法或不適用時，Transfer 必須失敗，且所有狀態保持不變。
 
-- [ ] Task 2 [parallel: no]: Update `web/src/App.tsx` and `web/src/GameShell.tsx`, with presentation support in `web/src/styles.css`. Keep Item Drop in the Items Inventory. Keep ground Item and Resource tables plus Pickup in Area. Remove only the Map weight block, Items Resource balance table, Resource Drop control, and player name header entry. Pass authoritative current and maximum weight to the fixed header. Render row 1 as AP, HP placeholder, and `Weight <current>/<max>`. Use green at or below 75%, yellow above 75% through 100%, and red above 100%. Add App and GameShell tests in the same commit for exact boundaries, retained controls and tables, authoritative state updates, and accessible safe, warning, or overweight names that do not rely only on color. `web/src/styles.css` is a presentation support file; the two source/logic files are App and GameShell.
+- [x] Task 2 [parallel: no]: Update `web/src/App.tsx` and `web/src/GameShell.tsx`, with presentation support in `web/src/styles.css`. Keep Item Drop in the Items Inventory. Keep ground Item and Resource tables plus Pickup in Area. Remove only the Map weight block, Items Resource balance table, Resource Drop control, and player name header entry. Pass authoritative current and maximum weight to the fixed header. Render row 1 as AP, HP placeholder, and `Weight <current>/<max>`. Use green at or below 75%, yellow above 75% through 100%, and red above 100%. Add App and GameShell tests in the same commit for exact boundaries, retained controls and tables, authoritative state updates, and accessible safe, warning, or overweight names that do not rely only on color. `web/src/styles.css` is a presentation support file; the two source/logic files are App and GameShell.
   - REQ-007.4: 玩家必須能在固定 header 看到持有量大於 0 的 Resource 與 quantity。持有量為 0 的 Resource 不必顯示。
   - REQ-012.2: App Shell 頂端必須固定顯示兩排核心狀態，且不得隨主分頁切換。
   - REQ-012.3: 第一排必須依序顯示目前 AP、目前 HP 與 `Weight <current>/<max>`，不得顯示玩家名稱。
@@ -121,6 +127,14 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 - Rejection logs include user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without session credentials.
 
 ## Review Issues
+
+## Task 2 Verification
+
+- `npm test -- --run` passed: 145 tests.
+- `npm run build` passed: TypeScript compilation and Vite production build.
+- Fixed header now renders AP, HP placeholder, and authoritative `Weight <current>/<max>` without player name.
+- Weight boundaries use safe at 75%, warning above 75% through 100%, and overweight above 100%, with accessible state names.
+- Items retains Item Drop and removes Resource balance and Resource Drop. Area retains ground Item and Resource tables with Pickup.
 
 ## Plan Review Issues
 

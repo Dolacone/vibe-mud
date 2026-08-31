@@ -63,6 +63,18 @@ a:focus-visible {
   padding: .45rem .65rem;
 }
 
+.game-shell__status-item--safe {
+  background: #1d5b3a;
+}
+
+.game-shell__status-item--warning {
+  background: #765b16;
+}
+
+.game-shell__status-item--overweight {
+  background: #7b2929;
+}
+
 main.game-shell__content {
   box-sizing: border-box;
   height: 100%;

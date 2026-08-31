@@ -16,8 +16,9 @@ const TAB_LABELS: GameShellLabels = {
 const RESOURCE_ORDER = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"] as const;
 
 export type GameShellPlayer = {
-  display_name: string;
   ap: number;
+  carried_weight: number;
+  movement_weight_threshold: number;
   resources: Resource[];
 };
 
@@ -42,11 +43,20 @@ function isGameShellTab(value: string): value is GameShellTab {
   return (GAME_SHELL_TABS as readonly string[]).includes(value);
 }
 
+function weightState(current: number, maximum: number) {
+  const ratio = maximum > 0 ? current / maximum : current > 0 ? Infinity : 0;
+  if (ratio <= 0.75) return "safe";
+  if (ratio <= 1) return "warning";
+  return "overweight";
+}
+
 export function GameShell({ player, tabContent, activeTab, defaultTab = "map", onTabChange, hp }: GameShellProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<GameShellTab>(defaultTab);
   const selectedTab = activeTab ?? uncontrolledTab;
   const tabButtons = useRef<Partial<Record<GameShellTab, HTMLButtonElement>>>({});
   const visibleResources = orderedNonZeroResources(player.resources);
+  const currentWeightState = weightState(player.carried_weight, player.movement_weight_threshold);
+  const weightLabel = `Weight ${player.carried_weight}/${player.movement_weight_threshold} (${currentWeightState})`;
 
   const activateTab = (tab: GameShellTab) => {
     if (activeTab === undefined) setUncontrolledTab(tab);
@@ -64,14 +74,14 @@ export function GameShell({ player, tabContent, activeTab, defaultTab = "map", o
     <div className="game-shell">
       <header className="game-shell__header" aria-label="玩家狀態">
         <div className="game-shell__status-row" aria-label="核心狀態">
-          <span className="game-shell__status-item" aria-label={`玩家名稱 ${player.display_name}`}>
-            <span aria-hidden="true">{player.display_name}</span>
-          </span>
           <span className="game-shell__status-item" aria-label={`目前 AP ${player.ap}`}>
             <span aria-hidden="true">AP {player.ap}</span>
           </span>
           <span className="game-shell__status-item" aria-label={hp === undefined ? "目前 HP 尚未實作" : `目前 HP ${hp}`}>
             <span aria-hidden="true">HP {hp === undefined ? "--" : hp}</span>
+          </span>
+          <span className={`game-shell__status-item game-shell__status-item--weight game-shell__status-item--${currentWeightState}`} aria-label={weightLabel}>
+            <span aria-hidden="true">{weightLabel}</span>
           </span>
         </div>
         <div className="game-shell__status-row" aria-label="Resource 持有量">
