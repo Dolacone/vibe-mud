@@ -1,6 +1,6 @@
 ---
 title: "Player name and tab requirements"
-status: Refactored
+status: Done
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -127,7 +127,7 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
   - REQ-024.2: `角色` 必須提供修改 Player name 的操作。
   - REQ-024.3: 既有 Rest 操作必須保留在 `角色`，直到後續 REQ 指定其他位置。
   - REQ-024.4: `角色` 不得顯示應用程式 user ID、Google 顯示名稱或 email。
-- REQ-024.5: `角色` 不得顯示尚未實作的裝備、技能或等級 placeholder。
+  - REQ-024.5: `角色` 不得顯示尚未實作的裝備、技能或等級 placeholder。
 
 ## Verification
 
