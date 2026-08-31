@@ -3179,6 +3179,80 @@ func TestUnnamedPlayerCannotUseActionOrTransferEndpoints(t *testing.T) {
 	}
 }
 
+func TestPlayerNameGateFailsClosedForMissingOrUnreadableProfile(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		breakTable func(t *testing.T, store *Store, userID int64)
+	}{
+		{
+			name: "missing profile",
+			breakTable: func(t *testing.T, store *Store, userID int64) {
+				t.Helper()
+				if _, err := store.db.Exec(`DELETE FROM player_profiles WHERE user_id = ?`, userID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "profile lookup error",
+			breakTable: func(t *testing.T, store *Store, _ int64) {
+				t.Helper()
+				if _, err := store.db.Exec(`DROP TABLE player_profiles; CREATE TABLE player_profiles (user_id INTEGER PRIMARY KEY, player_name TEXT)`); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, store := newTestServer(t, &fakeProvider{}, &now)
+			identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-name-gate-"+test.name, test.name+"@example.com", "Gate")
+			if err != nil {
+				t.Fatal(err)
+			}
+			nameTestPlayer(t, store, identity)
+			if _, err := store.db.Exec(`INSERT INTO player_inventory (user_id, item_id, quantity) VALUES (?, 'wood', 1)`, identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CreateSession(identity.ID, "player-name-gate-session", now.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.breakTable(t, store, identity.ID)
+
+			for _, request := range []struct {
+				name string
+				path string
+				body string
+			}{
+				{name: "action", path: "/api/actions/rest"},
+				{name: "transfer", path: "/api/transfers/drop", body: `{"asset_type":"item","asset_id":"wood","quantity":1,"item_status":"active"}`},
+			} {
+				t.Run(request.name, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+					req.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "player-name-gate-session"})
+					response := httptest.NewRecorder()
+					server.Routes().ServeHTTP(response, req)
+					if response.Code != http.StatusInternalServerError || response.Body.String() != `{"error":"current user unavailable"}`+"\n" {
+						t.Fatalf("profile gate response = %d/%q", response.Code, response.Body.String())
+					}
+				})
+			}
+
+			after, err := store.GetPlayerState(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("profile gate changed player state: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
 func TestDurabilityPercentageAPIUsesCeilingCapAndZero(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	server, store := newTestServer(t, &fakeProvider{}, &now)

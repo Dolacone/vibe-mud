@@ -605,7 +605,11 @@ func (s *Server) requirePlayerName(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		profile, err := s.store.GetPlayerProfile(session.UserID)
-		if err == nil && profile.PlayerName == nil {
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "current user unavailable")
+			return
+		}
+		if profile.PlayerName == nil {
 			s.writeError(w, http.StatusConflict, "player name required")
 			return
 		}
