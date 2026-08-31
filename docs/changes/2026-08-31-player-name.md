@@ -1,6 +1,6 @@
 ---
 title: "Player name and tab requirements"
-status: Issues-confirmed
+status: Ready-to-review
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -143,7 +143,7 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
 - [x] [Major] `requirePlayerName` 在 Player profile 查詢失敗或遺失時放行 Action 與 Transfer。命名閘門因此採 fail-open，未命名玩家可在 profile 缺漏或資料庫讀取錯誤時執行遊戲操作。
 - [x] [Major] 角色改名收到 HTTP 401 時，前端只顯示 session 過期訊息。它仍保留 App Shell 與先前 Player name，違反 REQ-002.7 的未登入畫面及身分清除要求。Task 4 也缺少此結果與一般錯誤結果的 App 測試。
 - [x] [Major] REQ-020.8 的 Plan Review Issue 尚未解決。API 測試只對預設空狀態執行初次命名，未設定非預設 AP、Inventory、Resource 或 Location，也未執行後續改名。測試無法偵測資產刪除或狀態重設，卻已將對應問題標為完成。
-- [ ] [Major] 修正完成後，變更文件仍維持 `Issues-confirmed`。Implement 階段未依生命週期改成 `Ready-to-review`，因此不符合 review 入口條件。
+- [x] [Major] 修正完成後，變更文件仍維持 `Issues-confirmed`。Implement 階段未依生命週期改成 `Ready-to-review`，因此不符合 review 入口條件。
 
 ## Plan Review Issues
 
