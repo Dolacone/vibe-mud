@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Refactored
+status: Done
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31

@@ -7,6 +7,9 @@
 - Added install metadata and home-screen icons for standalone PWA launch.
 - Added explicit Web App Manifest content type and production-container verification.
 - Kept browser navigation unchanged without adding a Service Worker or offline behavior.
+- Moved carrying weight into the fixed header with green, yellow, and red thresholds.
+- Removed duplicate weight and Resource balances from gameplay tabs.
+- Rejected Resource Drop while retaining Item Drop and Resource Pickup.
 
 ## 2026-08-30
 
