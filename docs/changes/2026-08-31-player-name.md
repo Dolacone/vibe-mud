@@ -1,6 +1,6 @@
 ---
 title: "Player name and tab requirements"
-status: Done
+status: Ready-to-review
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -14,6 +14,14 @@ source_paths:
   - internal/authapi/store_test.go
   - internal/authapi/server.go
   - internal/authapi/server_test.go
+  - requirements/BEHAVIOR.md
+  - requirements/REQ-002.md
+  - requirements/REQ-012.md
+  - requirements/REQ-020.md
+  - requirements/REQ-021.md
+  - requirements/REQ-022.md
+  - requirements/REQ-023.md
+  - requirements/REQ-024.md
   - web/src/auth.ts
   - web/src/auth.test.ts
   - web/src/App.tsx
