@@ -2,23 +2,25 @@
 - Fly.io 前端透過同源後端 session 確認登入狀態並進入遊戲介面 -> REQ-002
 - 玩家登入時取得依完整分鐘恢復且上限為 3000 的目前 AP -> REQ-003
 - 已登入玩家可在後端回傳 `rest` 時消耗 1 AP 並保留結果 -> REQ-004
-- 已登入玩家可沿後端依目前狀態回傳的 Route 執行 `move`，原子更新 AP 與位置 -> REQ-005
+- 已登入玩家可沿 Route 執行 `move`；Monster 攔截時不扣 AP、不移動並立即戰鬥 -> REQ-005
 - 已登入玩家可在後端回傳 `gather` 時原子消耗 AP 並累加持久化 Inventory -> REQ-006
 - 玩家分別持有 8 種 typed Resource，固定 header 顯示持有量大於 0 的持久化 quantity -> REQ-007
 - 已登入玩家可使用後端依目前狀態回傳的 Convert method，原子轉換 Active Item 並判定 Essence -> REQ-008
 - 已登入玩家可執行後端依目前狀態回傳的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可依後端回傳的 recipe 建立 Building Lv1，由同地點玩家共同施工，完成後不再取得施工數值 -> REQ-010
 - 完成的 Building 會自然耗損，以整數百分比顯示耐久，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
-- 已登入頁面使用 mobile-first App Shell，固定顯示核心狀態與四個獨立主分頁 -> REQ-012
+- 已登入頁面使用 mobile-first App Shell，固定顯示 AP、實際 HP、Resource、重量與四個主分頁 -> REQ-012
 - 玩家可在目前 Location 免費 Transfer 資產，Item 可以 Drop，Resource 只能 Pickup，失效 Item 不能 Pickup -> REQ-013
 - 每種 Item 與 Resource 具有獨立重量，玩家可超重持有資產，但超重時不能 Move -> REQ-014
 - 所有操作產生的 Item 於 1 小時後失效，以整數百分比顯示耐久，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
 - Building owner 可安裝或拆除 extension，同地點玩家可共同施工，completed extension 不再回傳施工數值 -> REQ-016
 - 玩家可使用後端依目前狀態回傳的選項製作並建造 Sawmill T1，以相同 AP 工作單位提高 Wood Convert capacity -> REQ-017
-- 後端只向前端回傳玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe -> REQ-018
+- 後端只向前端回傳玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe，並保留可見世界狀態 -> REQ-018
 - 前端公開提供 PWA standalone metadata 與圖示，production container 保持一般網頁路徑且不註冊 Service Worker -> REQ-019
 - 玩家初次進入遊戲時必須設定唯一 Player name，之後可免費改名 -> REQ-020
-- 地圖主分頁顯示目前 Location、可抵達 Route 與 Move 入口 -> REQ-021
-- 地區主分頁顯示目前 Location 的採集、建築與地面資產 -> REQ-022
+- 地圖主分頁顯示目前 Location、Route、Move 與攔截戰鬥結果 -> REQ-021
+- 地區主分頁顯示採集、建築、地面資產、Monster 數量與主動攻擊 -> REQ-022
 - 道具主分頁顯示 Inventory、Convert 與 Craft，不重複 header Resource -> REQ-023
 - 角色主分頁顯示 Player name、改名與 Rest，不顯示登入身分或未實作功能 -> REQ-024
+- 每個 Location 依 timestamp 與 database rule 累積未定 type 的 Monster，並依數量計算移動攔截率 -> REQ-025
+- 玩家可消耗 30 AP 主動攻擊 Monster，或被免費攔截，並由後端自動結算 HP、傷害與掉落 -> REQ-026
