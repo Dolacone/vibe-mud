@@ -257,8 +257,8 @@ export type ResourceTransferRequest = {
 };
 
 export type TransferRequest = ItemTransferRequest | ResourceTransferRequest;
-export type DropRequest = TransferRequest;
-export type PickupRequest = TransferRequest;
+export type DropRequest = ItemTransferRequest;
+export type PickupRequest = ItemTransferRequest | ResourceTransferRequest;
 
 export type TransferResult =
   | ({ status: "success" } & PlayerState)

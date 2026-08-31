@@ -44,6 +44,7 @@ var (
 	ErrExtensionCompleted          = errors.New("extension is already completed")
 	ErrTransferAssetNotFound       = errors.New("transfer asset not found")
 	ErrInsufficientTransferAsset   = errors.New("insufficient transfer asset")
+	ErrResourceDropNotAllowed      = errors.New("resource drop is not allowed")
 )
 
 type Store struct {
@@ -1802,6 +1803,9 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 	if err != nil {
 		return PlayerState{}, err
 	}
+	if assetType == "resource" {
+		return PlayerState{}, ErrResourceDropNotAllowed
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("begin drop: %w", err)
@@ -1838,22 +1842,6 @@ func (s *Store) Drop(userID int64, assetType, assetID string, quantity int, item
 		if err := addItemHoldingTx(tx, "ground_items", "location_id", locationID, assetID, status, quantity, expiresAt); err != nil {
 			_ = tx.Rollback()
 			return PlayerState{}, fmt.Errorf("add ground item: %w", err)
-		}
-	case "resource":
-		if err := requireResourceTx(tx, assetID); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, err
-		}
-		if err := consumeTransferQuantityTx(tx, "player_resources", "user_id", userID, "resource_id", assetID, quantity, "dropped resource"); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, err
-		}
-		if _, err := tx.Exec(`
-INSERT INTO ground_resources (location_id, resource_id, quantity)
-VALUES (?, ?, ?)
-ON CONFLICT (location_id, resource_id) DO UPDATE SET quantity = ground_resources.quantity + excluded.quantity`, locationID, assetID, quantity); err != nil {
-			_ = tx.Rollback()
-			return PlayerState{}, fmt.Errorf("add ground resource: %w", err)
 		}
 	}
 	state, err := s.getPlayerStateTx(tx, userID, now)

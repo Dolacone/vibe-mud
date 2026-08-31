@@ -1035,6 +1035,10 @@ func (s *Server) transfer(w http.ResponseWriter, r *http.Request, operation stri
 		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusBadRequest, err.Error(), "invalid_argument")
 		return
 	}
+	if errors.Is(err, ErrResourceDropNotAllowed) {
+		s.writeTransferState(w, r, session.UserID, operation, request, http.StatusBadRequest, err.Error(), "resource_drop_not_allowed")
+		return
+	}
 	if errors.Is(err, ErrInsufficientTransferAsset) {
 		reason := "insufficient_source"
 		if pickup && request.AssetType == "item" && request.ItemStatus == "expired" {

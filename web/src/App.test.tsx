@@ -273,14 +273,13 @@ describe("App gameplay tab integration", () => {
   it("keeps the authoritative header and four-tab navigation mounted", async () => {
     await renderAuthenticated();
 
-    expect(screen.getByLabelText("玩家名稱 Ada")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 HP 尚未實作")).toHaveTextContent("HP --");
+    expect(screen.getByLabelText("Weight 0/1000")).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "主分頁" })).getAllByRole("button")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "地圖" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("To forest_edge (20 AP)");
-    expect(screen.getByRole("table", { name: "Movement weight" })).toHaveTextContent("Carrying weight");
-    expect(screen.getByRole("table", { name: "Movement weight" })).toHaveTextContent("Movement weight threshold");
+    expect(screen.queryByRole("table", { name: "Movement weight" })).not.toBeInTheDocument();
   });
 
   it("contains every gameplay table in a scroll wrapper with scoped column headers", async () => {
@@ -345,8 +344,7 @@ describe("App gameplay tab integration", () => {
     await selectTab("道具");
 
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Wood: 4");
-    expect(screen.getByRole("table", { name: "Resources" }).querySelectorAll("tbody > tr")).toHaveLength(8);
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 6");
+    expect(screen.queryByRole("table", { name: "Resources" })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Convert" })).toHaveTextContent("Hand Wood Convert");
     expect(screen.getByRole("table", { name: "Convert" })).toHaveTextContent("Provider extension IDs: 8");
     expect(screen.getByRole("combobox", { name: "Provider for Sawmill Wood Convert" })).toHaveTextContent("Sawmill T1");
@@ -395,12 +393,18 @@ describe("App gameplay tab integration", () => {
     expect(move).toHaveBeenCalledWith("forest_edge");
   });
 
+  it("applies authoritative weight updates in the fixed header", async () => {
+    await renderAuthenticated();
+    move.mockResolvedValue({ ...forestState, status: "success", ap: 2980, carried_weight: 751, movement_weight_threshold: 1000 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to forest_edge" }));
+    await waitFor(() => expect(screen.getByLabelText("Weight 751/1000")).toBeInTheDocument());
+  });
+
   it("shows carrying weight and the backend-filtered Route list", async () => {
     await renderAuthenticated({ ...campState, carried_weight: 1001, routes: [], available_actions: ["rest", "convert", "craft", "build"] });
 
-    expect(screen.getByRole("table", { name: "Movement weight" })).toHaveTextContent("1001");
-    expect(screen.getByRole("table", { name: "Movement weight" })).toHaveTextContent("1000");
-    expect(screen.getByRole("alert")).toHaveTextContent("Cannot move while overweight.");
+    expect(screen.getByLabelText("Weight 1001/1000")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Move to/ })).not.toBeInTheDocument();
   });
 
@@ -417,7 +421,6 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move to forest_edge" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("backend unavailable"));
     expect(screen.getByRole("navigation", { name: "主分頁" })).toBeInTheDocument();
-    expect(screen.getByLabelText("玩家名稱 Ada")).toBeInTheDocument();
 
     await selectTab("角色");
     rest.mockRejectedValue(new Error("rest rejected"));
@@ -596,20 +599,6 @@ describe("App gameplay tab integration", () => {
     expect(within(screen.getByRole("table", { name: "Ground Items" })).getByText("4")).toBeInTheDocument();
   });
 
-  it("drops a Resource with a positive integer quantity", async () => {
-    await renderAuthenticated(transferState);
-    await selectTab("道具");
-    drop.mockResolvedValue({ status: "success", ...transferState, resources: resourcesWith("wood", 4), ground_resources: [{ resource: { id: "stone", display_name: "Stone" }, quantity: 5 }] });
-
-    const resourcesTable = screen.getByRole("table", { name: "Resources" });
-    const input = within(resourcesTable).getByRole("spinbutton", { name: "Drop quantity for Wood" });
-    fireEvent.change(input, { target: { value: "2" } });
-    fireEvent.submit(input.closest("form")!);
-    await waitFor(() => expect(screen.getByText("Drop succeeded.")).toBeInTheDocument());
-    expect(drop).toHaveBeenCalledWith({ asset_type: "resource", asset_id: "wood", quantity: 2 });
-    expect(within(resourcesTable).getByText("Wood: 4")).toBeInTheDocument();
-  });
-
   it("picks up an Item with the requested quantity", async () => {
     const nextState = { ...transferState, inventory: [activeItem({ id: "wood", display_name: "Wood" }, 5)], ground_items: [activeItem({ id: "wood_component", display_name: "Wood Component" }, 1)] };
     await renderAuthenticated(transferState);
@@ -656,7 +645,7 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByLabelText("目前 AP 2998")).toBeInTheDocument();
     expect(within(groundResources).getByText("1")).toBeInTheDocument();
     await selectTab("道具");
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 8");
+    expect(screen.getByLabelText("Resource 持有量")).toHaveTextContent("Wood 8");
   });
 
   it("prevents duplicate transfers while one request is pending", async () => {
@@ -911,7 +900,7 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Convert" }));
     await waitFor(() => expect(screen.getByText("Convert succeeded.")).toBeInTheDocument());
     expect(screen.getByLabelText("目前 AP 2999")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1");
+    expect(screen.getByLabelText("Resource 持有量")).toHaveTextContent("Wood 1");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
     expect(convert).toHaveBeenCalledTimes(1);
   });
@@ -924,7 +913,7 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Craft Wood Component" }));
     await waitFor(() => expect(screen.getByText("Craft succeeded.")).toBeInTheDocument());
     expect(screen.getByLabelText("目前 AP 2990")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 0");
+    expect(screen.queryByLabelText("Resource 持有量")).not.toHaveTextContent("Wood 0");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Wood Component: 1");
     expect(craft).toHaveBeenCalledWith("wood_component");
   });
@@ -946,7 +935,7 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Craft Wood Component" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
     expect(screen.getByLabelText("目前 AP 5")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 2");
+    expect(screen.getByLabelText("Resource 持有量")).toHaveTextContent("Wood 2");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Inventory is empty.");
   });
 
@@ -975,7 +964,7 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Convert" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("insufficient action points"));
     expect(screen.getByLabelText("目前 AP 0")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 3");
+    expect(screen.getByLabelText("Resource 持有量")).toHaveTextContent("Wood 3");
     expect(screen.getByRole("table", { name: "Inventory" })).toHaveTextContent("Wood: 2");
   });
 
@@ -991,7 +980,7 @@ describe("App gameplay tab integration", () => {
     fireEvent.click(button);
     expect(convert).toHaveBeenCalledTimes(1);
     resolveConvert?.({ status: "success", ...campState, ap: 2999, resources: resourcesWith("wood", 1) });
-    await waitFor(() => expect(screen.getByRole("table", { name: "Resources" })).toHaveTextContent("Wood: 1"));
+    await waitFor(() => expect(screen.getByLabelText("Resource 持有量")).toHaveTextContent("Wood 1"));
     expect(screen.getByRole("button", { name: "Convert" })).toBeEnabled();
   });
 
@@ -1114,7 +1103,6 @@ describe("App gameplay tab integration", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Loading");
     await screen.findByRole("heading", { name: "地圖" });
-    expect(screen.getByLabelText("玩家名稱 Ada")).toBeInTheDocument();
     await selectTab("角色");
     expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("1");
     expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("ada@example.com");

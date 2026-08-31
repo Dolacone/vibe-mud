@@ -4,13 +4,13 @@
 - 已登入玩家可在後端回傳 `rest` 時消耗 1 AP 並保留結果 -> REQ-004
 - 已登入玩家可沿後端依目前狀態回傳的 Route 執行 `move`，原子更新 AP 與位置 -> REQ-005
 - 已登入玩家可在後端回傳 `gather` 時原子消耗 AP 並累加持久化 Inventory -> REQ-006
-- 玩家分別持有 8 種 typed Resource，並能查看各自的持久化 quantity -> REQ-007
+- 玩家分別持有 8 種 typed Resource，固定 header 顯示持有量大於 0 的持久化 quantity -> REQ-007
 - 已登入玩家可使用後端依目前狀態回傳的 Convert method，原子轉換 Active Item 並判定 Essence -> REQ-008
 - 已登入玩家可執行後端依目前狀態回傳的 `craft` recipe，原子消耗 AP 與 inputs 並取得 output Item -> REQ-009
 - 玩家可依後端回傳的 recipe 建立 Building Lv1，由同地點玩家共同施工，完成後不再取得施工數值 -> REQ-010
 - 完成的 Building 會自然耗損，以整數百分比顯示耐久，Disabled 後停用 extension 並保留 7 天，符合條件的同地點玩家能維修 -> REQ-011
-- 已登入頁面使用 mobile-first App Shell，以固定核心狀態與地圖、地區、道具、角色四個主分頁呈現遊戲 -> REQ-012
-- 玩家可在目前 Location 免費 Transfer 資產，Item 必須指定狀態，失效 Item 可以 Drop 但不能 Pickup -> REQ-013
+- 已登入頁面使用 mobile-first App Shell，固定顯示 AP、HP、Resource 與分級重量，不在主內容重複核心狀態 -> REQ-012
+- 玩家可在目前 Location 免費 Transfer 資產，Item 可以 Drop，Resource 只能 Pickup，失效 Item 不能 Pickup -> REQ-013
 - 每種 Item 與 Resource 具有獨立重量，玩家可超重持有資產，但超重時不能 Move -> REQ-014
 - 所有操作產生的 Item 於 1 小時後失效，以整數百分比顯示耐久，分開保存 Active 與 Expired 堆疊，失效後保留 1 天 -> REQ-015
 - Building owner 可安裝或拆除 extension，同地點玩家可共同施工，completed extension 不再回傳施工數值 -> REQ-016

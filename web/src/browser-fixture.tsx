@@ -27,7 +27,7 @@ function BrowserFixture() {
     character: <FixturePanel title="角色"><p>Fixture character progression placeholders.</p></FixturePanel>,
   } satisfies Record<GameShellTab, ReactNode>;
 
-  return <div data-fixture-root="mobile-shell" data-fixture-safe-area-top="24px" data-fixture-safe-area-bottom="32px" style={fixtureSafeAreaStyle}><GameShell player={{ display_name: "Long fixture player name for horizontal swipe verification", ap: 123, resources: fixtureResources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} /></div>;
+  return <div data-fixture-root="mobile-shell" data-fixture-safe-area-top="24px" data-fixture-safe-area-bottom="32px" style={fixtureSafeAreaStyle}><GameShell player={{ ap: 123, carried_weight: 750, movement_weight_threshold: 1000, resources: fixtureResources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} /></div>;
 }
 
 createRoot(document.getElementById("root")!).render(<BrowserFixture />);
