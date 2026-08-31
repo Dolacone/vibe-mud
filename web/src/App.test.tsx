@@ -9,6 +9,7 @@ vi.mock("./auth", async () => {
   return {
     ...actual,
     getCurrentUser: vi.fn(),
+    updatePlayerName: vi.fn(),
     rest: vi.fn(),
     move: vi.fn(),
     gather: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock("./auth", async () => {
 });
 
 const getCurrentUser = vi.mocked(auth.getCurrentUser);
+const updatePlayerName = vi.mocked(auth.updatePlayerName);
 const rest = vi.mocked(auth.rest);
 const move = vi.mocked(auth.move);
 const gather = vi.mocked(auth.gather);
@@ -235,7 +237,12 @@ const allGameplayState: auth.PlayerState = {
   buildings: [underConstruction, completedWithExtension],
 };
 
-const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", player_name: null, ...state } });
+const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", player_name: "Ada", ...state } });
+const namedUser = (): auth.CurrentUser => {
+  const result = authenticated();
+  if (result.status !== "authenticated") throw new Error("test user must be authenticated");
+  return result.user;
+};
 const renderAuthenticated = async (state: auth.PlayerState = campState, displayName = "Ada") => {
   getCurrentUser.mockResolvedValue(authenticated(state, displayName));
   render(<App />);
@@ -255,6 +262,7 @@ const navigationButtons = () => screen.getAllByRole("button", { hidden: true }).
 describe("App gameplay tab integration", () => {
   beforeEach(() => {
     getCurrentUser.mockReset();
+    updatePlayerName.mockReset();
     rest.mockReset();
     move.mockReset();
     gather.mockReset();
@@ -353,16 +361,77 @@ describe("App gameplay tab integration", () => {
     expect(within(screen.getByRole("table", { name: "Inventory" })).queryByRole("button", { name: "Drop Wood (expired)" })).not.toBeInTheDocument();
   });
 
-  it("keeps Rest, identity, and explicit progression placeholders in Character", async () => {
+  it("keeps Rest and shows only the game-owned Player name in Character", async () => {
     await renderAuthenticated();
     await selectTab("角色");
 
-    expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("ada@example.com");
+    expect(screen.getByText("Player name: Ada")).toBeInTheDocument();
+    expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Rest" })).toBeEnabled();
-    expect(screen.getByRole("table", { name: "Progression" })).toHaveTextContent("Equipment");
-    expect(screen.getByRole("table", { name: "Progression" })).toHaveTextContent("Skills");
-    expect(screen.getByRole("table", { name: "Progression" })).toHaveTextContent("Level");
-    expect(screen.getByRole("table", { name: "Progression" })).toHaveTextContent("Not implemented");
+    expect(screen.queryByText("Equipment")).not.toBeInTheDocument();
+    expect(screen.queryByText("Skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Level")).not.toBeInTheDocument();
+  });
+
+  it("requires an unnamed player to name themselves before entering the game", async () => {
+    const unnamed = { ...namedUser(), player_name: null };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: unnamed });
+    updatePlayerName.mockResolvedValue({ status: "success", user: { ...unnamed, player_name: "New Player" } });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Choose your Player name" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "主分頁" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "地圖" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "New Player" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enter game" }));
+
+    expect(await screen.findByRole("heading", { name: "地圖" })).toBeInTheDocument();
+    expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
+    expect(updatePlayerName).toHaveBeenCalledWith("New Player");
+    expect(getCurrentUser).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{ status: "invalid", error: "invalid player name" } as const, "invalid player name"],
+    [{ status: "unavailable", error: "player name unavailable" } as const, "player name unavailable"],
+  ])("keeps the naming form and current state after a %s response", async (result, message) => {
+    const unnamed = { ...namedUser(), player_name: null };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: unnamed });
+    updatePlayerName.mockResolvedValue(result);
+    render(<App />);
+    await screen.findByRole("heading", { name: "Choose your Player name" });
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Rejected" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enter game" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("heading", { name: "Choose your Player name" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "主分頁" })).not.toBeInTheDocument();
+  });
+
+  it("renames from Character without reloading and applies the authoritative user", async () => {
+    await renderAuthenticated();
+    await selectTab("角色");
+    const nextUser = { ...namedUser(), player_name: "Renamed" };
+    updatePlayerName.mockResolvedValue({ status: "success", user: nextUser });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Player name" }));
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Player name" }));
+
+    expect(await screen.findByText("Player name: Renamed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename Player name" })).toBeInTheDocument();
+    expect(getCurrentUser).toHaveBeenCalledTimes(1);
+    expect(updatePlayerName).toHaveBeenCalledWith("Renamed");
+  });
+
+  it("retains the current Character name after rename rejection", async () => {
+    await renderAuthenticated();
+    await selectTab("角色");
+    updatePlayerName.mockResolvedValue({ status: "unavailable", error: "player name unavailable" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Player name" }));
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Taken" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Player name" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("player name unavailable");
+    expect(screen.getByText("Player name: Ada")).toBeInTheDocument();
   });
 
   it("never reconstructs gameplay controls when global availability omits them", async () => {
@@ -1097,15 +1166,15 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByLabelText("目前 AP 2")).toBeInTheDocument();
   });
 
-  it("loads and displays only the backend-confirmed identity", async () => {
+  it("loads and displays only the backend-confirmed Player name", async () => {
     getCurrentUser.mockResolvedValue(authenticated());
     render(<App />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Loading");
     await screen.findByRole("heading", { name: "地圖" });
     await selectTab("角色");
-    expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("1");
-    expect(screen.getByRole("table", { name: "Character identity" })).toHaveTextContent("ada@example.com");
+    expect(screen.getByText("Player name: Ada")).toBeInTheDocument();
+    expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument();
     expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
     expect(screen.queryByText(/role|token/i)).not.toBeInTheDocument();
   });

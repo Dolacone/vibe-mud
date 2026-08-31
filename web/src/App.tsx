@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { build, contributeConstruction, contributeExtensionConstruction, convert, craft, drop, gather, getCurrentUser, installExtension, move, pickup, removeExtension, repairBuilding, rest, type AuthResult, type BuildResult, type ConversionMethod, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { build, contributeConstruction, contributeExtensionConstruction, convert, craft, drop, gather, getCurrentUser, installExtension, move, pickup, removeExtension, repairBuilding, rest, updatePlayerName, type AuthResult, type BuildResult, type ConversionMethod, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerNameResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
 import GameShell, { type GameShellTab } from "./GameShell";
 
 type PageState = AuthResult | { status: "loading" };
@@ -183,22 +183,43 @@ function ItemsTab({ currentUser, actionPending, pendingActionKind, hasAction, on
   );
 }
 
-function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction, onRest, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onRest: () => void; feedback: ReactNode }) {
+function PlayerNameFeedback({ result }: { result: PlayerNameResult }) {
+  if (result.status === "invalid" || result.status === "unavailable") return <p role="alert">{result.error}</p>;
+  if (result.status === "unauthenticated") return <p role="alert">Your session has expired.</p>;
+  if (result.status === "error") return <p role="alert">{result.error.message}</p>;
+  return null;
+}
+
+function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction, onRest, onPlayerUpdated, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onRest: () => void; onPlayerUpdated: (user: CurrentUser) => void; feedback: ReactNode }) {
   const restPending = actionPending && pendingActionKind === "rest";
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [nameInput, setNameInput] = useState(currentUser.player_name ?? "");
+  const [renamePending, setRenamePending] = useState(false);
+  const [renameResult, setRenameResult] = useState<PlayerNameResult | null>(null);
+  const submitRename = async (event: FormEvent) => {
+    event.preventDefault();
+    setRenamePending(true);
+    const result = await updatePlayerName(nameInput);
+    setRenamePending(false);
+    setRenameResult(result);
+    if (result.status === "success") {
+      onPlayerUpdated(result.user);
+      setNameInput(result.user.player_name ?? "");
+      setRenameOpen(false);
+    }
+  };
   return (
     <section aria-labelledby="character-heading">
       <h1 id="character-heading">角色</h1>
       <section aria-labelledby="identity-heading">
         <h2 id="identity-heading">Character identity</h2>
-        <TableScroll>
-          <table aria-label="Character identity">
-            <tbody>
-              <tr><th scope="row">ID</th><td>{currentUser.id}</td></tr>
-              <tr><th scope="row">Display name</th><td>{currentUser.display_name}</td></tr>
-              <tr><th scope="row">Email</th><td>{currentUser.email}</td></tr>
-            </tbody>
-          </table>
-        </TableScroll>
+        <p>Player name: {currentUser.player_name}</p>
+        <button type="button" onClick={() => { setRenameResult(null); setRenameOpen((open) => !open); }} disabled={renamePending || actionPending}>{renameOpen ? "Cancel rename" : "Rename Player name"}</button>
+        {renameOpen && <form onSubmit={(event) => void submitRename(event)}>
+          <label>Player name <input aria-label="Player name" value={nameInput} onChange={(event) => setNameInput(event.target.value)} disabled={renamePending || actionPending} /></label>
+          <button type="submit" disabled={renamePending || actionPending}>{renamePending ? "Saving..." : "Save Player name"}</button>
+        </form>}
+        {renameResult && <PlayerNameFeedback result={renameResult} />}
       </section>
       <section aria-labelledby="rest-heading">
         <h2 id="rest-heading">Rest</h2>
@@ -206,18 +227,6 @@ function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction
           <table aria-label="Rest">
             <thead><tr><th scope="col">Action</th><th scope="col">Cost</th><th scope="col">Controls</th></tr></thead>
             <tbody>{!hasAction("rest") ? <EmptyRow colSpan={3}>No actions available.</EmptyRow> : <tr><th scope="row">Rest</th><td>1 AP</td><td><button type="button" onClick={onRest} disabled={actionPending}>{restPending ? "Resting..." : "Rest"}</button></td></tr>}</tbody>
-          </table>
-        </TableScroll>
-      </section>
-      <section aria-labelledby="progression-heading">
-        <h2 id="progression-heading">Progression</h2>
-        <TableScroll>
-          <table aria-label="Progression">
-            <tbody>
-              <tr><th scope="row">Equipment</th><td>Not implemented</td></tr>
-              <tr><th scope="row">Skills</th><td>Not implemented</td></tr>
-              <tr><th scope="row">Level</th><td>Not implemented</td></tr>
-            </tbody>
           </table>
         </TableScroll>
       </section>
@@ -271,6 +280,22 @@ function BuildingContribution({ buildingID, disabled, pending, onSubmit }: { bui
       <button type="submit" aria-label={`Contribute AP to building ${buildingID}`} disabled={disabled || !valid}>{pending ? "Contributing..." : "Contribute AP"}</button>
     </form>
   );
+}
+
+function InitialNamingPage({ onNamed, onUnauthenticated }: { onNamed: (user: CurrentUser) => void; onUnauthenticated: () => void }) {
+  const [name, setName] = useState("");
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<PlayerNameResult | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setPending(true);
+    const next = await updatePlayerName(name);
+    setPending(false);
+    setResult(next);
+    if (next.status === "unauthenticated") onUnauthenticated();
+    if (next.status === "success" && next.user.player_name !== null) onNamed(next.user);
+  };
+  return <main><h1>Vibe MUD</h1><h2>Choose your Player name</h2><p>Choose a unique name to enter the game.</p><form onSubmit={(event) => void submit(event)}><label>Player name <input aria-label="Player name" value={name} onChange={(event) => setName(event.target.value)} disabled={pending} autoFocus /></label><button type="submit" disabled={pending}>{pending ? "Saving..." : "Enter game"}</button></form>{result && result.status !== "success" && <PlayerNameFeedback result={result} />}</main>;
 }
 
 function AuthenticatedPage({ user }: { user: CurrentUser }) {
@@ -398,6 +423,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     pendingActionKind={actionKind}
     hasAction={hasAction}
     onRest={() => void handleRest()}
+    onPlayerUpdated={setCurrentUser}
     feedback={tabFeedback("character")}
   />;
   const tabContent = {
@@ -427,7 +453,10 @@ export default function App() {
     return <main><h1>Vibe MUD</h1><p role="status">Loading...</p></main>;
   }
 
-  if (result.status === "authenticated") return <AuthenticatedPage user={result.user} />;
+  if (result.status === "authenticated") {
+    if (result.user.player_name === null) return <InitialNamingPage onNamed={(user) => setResult({ status: "authenticated", user })} onUnauthenticated={() => setResult({ status: "unauthenticated" })} />;
+    return <AuthenticatedPage user={result.user} />;
+  }
 
   if (result.status === "unauthenticated") {
     return <main><h1>Vibe MUD</h1><h2>Not signed in</h2><p>Sign in with Google to continue.</p><a className="login" href="/auth/google/login">Sign in with Google</a></main>;

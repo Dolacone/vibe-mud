@@ -1,6 +1,6 @@
 ---
 title: "Player name and tab requirements"
-status: Ready-to-implement
+status: Done
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -16,6 +16,7 @@ source_paths:
   - internal/authapi/server_test.go
   - web/src/auth.ts
   - web/src/auth.test.ts
+  - web/src/App.tsx
   - web/src/App.test.tsx
 req_ref: REQ-002, REQ-012, REQ-020, REQ-021, REQ-022, REQ-023, REQ-024
 base_branch: main
@@ -83,7 +84,7 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
   - REQ-020.9: 命名成功後，前端必須立即使用後端回傳的最新 Player name，不得要求重新登入或重新載入頁面。
   - REQ-020.10: 命名失敗時，既有 Player name、AP 與其他玩家狀態必須保持不變。
 
-- [ ] Task 4 [parallel: no]: Gate `web/src/App.tsx` on the authoritative nullable Player name. Show only the initial naming form before entry. After naming, preserve the shared App Shell and all extracted Map, Area, and Items behavior. Replace Character identity and progression tables with current Player name, a button-controlled rename form, and the existing Rest interface. Hide application user ID, Google display name, email, equipment, skills, and level. Apply successful names immediately and retain the current name after rejection. Add App tests in the same commit for initial naming, every name result, no reload, Character contents, Rest, and regressions for each extracted tab. Run the existing GameShell component tests as regression evidence for fixed status rows, swipe behavior, weight boundaries, and duplicate-state removal.
+- [x] Task 4 [parallel: no]: Gate `web/src/App.tsx` on the authoritative nullable Player name. Show only the initial naming form before entry. After naming, preserve the shared App Shell and all extracted Map, Area, and Items behavior. Replace Character identity and progression tables with current Player name, a button-controlled rename form, and the existing Rest interface. Hide application user ID, Google display name, email, equipment, skills, and level. Apply successful names immediately and retain the current name after rejection. Add App tests in the same commit for initial naming, every name result, no reload, Character contents, Rest, and regressions for each extracted tab. Run the existing GameShell component tests as regression evidence for fixed status rows, swipe behavior, weight boundaries, and duplicate-state removal.
   - REQ-012.1: 已登入介面必須使用 mobile-first 的單一 App Shell。
   - REQ-012.2: App Shell 頂端必須固定顯示兩排核心狀態，且不得隨主分頁切換。
   - REQ-012.3: 第一排必須依序顯示目前 AP、目前 HP 與 `Weight <current>/<max>`，不得顯示玩家名稱。
@@ -123,6 +124,10 @@ Dependency graph: `Task 1 storage -> Task 2 API -> Task 3 frontend contract -> T
 
 - Task 3: `npm test` passed with 5 test files and 153 tests.
 - Task 3: `npm run build` passed with TypeScript compilation and Vite production output.
+- Task 4: `npm test -- --run src/App.test.tsx` passed with 63 tests.
+- Task 4: `npm test -- --run src/GameShell.test.tsx` passed with 6 tests.
+- Task 4: `npm test` passed with 5 test files and 158 tests.
+- Task 4: `npm run build` passed with TypeScript compilation and Vite production output.
 
 ## Review Issues
 
