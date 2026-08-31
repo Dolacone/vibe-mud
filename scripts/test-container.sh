@@ -6,6 +6,13 @@ cd "$repo_root"
 
 command -v docker >/dev/null
 command -v curl >/dev/null
+command -v npm >/dev/null
+command -v node >/dev/null
+command -v go >/dev/null
+
+go test -count=1 -ldflags=-linkmode=external ./...
+(cd web && npm test -- --run)
+(cd web && npm run build)
 
 image_tag="vibe-mud-container-test:${$}"
 container_name="vibe-mud-container-test-${$}"
@@ -40,9 +47,11 @@ docker run --detach \
 
 port=""
 entry_file="$test_root/index.html"
+manifest_file="$test_root/manifest.webmanifest"
+route_file="$test_root/client-route.html"
 for _ in $(seq 1 60); do
   port="$(docker port "$container_name" 8080/tcp 2>/dev/null | sed -n 's/.*://p' | head -n 1 || true)"
-  if [ -n "$port" ] && curl --fail --silent --show-error "http://127.0.0.1:${port}/" >"$entry_file"; then
+  if [ -n "$port" ] && curl --fail --silent --show-error --dump-header "$test_root/entry.headers" "http://127.0.0.1:${port}/" >"$entry_file"; then
     break
   fi
   if ! docker ps --quiet --filter "name=^/${container_name}$" | grep -q .; then
@@ -56,6 +65,8 @@ if [ ! -s "$entry_file" ]; then
   docker logs "$container_name" >&2
   exit 1
 fi
+grep -Eiq '^Content-Type: text/html' "$test_root/entry.headers"
+grep -Fq '<div id="root"></div>' "$entry_file"
 
 asset_path="$(grep --only-matching --extended-regexp '/assets/[^" ]+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+' "$entry_file" | head -n 1 || true)"
 if [ -z "$asset_path" ]; then
@@ -63,6 +74,23 @@ if [ -z "$asset_path" ]; then
   exit 1
 fi
 curl --fail --silent --show-error "http://127.0.0.1:${port}${asset_path}" >"$test_root/asset"
+curl --fail --silent --show-error --dump-header "$test_root/manifest.headers" "http://127.0.0.1:${port}/manifest.webmanifest" >"$manifest_file"
+grep -Fq 'Content-Type: application/manifest+json' "$test_root/manifest.headers"
+grep -Fq '"name": "Vibe MUD"' "$manifest_file"
+grep -Fq '"start_url": "/"' "$manifest_file"
+grep -Fq '"scope": "/"' "$manifest_file"
+grep -Fq '"display": "standalone"' "$manifest_file"
+while IFS= read -r icon_path; do
+  curl --fail --silent --show-error "http://127.0.0.1:${port}${icon_path}" >"$test_root/$(basename "$icon_path")"
+done < <(node -e 'const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const icon of m.icons) console.log(icon.src)' "$manifest_file")
+curl --fail --silent --show-error --dump-header "$test_root/route.headers" "http://127.0.0.1:${port}/play/room" >"$route_file"
+grep -Eiq '^Content-Type: text/html' "$test_root/route.headers"
+cmp --silent "$entry_file" "$route_file"
+
+if rg --quiet 'serviceWorker|navigator\.serviceWorker' web/dist; then
+  echo "built frontend contains Service Worker registration" >&2
+  exit 1
+fi
 
 runtime_files="$test_root/runtime-files"
 base_runtime_files="$test_root/base-runtime-files"

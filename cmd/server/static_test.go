@@ -18,6 +18,7 @@ func testFrontendFiles(t *testing.T) string {
 	}
 	files := map[string]string{
 		"index.html":                     "<!doctype html><title>Vibe MUD</title>",
+		"manifest.webmanifest":           `{"name":"Vibe MUD","start_url":"/","scope":"/","display":"standalone"}`,
 		"assets/app-Abcdef12.js":         "console.log('versioned')",
 		"assets/plain.css":               "body{}",
 		"assets/short-1234567.js":        "console.log('short')",
@@ -29,6 +30,24 @@ func testFrontendFiles(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+func TestStaticHandlerServesManifestWithManifestContentType(t *testing.T) {
+	root := testFrontendFiles(t)
+	handler, err := newStaticHandler(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := requestStatic(t, handler, http.MethodGet, "/manifest.webmanifest")
+	if response.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d", response.Code)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/manifest+json" {
+		t.Fatalf("manifest content type = %q", got)
+	}
+	if !strings.Contains(response.Body.String(), `"display":"standalone"`) {
+		t.Fatalf("manifest body = %q", response.Body.String())
+	}
 }
 
 func requestStatic(t *testing.T, handler http.Handler, method, path string) *httptest.ResponseRecorder {

@@ -72,6 +72,9 @@ func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPath string, entry bool) {
 	w.Header().Set("Cache-Control", cacheControlFor(requestPath, entry))
+	if path.Ext(requestPath) == ".webmanifest" {
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
 	filePath := filepath.Join(h.root, filepath.FromSlash(strings.TrimPrefix(requestPath, "/")))
 	file, err := os.Open(filePath)
 	if err != nil {

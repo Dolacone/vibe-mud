@@ -16,6 +16,9 @@ source_paths:
   - web/public/icons/icon-192.png
   - web/public/icons/icon-512.png
   - web/src/pwa-contract.test.ts
+  - cmd/server/static.go
+  - cmd/server/static_test.go
+  - scripts/test-container.sh
 req_ref: REQ-019
 base_branch: main
 scope: "Tracks standalone mobile installation and launch behavior."
@@ -55,12 +58,19 @@ REQ-019 is the source of truth. The plan copies every criterion into the owning 
 - `npm test -- --run src/pwa-contract.test.ts` passed: 4 tests.
 - `npm run build` passed: Vite production build completed.
 
-- [ ] Task 2 [parallel: no]: Update `cmd/server/static.go` to serve `.webmanifest` responses as `application/manifest+json`, with a focused Go test in the same commit. Extend `scripts/test-container.sh` as the automated production verification. Build and run the production image, fetch `/`, `/manifest.webmanifest`, every manifest-declared icon, and a client-side frontend route through the Go static handler, then assert status, content type, and response content. Assert the built frontend contains no Service Worker registration, and run the Go and frontend test suites. Record command results in this change document. Keep Google login, API routes, existing safe-area styles, fixed status rows, and fixed bottom navigation unchanged. Do not perform or require iOS or Android device access, production deployment, OAuth account access, standalone chrome checks, or manual interaction checks. This task has two source/logic files: `cmd/server/static.go` and `scripts/test-container.sh`.
+- [x] Task 2 [parallel: no]: Update `cmd/server/static.go` to serve `.webmanifest` responses as `application/manifest+json`, with a focused Go test in the same commit. Extend `scripts/test-container.sh` as the automated production verification. Build and run the production image, fetch `/`, `/manifest.webmanifest`, every manifest-declared icon, and a client-side frontend route through the Go static handler, then assert status, content type, and response content. Assert the built frontend contains no Service Worker registration, and run the Go and frontend test suites. Record command results in this change document. Keep Google login, API routes, existing safe-area styles, fixed status rows, and fixed bottom navigation unchanged. Do not perform or require iOS or Android device access, production deployment, OAuth account access, standalone chrome checks, or manual interaction checks. This task has two source/logic files: `cmd/server/static.go` and `scripts/test-container.sh`.
   - REQ-019.1: 前端 origin 必須公開提供 Web App Manifest，且瀏覽器可以讀取正確的 manifest content type。
   - REQ-019.4: Production container 必須提供入口文件、Manifest 與 Manifest 宣告的全部圖示。
   - REQ-019.5: 玩家直接使用瀏覽器開啟根網址或前端路徑時，遊戲必須繼續作為一般網頁運作。
   - REQ-019.6: 此 MVP 不得註冊 Service Worker，也不提供離線遊戲、背景同步或推播通知。
   - REQ-019.7: 實際 iOS Safari 與 Android Chrome 的安裝、獨立視窗、Google 登入及遊戲操作不屬於自動驗收範圍。
+
+## Task 2 Validation
+
+- `go test -count=1 -ldflags=-linkmode=external ./...` passed: both backend packages passed.
+- `npm test -- --run` passed: 5 test files and 144 tests passed.
+- `npm run build` passed: Vite production build completed.
+- `bash scripts/test-container.sh` ran the Go suite, frontend suite, and build successfully, then stopped at Docker build because the Docker daemon was unavailable at `/var/run/docker.sock`.
 
 ## Review Issues
 
