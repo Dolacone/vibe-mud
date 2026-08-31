@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Done
+status: Issues-confirmed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -138,6 +138,7 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 ## Review Issues
 
 - [x] [Minor] `Store.Drop` 已先拒絕 Resource，卻保留不可達的 Resource 寫入分支。兩種策略互相衝突，後續調整 guard 會意外恢復禁用行為。
+- [ ] [Major] REQ 只授權 green、yellow、red 顏色。移除玩家可見的 safe、warning、overweight 語意。Weight accessible name 只保留 `Weight <current>/<max>`。內部與樣式狀態直接使用 green、yellow、red。修正 Task 2 wording 與 verification，使其符合 REQ。
 
 ## Refactor Verification
 
