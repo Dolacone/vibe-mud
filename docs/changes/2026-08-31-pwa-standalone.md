@@ -9,6 +9,13 @@ source_paths:
   - requirements/REQ-019.md
   - docs/architecture.md
   - docs/changes/2026-08-31-pwa-standalone.md
+  - web/index.html
+  - web/public/manifest.webmanifest
+  - web/public/icons/icon.svg
+  - web/public/icons/icon-180.png
+  - web/public/icons/icon-192.png
+  - web/public/icons/icon-512.png
+  - web/src/pwa-contract.test.ts
 req_ref: REQ-019
 base_branch: main
 scope: "Tracks standalone mobile installation and launch behavior."
@@ -39,9 +46,14 @@ REQ-019 is the source of truth. The plan copies every criterion into the owning 
 
 `Task 1 PWA metadata and assets -> Task 2 production-container and route verification`
 
-- [ ] Task 1 [parallel: no]: Add the public PWA metadata unit in `web/index.html` and `web/public/manifest.webmanifest`. Create 180, 192, and 512 pixel PNG icons under `web/public/icons/`. Declare `name`, `short_name`, `start_url: "/"`, `scope: "/"`, `display: "standalone"`, and 192 plus 512 pixel icons with the 512 pixel icon supporting `any maskable`. Add the manifest link, `theme-color`, `apple-mobile-web-app-capable=yes`, `apple-mobile-web-app-title=Vibe MUD`, `apple-mobile-web-app-status-bar-style=black-translucent`, and the 180 pixel `apple-touch-icon` link. Add `web/src/pwa-contract.test.ts` in the same commit to parse the production files, verify metadata and icon dimensions, and assert no Service Worker registration. Update `docs/architecture.md` in the same commit. This task has two source/logic files: `web/index.html` and `web/public/manifest.webmanifest`; icons are assets and the test is not a source/logic file.
+- [x] Task 1 [parallel: no]: Add the public PWA metadata unit in `web/index.html` and `web/public/manifest.webmanifest`. Create 180, 192, and 512 pixel PNG icons under `web/public/icons/`. Declare `name`, `short_name`, `start_url: "/"`, `scope: "/"`, `display: "standalone"`, and 192 plus 512 pixel icons with the 512 pixel icon supporting `any maskable`. Add the manifest link, `theme-color`, `apple-mobile-web-app-capable=yes`, `apple-mobile-web-app-title=Vibe MUD`, `apple-mobile-web-app-status-bar-style=black-translucent`, and the 180 pixel `apple-touch-icon` link. Add `web/src/pwa-contract.test.ts` in the same commit to parse the production files, verify metadata and icon dimensions, and assert no Service Worker registration. Update `docs/architecture.md` in the same commit. This task has two source/logic files: `web/index.html` and `web/public/manifest.webmanifest`; icons are assets and the test is not a source/logic file.
   - REQ-019.2: Manifest 必須宣告 `Vibe MUD` 名稱、遊戲圖示、根啟動路徑、根 scope 與 `standalone` 顯示模式。
   - REQ-019.3: 前端入口文件必須公開提供 iOS home-screen 名稱、圖示、啟用 web app 與狀態列 metadata。
+
+## Validation
+
+- `npm test -- --run src/pwa-contract.test.ts` passed: 4 tests.
+- `npm run build` passed: Vite production build completed.
 
 - [ ] Task 2 [parallel: no]: Update `cmd/server/static.go` to serve `.webmanifest` responses as `application/manifest+json`, with a focused Go test in the same commit. Extend `scripts/test-container.sh` as the automated production verification. Build and run the production image, fetch `/`, `/manifest.webmanifest`, every manifest-declared icon, and a client-side frontend route through the Go static handler, then assert status, content type, and response content. Assert the built frontend contains no Service Worker registration, and run the Go and frontend test suites. Record command results in this change document. Keep Google login, API routes, existing safe-area styles, fixed status rows, and fixed bottom navigation unchanged. Do not perform or require iOS or Android device access, production deployment, OAuth account access, standalone chrome checks, or manual interaction checks. This task has two source/logic files: `cmd/server/static.go` and `scripts/test-container.sh`.
   - REQ-019.1: 前端 origin 必須公開提供 Web App Manifest，且瀏覽器可以讀取正確的 manifest content type。
