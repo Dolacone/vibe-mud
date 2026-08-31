@@ -1,6 +1,12 @@
-<!-- last_reviewed: 2026-08-30 -->
+<!-- last_reviewed: 2026-08-31 -->
 
 # Changelog
+
+## 2026-08-31
+
+- Added install metadata and home-screen icons for standalone PWA launch.
+- Added explicit Web App Manifest content type and production-container verification.
+- Kept browser navigation unchanged without adding a Service Worker or offline behavior.
 
 ## 2026-08-30
 

@@ -60,7 +60,7 @@ func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	localPath := filepath.Join(h.root, filepath.FromSlash(relative))
 	info, err := os.Stat(localPath)
 	if err == nil && !info.IsDir() {
-		h.serve(w, r, requestPath, path.Base(relative) == "index.html")
+		h.serve(w, r, requestPath, isEntryDocument(relative))
 		return
 	}
 	if path.Ext(path.Base(relative)) == "" {
@@ -70,8 +70,9 @@ func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPath string, entry bool) {
-	w.Header().Set("Cache-Control", cacheControlFor(requestPath, entry))
+func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPath string, isEntryDocument bool) {
+	w.Header().Set("Cache-Control", cacheControlFor(requestPath, isEntryDocument))
+	setContentType(w, requestPath)
 	filePath := filepath.Join(h.root, filepath.FromSlash(strings.TrimPrefix(requestPath, "/")))
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -87,8 +88,18 @@ func (h *staticHandler) serve(w http.ResponseWriter, r *http.Request, requestPat
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func cacheControlFor(requestPath string, entry bool) string {
-	if entry || requestPath == "/index.html" {
+func setContentType(w http.ResponseWriter, requestPath string) {
+	if path.Ext(requestPath) == ".webmanifest" {
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
+}
+
+func isEntryDocument(relativePath string) bool {
+	return path.Base(relativePath) == "index.html"
+}
+
+func cacheControlFor(requestPath string, isEntryDocument bool) string {
+	if isEntryDocument || requestPath == "/index.html" {
 		return frontendEntryCacheControl
 	}
 	if versionedAssetName.MatchString(path.Base(requestPath)) {

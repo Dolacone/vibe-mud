@@ -16,3 +16,4 @@
 - Building owner 可安裝或拆除 extension，同地點玩家可共同施工，completed extension 不再回傳施工數值 -> REQ-016
 - 玩家可使用後端依目前狀態回傳的選項製作並建造 Sawmill T1，以相同 AP 工作單位提高 Wood Convert capacity -> REQ-017
 - 後端只向前端回傳玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe -> REQ-018
+- 前端公開提供 PWA standalone metadata 與圖示，production container 保持一般網頁路徑且不註冊 Service Worker -> REQ-019
