@@ -275,7 +275,7 @@ describe("App gameplay tab integration", () => {
 
     expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 HP 尚未實作")).toHaveTextContent("HP --");
-    expect(screen.getByLabelText("Weight 0/1000 (safe)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Weight 0/1000")).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "主分頁" })).getAllByRole("button")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "地圖" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("To forest_edge (20 AP)");
@@ -398,13 +398,13 @@ describe("App gameplay tab integration", () => {
     move.mockResolvedValue({ ...forestState, status: "success", ap: 2980, carried_weight: 751, movement_weight_threshold: 1000 });
 
     fireEvent.click(screen.getByRole("button", { name: "Move to forest_edge" }));
-    await waitFor(() => expect(screen.getByLabelText("Weight 751/1000 (warning)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Weight 751/1000")).toBeInTheDocument());
   });
 
   it("shows carrying weight and the backend-filtered Route list", async () => {
     await renderAuthenticated({ ...campState, carried_weight: 1001, routes: [], available_actions: ["rest", "convert", "craft", "build"] });
 
-    expect(screen.getByLabelText("Weight 1001/1000 (overweight)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Weight 1001/1000")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Move to/ })).not.toBeInTheDocument();
   });
 

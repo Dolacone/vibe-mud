@@ -63,15 +63,15 @@ a:focus-visible {
   padding: .45rem .65rem;
 }
 
-.game-shell__status-item--safe {
+.game-shell__status-item--green {
   background: #1d5b3a;
 }
 
-.game-shell__status-item--warning {
+.game-shell__status-item--yellow {
   background: #765b16;
 }
 
-.game-shell__status-item--overweight {
+.game-shell__status-item--red {
   background: #7b2929;
 }
 

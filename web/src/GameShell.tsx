@@ -45,9 +45,9 @@ function isGameShellTab(value: string): value is GameShellTab {
 
 function weightState(current: number, maximum: number) {
   const ratio = maximum > 0 ? current / maximum : current > 0 ? Infinity : 0;
-  if (ratio <= 0.75) return "safe";
-  if (ratio <= 1) return "warning";
-  return "overweight";
+  if (ratio <= 0.75) return "green";
+  if (ratio <= 1) return "yellow";
+  return "red";
 }
 
 export function GameShell({ player, tabContent, activeTab, defaultTab = "map", onTabChange, hp }: GameShellProps) {
@@ -56,7 +56,7 @@ export function GameShell({ player, tabContent, activeTab, defaultTab = "map", o
   const tabButtons = useRef<Partial<Record<GameShellTab, HTMLButtonElement>>>({});
   const visibleResources = orderedNonZeroResources(player.resources);
   const currentWeightState = weightState(player.carried_weight, player.movement_weight_threshold);
-  const weightLabel = `Weight ${player.carried_weight}/${player.movement_weight_threshold} (${currentWeightState})`;
+  const weightLabel = `Weight ${player.carried_weight}/${player.movement_weight_threshold}`;
 
   const activateTab = (tab: GameShellTab) => {
     if (activeTab === undefined) setUncontrolledTab(tab);

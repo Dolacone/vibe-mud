@@ -28,16 +28,16 @@ describe("GameShell", () => {
     const view = render(<GameShell player={player} tabContent={tabContent} />);
     const weight = () => screen.getByLabelText(/Weight/);
 
-    expect(weight()).toHaveAccessibleName("Weight 750/1000 (safe)");
-    expect(weight()).toHaveClass("game-shell__status-item--safe");
+    expect(weight()).toHaveAccessibleName("Weight 750/1000");
+    expect(weight()).toHaveClass("game-shell__status-item--green");
     view.rerender(<GameShell player={{ ...player, carried_weight: 751 }} tabContent={tabContent} />);
-    expect(weight()).toHaveAccessibleName("Weight 751/1000 (warning)");
-    expect(weight()).toHaveClass("game-shell__status-item--warning");
+    expect(weight()).toHaveAccessibleName("Weight 751/1000");
+    expect(weight()).toHaveClass("game-shell__status-item--yellow");
     view.rerender(<GameShell player={{ ...player, carried_weight: 1000 }} tabContent={tabContent} />);
-    expect(weight()).toHaveAccessibleName("Weight 1000/1000 (warning)");
+    expect(weight()).toHaveAccessibleName("Weight 1000/1000");
     view.rerender(<GameShell player={{ ...player, carried_weight: 1001 }} tabContent={tabContent} />);
-    expect(weight()).toHaveAccessibleName("Weight 1001/1000 (overweight)");
-    expect(weight()).toHaveClass("game-shell__status-item--overweight");
+    expect(weight()).toHaveAccessibleName("Weight 1001/1000");
+    expect(weight()).toHaveClass("game-shell__status-item--red");
   });
 
   it("keeps two status rows visible and filters resources by authoritative order", () => {
@@ -46,7 +46,7 @@ describe("GameShell", () => {
     expect(screen.getByLabelText("玩家狀態")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 AP 27")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 HP 尚未實作")).toHaveTextContent("HP --");
-    expect(screen.getByLabelText("Weight 750/1000 (safe)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Weight 750/1000")).toBeInTheDocument();
 
     const rows = screen.getAllByLabelText(/核心狀態|Resource 持有量/);
     expect(rows).toHaveLength(2);
@@ -99,7 +99,7 @@ describe("GameShell", () => {
 
     view.rerender(<GameShell player={{ ...player, ap: 18, carried_weight: 1001 }} tabContent={tabContent} activeTab="items" />);
     expect(screen.getByLabelText("目前 AP 18")).toBeInTheDocument();
-    expect(screen.getByLabelText("Weight 1001/1000 (overweight)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Weight 1001/1000")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "道具" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("道具內容")).toBeVisible();
   });
