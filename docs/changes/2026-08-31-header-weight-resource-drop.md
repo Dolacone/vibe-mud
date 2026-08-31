@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Reviewed
+status: Refactored
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -137,7 +137,13 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 
 ## Review Issues
 
-- [ ] [Minor] `Store.Drop` 已先拒絕 Resource，卻保留不可達的 Resource 寫入分支。兩種策略互相衝突，後續調整 guard 會意外恢復禁用行為。
+- [x] [Minor] `Store.Drop` 已先拒絕 Resource，卻保留不可達的 Resource 寫入分支。兩種策略互相衝突，後續調整 guard 會意外恢復禁用行為。
+
+## Refactor Verification
+
+- 移除 `Store.Drop` 中被 `ErrResourceDropNotAllowed` guard 排除的 Resource 寫入分支，行為不變。
+- `CGO_ENABLED=0 go test ./...` 通過。
+- `doc_health_check.py` 通過，架構與術語文件無需更新。
 
 ## Task 2 Verification
 
