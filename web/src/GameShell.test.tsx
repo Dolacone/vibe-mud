@@ -35,6 +35,7 @@ describe("GameShell", () => {
     expect(weight()).toHaveClass("game-shell__status-item--yellow");
     view.rerender(<GameShell player={{ ...player, carried_weight: 1000 }} tabContent={tabContent} />);
     expect(weight()).toHaveAccessibleName("Weight 1000/1000");
+    expect(weight()).toHaveClass("game-shell__status-item--yellow");
     view.rerender(<GameShell player={{ ...player, carried_weight: 1001 }} tabContent={tabContent} />);
     expect(weight()).toHaveAccessibleName("Weight 1001/1000");
     expect(weight()).toHaveClass("game-shell__status-item--red");
