@@ -135,6 +135,15 @@ Task 1 establishes the authoritative rejection. Task 2 removes the Resource Drop
 - Resource Drop is rejected by Store and API with unchanged AP, player Resource, and ground Resource state.
 - Rejection logs include user ID, Location, asset type, asset identifier, quantity, outcome, reason, and request ID without session credentials.
 
+## Refactor Verification
+
+- No behavior-preserving clarity change was safe to apply after the latest weight-state correction.
+- `CGO_ENABLED=0 go test ./...` passed.
+- `npm test -- --run` passed: 146 tests.
+- `npm run build` passed.
+- `doc_health_check.py` passed.
+- `docs/architecture.md` and `docs/terminology.md` already match the inspected implementation and have `last_reviewed: 2026-08-31`.
+
 ## Review Issues
 
 - [x] [Minor] `Store.Drop` 已先拒絕 Resource，卻保留不可達的 Resource 寫入分支。兩種策略互相衝突，後續調整 guard 會意外恢復禁用行為。
