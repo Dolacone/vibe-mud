@@ -78,6 +78,14 @@ The prior draft issues are obsolete because REQ-019 now defines only automated m
 
 - [ ] [Major] `REQ-019.4` 的 production container 驗收未完成。`bash scripts/test-container.sh` 在 `docker build` 因 `/var/run/docker.sock` 無 Docker daemon 而退出 1。入口文件、Manifest、所有宣告圖示與 client-side route 尚未由 production image 驗證。
 
+## Blocked
+
+[Logic Conflict] Production container 驗收需要持續可用的 Docker-compatible daemon，但目前環境無法維持 Podman machine 的 socket 連線。
+
+[Attempted Solutions] Docker Desktop 未安裝，原始 `bash scripts/test-container.sh` 首次在 Docker build 以 exit 1 結束。啟動 `podman-machine-default` 並以暫時 `DOCKER_HOST` 指向其 socket 後，`docker info` 首次成功，但 harness 在 Docker build 階段仍以 exit 1 結束，machine 隨後停止。
+
+[Required Clarification] 提供可在完整 harness 執行期間持續運作的 Docker-compatible daemon，或確認可改用其他 production image 驗證方式。
+
 ## Plan Review Issues
 
 - [x] Replaced the prior plan with a dependency-ordered, automatically verifiable two-task plan traced to the updated REQ-019.1 through REQ-019.7 criteria.
