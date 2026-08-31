@@ -1,6 +1,6 @@
 ---
 title: "Header weight and Resource Drop"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
