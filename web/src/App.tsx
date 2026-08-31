@@ -190,7 +190,7 @@ function PlayerNameFeedback({ result }: { result: PlayerNameResult }) {
   return null;
 }
 
-function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction, onRest, onPlayerUpdated, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onRest: () => void; onPlayerUpdated: (user: CurrentUser) => void; feedback: ReactNode }) {
+function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction, onRest, onPlayerUpdated, onUnauthenticated, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onRest: () => void; onPlayerUpdated: (user: CurrentUser) => void; onUnauthenticated: () => void; feedback: ReactNode }) {
   const restPending = actionPending && pendingActionKind === "rest";
   const [renameOpen, setRenameOpen] = useState(false);
   const [nameInput, setNameInput] = useState(currentUser.player_name ?? "");
@@ -202,7 +202,9 @@ function CharacterTab({ currentUser, actionPending, pendingActionKind, hasAction
     const result = await updatePlayerName(nameInput);
     setRenamePending(false);
     setRenameResult(result);
-    if (result.status === "success") {
+    if (result.status === "unauthenticated") {
+      onUnauthenticated();
+    } else if (result.status === "success") {
       onPlayerUpdated(result.user);
       setNameInput(result.user.player_name ?? "");
       setRenameOpen(false);
@@ -298,7 +300,7 @@ function InitialNamingPage({ onNamed, onUnauthenticated }: { onNamed: (user: Cur
   return <main><h1>Vibe MUD</h1><h2>Choose your Player name</h2><p>Choose a unique name to enter the game.</p><form onSubmit={(event) => void submit(event)}><label>Player name <input aria-label="Player name" value={name} onChange={(event) => setName(event.target.value)} disabled={pending} autoFocus /></label><button type="submit" disabled={pending}>{pending ? "Saving..." : "Enter game"}</button></form>{result && result.status !== "success" && <PlayerNameFeedback result={result} />}</main>;
 }
 
-function AuthenticatedPage({ user }: { user: CurrentUser }) {
+function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onUnauthenticated: () => void }) {
   const [currentUser, setCurrentUser] = useState(user);
   const [activeTab, setActiveTab] = useState<GameShellTab>("map");
   const [action, setAction] = useState<ActionState>({ status: "idle" });
@@ -424,6 +426,7 @@ function AuthenticatedPage({ user }: { user: CurrentUser }) {
     hasAction={hasAction}
     onRest={() => void handleRest()}
     onPlayerUpdated={setCurrentUser}
+    onUnauthenticated={onUnauthenticated}
     feedback={tabFeedback("character")}
   />;
   const tabContent = {
@@ -455,7 +458,7 @@ export default function App() {
 
   if (result.status === "authenticated") {
     if (result.user.player_name === null) return <InitialNamingPage onNamed={(user) => setResult({ status: "authenticated", user })} onUnauthenticated={() => setResult({ status: "unauthenticated" })} />;
-    return <AuthenticatedPage user={result.user} />;
+    return <AuthenticatedPage user={result.user} onUnauthenticated={() => setResult({ status: "unauthenticated" })} />;
   }
 
   if (result.status === "unauthenticated") {

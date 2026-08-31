@@ -434,6 +434,51 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByText("Player name: Ada")).toBeInTheDocument();
   });
 
+  it("clears authenticated state when Character rename returns unauthenticated", async () => {
+    await renderAuthenticated(campState, "Google Ada");
+    await selectTab("角色");
+    updatePlayerName.mockResolvedValue({ status: "unauthenticated" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Player name" }));
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Player name" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Not signed in" })).toBeInTheDocument());
+    expect(screen.queryByRole("navigation", { name: "主分頁" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Player name: Ada")).not.toBeInTheDocument();
+    expect(screen.queryByText("Google Ada")).not.toBeInTheDocument();
+    expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /google/i })).toHaveAttribute("href", "/auth/google/login");
+  });
+
+  it("retains the named Character state after a rename request error", async () => {
+    await renderAuthenticated();
+    await selectTab("角色");
+    updatePlayerName.mockResolvedValue({ status: "error", error: new Error("rename unavailable") });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Player name" }));
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Player name" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("rename unavailable"));
+    expect(screen.getByText("Player name: Ada")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "主分頁" })).toBeInTheDocument();
+  });
+
+  it("shows the signed-out interface when initial naming loses authentication", async () => {
+    const unnamed = { ...namedUser(), player_name: null };
+    getCurrentUser.mockResolvedValue({ status: "authenticated", user: unnamed });
+    updatePlayerName.mockResolvedValue({ status: "unauthenticated" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Choose your Player name" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "New Player" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enter game" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Not signed in" })).toBeInTheDocument());
+    expect(screen.queryByRole("navigation", { name: "主分頁" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Choose your Player name" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /google/i })).toHaveAttribute("href", "/auth/google/login");
+  });
+
   it("never reconstructs gameplay controls when global availability omits them", async () => {
     const filtered = { ...campState, available_actions: ["rest"], gathering_option: { item: { id: "wood", display_name: "Wood" }, quantity: 1, ap_cost: 10 }, building_extension_definitions: [sawmillDefinition] };
     await renderAuthenticated(filtered);
