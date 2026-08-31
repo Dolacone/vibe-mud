@@ -1,6 +1,6 @@
 ---
 title: "PWA standalone"
-status: Issues-confirmed
+status: Reviewed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-08-31
@@ -70,21 +70,21 @@ REQ-019 is the source of truth. The plan copies every criterion into the owning 
 - `go test -count=1 -ldflags=-linkmode=external ./...` passed: both backend packages passed.
 - `npm test -- --run` passed: 5 test files and 144 tests passed.
 - `npm run build` passed: Vite production build completed.
-- `bash scripts/test-container.sh` ran the Go suite, frontend suite, and build successfully, then stopped at Docker build because the Docker daemon was unavailable at `/var/run/docker.sock`.
+- `DOCKER_HOST=unix:///var/folders/p6/2861r3_12zv94h6qwkd17vwm0000gp/T/podman/podman-machine-default-api.sock bash scripts/test-container.sh` passed with the Podman Docker-compatible backend: Go suites, 144 frontend tests, production build, image build, and production-image entry and asset checks.
 
 ## Review Issues
 
 The prior draft issues are obsolete because REQ-019 now defines only automated metadata and container acceptance. The plan keeps real-device installation, standalone chrome, OAuth, and mobile interaction checks out of scope.
 
-- [ ] [Major] `REQ-019.4` 的 production container 驗收未完成。`bash scripts/test-container.sh` 在 `docker build` 因 `/var/run/docker.sock` 無 Docker daemon 而退出 1。入口文件、Manifest、所有宣告圖示與 client-side route 尚未由 production image 驗證。
+- [x] [Major] `REQ-019.4` 的 production container 驗收未完成。`bash scripts/test-container.sh` 在 `docker build` 因 `/var/run/docker.sock` 無 Docker daemon 而退出 1。入口文件、Manifest、所有宣告圖示與 client-side route 尚未由 production image 驗證。已使用 Podman Docker-compatible backend 完成驗證。
 
-## Blocked
+## Blocked (Resolved)
 
-[Logic Conflict] Production container 驗收需要持續可用的 Docker-compatible daemon，但目前環境無法維持 Podman machine 的 socket 連線。
+[Logic Conflict] Production container 驗收需要持續可用的 Docker-compatible daemon，但先前環境無法維持 Podman machine 的 socket 連線。此阻塞已解除。
 
-[Attempted Solutions] Docker Desktop 未安裝，原始 `bash scripts/test-container.sh` 首次在 Docker build 以 exit 1 結束。啟動 `podman-machine-default` 並以暫時 `DOCKER_HOST` 指向其 socket 後，`docker info` 首次成功，但 harness 在 Docker build 階段仍以 exit 1 結束，machine 隨後停止。
+[Attempted Solutions] Docker Desktop 未安裝。原始 `bash scripts/test-container.sh` 首次在 Docker build 以 exit 1 結束。Podman machine 首次啟動後中止。使用者重新啟動 machine 後，以暫時 `DOCKER_HOST` 指向其 socket 完整執行 harness 並以 exit 0 結束。
 
-[Required Clarification] 提供可在完整 harness 執行期間持續運作的 Docker-compatible daemon，或確認可改用其他 production image 驗證方式。
+[Required Clarification] 不需要追加說明。Podman machine 已提供可持續執行的 Docker-compatible daemon，production image 驗證已完成。
 
 ## Plan Review Issues
 
