@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -56,6 +57,7 @@ type Store struct {
 	db          *sql.DB
 	now         func() time.Time
 	essenceRoll func() int
+	monsterRoll func() int
 }
 
 type Identity struct {
@@ -99,9 +101,25 @@ type PlayerHP struct {
 	FullTimestamp time.Time
 }
 
+type MonsterSettlementComputation struct {
+	LocationID         string
+	Intervals          uint64
+	SpawnChanceBPS     int
+	MonsterCountBefore int
+	MonsterCountAfter  int
+	Outcome            string
+}
+
 type Location struct {
 	ID          string
 	DisplayName string
+}
+
+type LocationMonsterState struct {
+	LocationID   string
+	MonsterCount int
+	SettledAt    time.Time
+	Computation  *MonsterSettlementComputation
 }
 
 type Route struct {
@@ -300,6 +318,7 @@ type RepairComputation struct {
 
 type PlayerState struct {
 	Location                         Location
+	MonsterCount                     int
 	Routes                           []Route
 	AP                               int
 	Inventory                        []InventoryItem
@@ -318,13 +337,15 @@ type PlayerState struct {
 	RepairComputation                *RepairComputation
 	CarriedWeight                    int
 	MovementWeightThreshold          int
-	ItemDurabilityComputations       []ItemDurabilityComputation `json:"-"`
-	ItemDurabilityCleanups           []ItemDurabilityCleanup     `json:"-"`
+	ItemDurabilityComputations       []ItemDurabilityComputation   `json:"-"`
+	ItemDurabilityCleanups           []ItemDurabilityCleanup       `json:"-"`
+	MonsterSettlement                *MonsterSettlementComputation `json:"-"`
 }
 
 const (
 	maxAP                            = 3000
 	apRecoveryTime                   = time.Minute
+	defaultActiveAttackAPCost        = 30
 	buildingDefaultDurability        = 7 * 24 * time.Hour
 	buildingDefaultDurabilitySeconds = int64(buildingDefaultDurability / time.Second)
 	buildingRepairDuration           = time.Hour
@@ -737,7 +758,7 @@ SELECT id, ? FROM identities`, migrationNow.Unix()); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
-	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }}, nil
+	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }, monsterRoll: func() int { return rand.Intn(10000) }}, nil
 }
 
 func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
@@ -1241,6 +1262,25 @@ func (s *Store) GetHP(userID int64) (int, error) {
 	return calculateHP(hp.FullTimestamp, s.now().UTC(), definition.MaxHP, definition.HPRecoveryIntervalSeconds), nil
 }
 
+func (s *Store) GetLocationMonsterState(locationID string) (LocationMonsterState, error) {
+	if strings.TrimSpace(locationID) == "" {
+		return LocationMonsterState{}, fmt.Errorf("%w: location ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("begin location monster state read: %w", err)
+	}
+	state, err := settleLocationMonstersTx(tx, locationID, s.now().UTC(), s.monsterRoll)
+	if err != nil {
+		_ = tx.Rollback()
+		return LocationMonsterState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return LocationMonsterState{}, fmt.Errorf("commit location monster state read: %w", err)
+	}
+	return state, nil
+}
+
 func (s *Store) Rest(userID int64) (int, error) {
 	if userID <= 0 {
 		return 0, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
@@ -1331,6 +1371,12 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player location: %w", err)
 	}
+	monsterState, err := settleLocationMonstersTx(tx, state.Location.ID, now, s.monsterRoll)
+	if err != nil {
+		return PlayerState{}, err
+	}
+	state.MonsterCount = monsterState.MonsterCount
+	state.MonsterSettlement = monsterState.Computation
 	var gathering GatheringOption
 	err = tx.QueryRow(`
 SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, gr.quantity, gr.ap_cost
@@ -1558,6 +1604,104 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, err
 	}
 	return state, nil
+}
+
+func settleLocationMonstersTx(tx *sql.Tx, locationID string, now time.Time, roll func() int) (LocationMonsterState, error) {
+	var state LocationMonsterState
+	var settledAt int64
+	computation := &MonsterSettlementComputation{LocationID: locationID, Outcome: "unchanged"}
+	err := tx.QueryRow(`
+SELECT monster_count, settled_at
+FROM location_monster_populations
+WHERE location_id = ?`, locationID).Scan(&state.MonsterCount, &settledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists int
+		if err := tx.QueryRow(`SELECT 1 FROM locations WHERE id = ?`, locationID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+			return LocationMonsterState{}, sql.ErrNoRows
+		} else if err != nil {
+			return LocationMonsterState{}, fmt.Errorf("find monster location: %w", err)
+		}
+		settledAt = now.Unix()
+		if _, err := tx.Exec(`
+INSERT INTO location_monster_populations (location_id, monster_count, settled_at)
+VALUES (?, 0, ?)`, locationID, settledAt); err != nil {
+			return LocationMonsterState{}, fmt.Errorf("initialize location monster population: %w", err)
+		}
+		state.MonsterCount = 0
+		computation.Outcome = "initialized"
+	} else if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("get location monster population: %w", err)
+	}
+	state.LocationID = locationID
+	state.SettledAt = unixSeconds(settledAt)
+	computation.MonsterCountBefore = state.MonsterCount
+
+	var intervalSeconds, spawnChanceBPS, maxMonsters int64
+	err = tx.QueryRow(`
+SELECT spawn_interval_seconds, spawn_chance_bps, max_monsters
+FROM location_monster_rules
+WHERE location_id = ?`, locationID).Scan(&intervalSeconds, &spawnChanceBPS, &maxMonsters)
+	if errors.Is(err, sql.ErrNoRows) {
+		computation.MonsterCountAfter = state.MonsterCount
+		state.Computation = computation
+		return state, nil
+	}
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("get location monster rule: %w", err)
+	}
+	computation.SpawnChanceBPS = int(spawnChanceBPS)
+	if state.MonsterCount > int(maxMonsters) {
+		state.MonsterCount = int(maxMonsters)
+	}
+	computation.MonsterCountAfter = state.MonsterCount
+
+	nowUnix := now.Unix()
+	if nowUnix <= settledAt {
+		state.Computation = computation
+		return state, nil
+	}
+	intervals := (nowUnix - settledAt) / intervalSeconds
+	if intervals == 0 {
+		state.Computation = computation
+		return state, nil
+	}
+	computation.Intervals = uint64(intervals)
+	if roll == nil {
+		roll = func() int { return rand.Intn(10000) }
+	}
+	for interval := int64(0); interval < intervals && state.MonsterCount < int(maxMonsters); interval++ {
+		if roll() < int(spawnChanceBPS) {
+			state.MonsterCount++
+		}
+	}
+	nextSettledAt := settledAt + intervals*intervalSeconds
+	result, err := tx.Exec(`
+UPDATE location_monster_populations
+SET monster_count = ?, settled_at = ?
+WHERE location_id = ? AND settled_at = ?`, state.MonsterCount, nextSettledAt, locationID, settledAt)
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("settle location monster population: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("check location monster settlement: %w", err)
+	}
+	if rows != 1 {
+		return LocationMonsterState{}, fmt.Errorf("location monster settlement lost update")
+	}
+	state.SettledAt = unixSeconds(nextSettledAt)
+	computation.MonsterCountAfter = state.MonsterCount
+	if state.MonsterCount != computation.MonsterCountBefore {
+		computation.Outcome = "spawned"
+	} else if state.MonsterCount >= int(maxMonsters) && maxMonsters > 0 {
+		computation.Outcome = "capped"
+	}
+	state.Computation = computation
+	return state, nil
+}
+
+func canAttack(monsterCount, ap, attackAPCost int) bool {
+	return monsterCount > 0 && ap >= attackAPCost
 }
 
 func carryingWeightTx(tx *sql.Tx, userID int64) (int, error) {

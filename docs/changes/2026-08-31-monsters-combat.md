@@ -63,7 +63,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
   - REQ-026.16: Forest Rat 必須具有 Rat Tail 掉落規則，每次勝利有 50% 機率產生 1 個 Rat Tail Item。
   - REQ-026.17: Rat Tail 必須是單位重量 1 的 Item，並依 REQ-015 取得完整耐久時間及合併至正確 Inventory 堆疊。
 
-- [ ] Task 2 [parallel: no]: Add lazy Location Monster settlement and executable Attack filtering in `internal/authapi/store.go`. For each complete interval, use one standard backend random roll until the configured cap, then advance the saved settlement timestamp across every complete interval. Return the settlement values required by REQ-025.17 to the server. Add Store tests for elapsed intervals, caps, downtime, persistence, filtering, and computation values.
+- [x] Task 2 [parallel: no]: Add lazy Location Monster settlement and executable Attack filtering in `internal/authapi/store.go`. For each complete interval, use one standard backend random roll until the configured cap, then advance the saved settlement timestamp across every complete interval. Return the settlement values required by REQ-025.17 to the server. Add Store tests for elapsed intervals, caps, downtime, persistence, filtering, and computation values.
   - REQ-018.1: 後端回傳玩家狀態時，只能包含玩家依目前 authoritative state 可以執行的 Action、target、method 與 recipe。
   - REQ-018.2: 可執行性必須由後端依 Action 定義、玩家狀態、目前 Location、target 狀態、權限、AP、Resource inputs 與 Active Item inputs 判定。
   - REQ-018.3: 可執行性判定不得修改任何玩家或世界狀態。
