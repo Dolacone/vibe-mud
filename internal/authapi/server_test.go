@@ -369,6 +369,38 @@ func TestMoveAPIInterceptedResponseIncludesCombatAndLatestState(t *testing.T) {
 	}
 }
 
+func TestMoveAPILogsExactInterceptionChance(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-move-exact-chance", "move-exact-chance@example.com", "Move Exact Chance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameTestPlayer(t, store, identity)
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE location_monster_populations SET monster_count = 5, settled_at = ? WHERE location_id = 'forest_edge'`, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(identity.ID, "move-exact-chance-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	store.interceptRoll = func() float64 { return 0.5 }
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/move", strings.NewReader(`{"target":"camp"}`))
+	request.Header.Set("X-Request-ID", "move-exact-chance-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "move-exact-chance-session"})
+	response := httptest.NewRecorder()
+	logOutput := captureStdout(t, func() { server.Routes().ServeHTTP(response, request) })
+	if response.Code != http.StatusOK {
+		t.Fatalf("move status = %d: %s", response.Code, response.Body.String())
+	}
+	want := "action=monster_interception location_id=forest_edge monster_count=5 per_monster_chance=0.1 combined_chance=0.40951 outcome=not_intercepted request_id=move-exact-chance-request"
+	if !strings.Contains(logOutput, want) || strings.Contains(logOutput, "per_monster_chance_bps") || strings.Contains(logOutput, "combined_chance_bps") {
+		t.Fatalf("interception log = %q, want %q", logOutput, want)
+	}
+}
+
 func TestFrontendPathStaysInRedirectButNotCORSOrigin(t *testing.T) {
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -1154,8 +1186,8 @@ func assertUnchangedBuildingState(t *testing.T, before PlayerState, after Player
 
 func assertUnchangedConstructionState(t *testing.T, before PlayerState, after PlayerState) {
 	t.Helper()
-	before.MonsterSettlement = nil
-	after.MonsterSettlement = nil
+	before.MonsterSettlements = nil
+	after.MonsterSettlements = nil
 	assertUnchangedBuildingState(t, before, after)
 }
 
@@ -2494,6 +2526,9 @@ func TestMoveAPIUpdatesLocationAndAP(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "user_id="+strconv.FormatInt(identity.ID, 10)+" action=carrying_weight_calculation outcome=success carried_weight=0 movement_weight_threshold=1000 request_id=move-request") {
 		t.Fatalf("move carrying weight computation log = %q", logOutput)
+	}
+	if strings.Count(logOutput, "action=monster_settlement") != 2 || !strings.Contains(logOutput, "action=monster_settlement location_id=camp") || !strings.Contains(logOutput, "action=monster_settlement location_id=forest_edge") {
+		t.Fatalf("move settlement logs = %q", logOutput)
 	}
 	if _, hasError := body["error"]; hasError {
 		t.Fatalf("successful move returned error: %#v", body)

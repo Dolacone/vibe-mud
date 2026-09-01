@@ -137,13 +137,11 @@ type CombatResult struct {
 }
 
 type MonsterInterceptionComputation struct {
-	LocationID          string
-	MonsterCount        int
-	PerMonsterChanceBPS int
-	CombinedChanceBPS   int
-	PerMonsterChance    float64
-	CombinedChance      float64
-	Outcome             string
+	LocationID       string
+	MonsterCount     int
+	PerMonsterChance float64
+	CombinedChance   float64
+	Outcome          string
 }
 
 type MonsterSettlementComputation struct {
@@ -386,7 +384,6 @@ type PlayerState struct {
 	MovementWeightThreshold          int
 	ItemDurabilityComputations       []ItemDurabilityComputation     `json:"-"`
 	ItemDurabilityCleanups           []ItemDurabilityCleanup         `json:"-"`
-	MonsterSettlement                *MonsterSettlementComputation   `json:"-"`
 	MonsterSettlements               []*MonsterSettlementComputation `json:"-"`
 	MonsterInterception              *MonsterInterceptionComputation `json:"-"`
 }
@@ -1432,7 +1429,7 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 			return PlayerState{}, err
 		}
 		state.MonsterCount = monsterState.MonsterCount
-		state.MonsterSettlement = monsterState.Computation
+		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
 	} else {
 		if err := tx.QueryRow(`SELECT monster_count FROM location_monster_populations WHERE location_id = ?`, state.Location.ID).Scan(&state.MonsterCount); err != nil {
 			return PlayerState{}, fmt.Errorf("get settled location monster population: %w", err)
@@ -1799,9 +1796,6 @@ func damageRoll(attackPower int, intn func(int) int) int {
 		maximum = minimum
 	}
 	span := maximum - minimum + 1
-	if intn == nil {
-		intn = rand.Intn
-	}
 	return minimum + intn(span)
 }
 
@@ -2067,7 +2061,6 @@ func (s *Store) Attack(userID int64) (PlayerState, CombatResult, error) {
 			_ = tx.Rollback()
 			return PlayerState{}, CombatResult{}, stateErr
 		}
-		state.MonsterSettlement = monsterState.Computation
 		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
 		if err := tx.Commit(); err != nil {
 			return PlayerState{}, CombatResult{}, fmt.Errorf("commit empty attack settlement: %w", err)
@@ -2093,7 +2086,6 @@ func (s *Store) Attack(userID int64) (PlayerState, CombatResult, error) {
 		_ = tx.Rollback()
 		return PlayerState{}, CombatResult{}, err
 	}
-	state.MonsterSettlement = monsterState.Computation
 	state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
 	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
@@ -3031,7 +3023,7 @@ WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.Ori
 		return PlayerState{}, CombatResult{}, fmt.Errorf("get move interception rule: %w", err)
 	}
 	combinedChance := combinedInterceptionChance(interceptChanceBPS, monsterState.MonsterCount)
-	interception := &MonsterInterceptionComputation{LocationID: originID, MonsterCount: monsterState.MonsterCount, PerMonsterChanceBPS: interceptChanceBPS, CombinedChanceBPS: int(combinedChance * 10000), PerMonsterChance: float64(interceptChanceBPS) / 10000, CombinedChance: combinedChance, Outcome: "not_intercepted"}
+	interception := &MonsterInterceptionComputation{LocationID: originID, MonsterCount: monsterState.MonsterCount, PerMonsterChance: float64(interceptChanceBPS) / 10000, CombinedChance: combinedChance, Outcome: "not_intercepted"}
 	if combinedChance > 0 && s.interceptionRandom()() < combinedChance {
 		interception.Outcome = "intercepted"
 		combat, combatErr := s.resolveCombatTx(tx, userID, originID, now)
@@ -3044,7 +3036,6 @@ WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.Ori
 			_ = tx.Rollback()
 			return PlayerState{}, CombatResult{}, stateErr
 		}
-		state.MonsterSettlement = monsterState.Computation
 		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
 		state.MonsterInterception = interception
 		prependItemDurabilityCleanups(&state, cleanupEvents)
@@ -3100,7 +3091,6 @@ WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 		_ = tx.Rollback()
 		return PlayerState{}, CombatResult{}, err
 	}
-	state.MonsterSettlement = destinationMonsterState.Computation
 	state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation, destinationMonsterState.Computation}
 	state.MonsterInterception = interception
 	prependItemDurabilityCleanups(&state, cleanupEvents)

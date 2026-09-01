@@ -2865,16 +2865,14 @@ func (s *Server) logCombatState(r *http.Request, userID int64, state PlayerState
 	fmt.Fprintf(os.Stdout, "user_id=%d action=monster_count_calculation location_id=%s outcome=success monster_count=%d request_id=%s\n", userID, sanitizeLogValue(state.Location.ID), state.MonsterCount, requestID(r))
 	s.logMonsterSettlement(r, userID, state)
 	if interception := state.MonsterInterception; interception != nil {
-		fmt.Fprintf(os.Stdout, "user_id=%d action=monster_interception location_id=%s monster_count=%d per_monster_chance_bps=%d combined_chance_bps=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(interception.LocationID), interception.MonsterCount, interception.PerMonsterChanceBPS, interception.CombinedChanceBPS, sanitizeLogValue(interception.Outcome), requestID(r))
+		fmt.Fprintf(os.Stdout, "user_id=%d action=monster_interception location_id=%s monster_count=%d per_monster_chance=%.10g combined_chance=%.10g outcome=%s request_id=%s\n", userID, sanitizeLogValue(interception.LocationID), interception.MonsterCount, interception.PerMonsterChance, interception.CombinedChance, sanitizeLogValue(interception.Outcome), requestID(r))
 	}
 }
 
 func (s *Server) logMonsterSettlement(r *http.Request, userID int64, state PlayerState) {
-	settlement := state.MonsterSettlement
-	if settlement == nil {
-		settlement = &MonsterSettlementComputation{LocationID: state.Location.ID, MonsterCountBefore: state.MonsterCount, MonsterCountAfter: state.MonsterCount, Outcome: "unchanged"}
+	for _, settlement := range state.MonsterSettlements {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=monster_settlement location_id=%s intervals=%d spawn_chance_bps=%d monster_count_before=%d monster_count_after=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(settlement.LocationID), settlement.Intervals, settlement.SpawnChanceBPS, settlement.MonsterCountBefore, settlement.MonsterCountAfter, sanitizeLogValue(settlement.Outcome), requestID(r))
 	}
-	fmt.Fprintf(os.Stdout, "user_id=%d action=monster_settlement location_id=%s intervals=%d spawn_chance_bps=%d monster_count_before=%d monster_count_after=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(settlement.LocationID), settlement.Intervals, settlement.SpawnChanceBPS, settlement.MonsterCountBefore, settlement.MonsterCountAfter, sanitizeLogValue(settlement.Outcome), requestID(r))
 }
 
 func (s *Server) logCombat(r *http.Request, userID int64, action string, state PlayerState, combat CombatResult) {

@@ -327,8 +327,8 @@ func TestPlayerStateCarriesSettledMonsterCountAndAttackFilterDoesNotMutate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.MonsterCount != 0 || state.MonsterSettlement == nil || state.MonsterSettlement.LocationID != "camp" {
-		t.Fatalf("player state monster values = %d/%+v", state.MonsterCount, state.MonsterSettlement)
+	if state.MonsterCount != 0 || len(state.MonsterSettlements) != 1 || state.MonsterSettlements[0].LocationID != "camp" {
+		t.Fatalf("player state monster values = %d/%+v", state.MonsterCount, state.MonsterSettlements)
 	}
 	if canAttack(state.MonsterCount, state.AP, defaultActiveAttackAPCost) {
 		t.Fatal("attack available without monsters")
@@ -421,8 +421,8 @@ func TestAttackVictoryConsumesAPAndDropsDurableItemAtomically(t *testing.T) {
 	if combat.Result != "victory" || len(combat.Events) != 1 || combat.Events[0].Attacker != "player" || state.AP != maxAP-defaultActiveAttackAPCost || state.MonsterCount != 0 {
 		t.Fatalf("victory state = %+v combat = %+v", state, combat)
 	}
-	if state.MonsterSettlement == nil || state.MonsterSettlement.MonsterCountBefore != 1 || state.MonsterSettlement.MonsterCountAfter != 1 || len(state.MonsterSettlements) != 1 {
-		t.Fatalf("victory settlement = %+v/%+v", state.MonsterSettlement, state.MonsterSettlements)
+	if len(state.MonsterSettlements) != 1 || state.MonsterSettlements[0].MonsterCountBefore != 1 || state.MonsterSettlements[0].MonsterCountAfter != 1 {
+		t.Fatalf("victory settlement = %+v", state.MonsterSettlements)
 	}
 	if len(combat.Drops) != 1 || combat.Drops[0].Item.ID != "rat_tail" || inventoryQuantity(state, "rat_tail") != 1 {
 		t.Fatalf("victory drops = %+v inventory = %+v", combat.Drops, state.Inventory)
@@ -1036,8 +1036,8 @@ func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollba
 	if err != nil {
 		t.Fatal(err)
 	}
-	before.MonsterSettlement = nil
-	after.MonsterSettlement = nil
+	before.MonsterSettlements = nil
+	after.MonsterSettlements = nil
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("remote contribution changed state: before=%+v after=%+v", before, after)
 	}
