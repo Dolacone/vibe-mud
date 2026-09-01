@@ -81,7 +81,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
   - REQ-025.15: 多個 request 同時結算、攻擊或攔截時，Location Monster 總數不得超過上限或低於 0，同一隻 Monster 不得產生多次勝利掉落。
   - REQ-025.16: 重新整理、重新登入或重啟 backend 後，系統必須保留 Location Monster 總數與結算時間。
 
-- [ ] Task 3 [parallel: no]: Add automatic combat, active Attack, and Move interception to `internal/authapi/store.go`. Use standard backend random rolls for interception, encounter selection, damage, and drops. Keep combat state changes in the existing SQLite transaction. Return the interception values required by REQ-025.17 and combat values required by REQ-026.29 to the server. Add Store tests for both outcomes, AP, HP, drops, interception, concurrent final-Monster attacks, and computation values.
+- [x] Task 3 [parallel: no]: Add automatic combat, active Attack, and Move interception to `internal/authapi/store.go`. Use standard backend random rolls for interception, encounter selection, damage, and drops. Keep combat state changes in the existing SQLite transaction. Return the interception values required by REQ-025.17 and combat values required by REQ-026.29 to the server. Add Store tests for both outcomes, AP, HP, drops, interception, concurrent final-Monster attacks, and computation values.
   - REQ-005.6: `move` 未被 Monster 攔截時，系統必須扣除該 Route 的完整 AP 成本，更新目前位置，並保存兩項結果。
   - REQ-005.15: 玩家從具有 Monster 的目前 Location 執行 `move` 時，系統必須在扣除 AP 或更新位置前計算攔截結果。
   - REQ-005.16: `move` 被攔截時，系統不得扣除 Route AP，且不得更新玩家位置。

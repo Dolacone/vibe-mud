@@ -343,6 +343,285 @@ func TestPlayerStateCarriesSettledMonsterCountAndAttackFilterDoesNotMutate(t *te
 	}
 }
 
+func TestCombatCalculationsUseConfiguredEncounterAndDamageRanges(t *testing.T) {
+	store, db := newTestStore(t)
+	_ = store
+	if _, err := db.Exec(`INSERT INTO monster_types (id, display_name, max_hp, attack_power) VALUES (2, 'Boundary Beast', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO location_monster_encounters (location_id, monster_type_id, encounter_weight) VALUES ('forest_edge', 2, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := selectEncounterMonsterTx(tx, "forest_edge", func() int { return 0 })
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if selected.ID != 1 {
+		t.Fatalf("weighted roll 0 selected type %d, want 1", selected.ID)
+	}
+	selected, err = selectEncounterMonsterTx(tx, "forest_edge", func() int { return 1 })
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if selected.ID != 2 {
+		t.Fatalf("weighted roll 1 selected type %d, want 2", selected.ID)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		power int
+		roll  int
+		want  int
+	}{
+		{power: 1, roll: 0, want: 1},
+		{power: 2, roll: 9999, want: 3},
+		{power: 3, roll: 0, want: 2},
+		{power: 3, roll: 9999, want: 4},
+	} {
+		if got := damageRoll(test.power, func() int { return test.roll }); got != test.want {
+			t.Fatalf("damageRoll(%d, %d) = %d, want %d", test.power, test.roll, got, test.want)
+		}
+	}
+}
+
+func TestAttackVictoryConsumesAPAndDropsDurableItemAtomically(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "attack-win-store", "attack-win-store@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 1, now.Unix())
+	if _, err := db.Exec(`UPDATE monster_types SET max_hp = 1 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	rolls := []int{0, 0, 0}
+	store.combatRoll = func() int {
+		value := rolls[0]
+		rolls = rolls[1:]
+		return value
+	}
+	state, combat, err := store.Attack(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combat.Result != "victory" || len(combat.Events) != 1 || combat.Events[0].Attacker != "player" || state.AP != maxAP-defaultActiveAttackAPCost || state.MonsterCount != 0 {
+		t.Fatalf("victory state = %+v combat = %+v", state, combat)
+	}
+	if len(combat.Drops) != 1 || combat.Drops[0].Item.ID != "rat_tail" || inventoryQuantity(state, "rat_tail") != 1 {
+		t.Fatalf("victory drops = %+v inventory = %+v", combat.Drops, state.Inventory)
+	}
+	var status string
+	var expiresAt int64
+	if err := db.QueryRow(`SELECT durability_status, status_expires_at FROM player_inventory WHERE user_id = ? AND item_id = 'rat_tail'`, identity.ID).Scan(&status, &expiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "active" || expiresAt != now.Unix()+itemDefaultDurabilitySeconds {
+		t.Fatalf("drop durability = %s/%d", status, expiresAt)
+	}
+}
+
+func TestAttackDefeatConsumesAPAndPreservesMonsterAtOneHP(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "attack-lose-store", "attack-lose-store@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 1, now.Unix())
+	if _, err := db.Exec(`UPDATE monster_types SET max_hp = 10, attack_power = 2 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_hp SET full_timestamp = ? WHERE user_id = ?`, now.Add(99*time.Minute).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.combatRoll = func() int { return 0 }
+	state, combat, err := store.Attack(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combat.Result != "defeat" || state.AP != maxAP-defaultActiveAttackAPCost || state.MonsterCount != 1 || state.HP != 1 {
+		t.Fatalf("defeat state = %+v combat = %+v", state, combat)
+	}
+}
+
+func TestAttackSettlesEmptyLocationWithoutSpendingAP(t *testing.T) {
+	store, db := newTestStore(t)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return start.Add(1800 * time.Second) }
+	identity, err := store.UpsertIdentity("issuer", "attack-empty-store", "attack-empty-store@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 0, start.Unix())
+	store.monsterRoll = func() int { return 5000 }
+	state, _, err := store.Attack(identity.ID)
+	if !errors.Is(err, ErrNoMonster) {
+		t.Fatalf("Attack error = %v, want ErrNoMonster", err)
+	}
+	if state.AP != maxAP || state.MonsterCount != 0 {
+		t.Fatalf("empty attack state = %+v", state)
+	}
+}
+
+func TestEmptyAttackDoesNotNormalizeInventory(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "attack-empty-inventory-store", "empty-inventory-store@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 0, now.Unix())
+	if _, err := db.Exec(`INSERT INTO player_inventory (user_id, item_id, durability_status, status_expires_at, quantity) VALUES (?, 'rat_tail', 'active', ?, 1)`, identity.ID, now.Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.Attack(identity.ID)
+	if !errors.Is(err, ErrNoMonster) {
+		t.Fatalf("Attack error = %v, want ErrNoMonster", err)
+	}
+	var status string
+	var expiresAt int64
+	if err := db.QueryRow(`SELECT durability_status, status_expires_at FROM player_inventory WHERE user_id = ? AND item_id = 'rat_tail' AND quantity = 1`, identity.ID).Scan(&status, &expiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "active" || expiresAt != now.Add(-time.Second).Unix() {
+		t.Fatalf("empty attack normalized inventory = %s/%d", status, expiresAt)
+	}
+}
+
+func TestMoveInterceptionPreservesOriginAndDoesNotSpendAP(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "move-intercept-store", "move-intercept-store@example.com", "Move")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 1, now.Unix())
+	if _, err := db.Exec(`UPDATE monster_types SET max_hp = 1 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	store.monsterRoll = func() int { return 0 }
+	store.combatRoll = func() int { return 0 }
+	state, combat, err := store.MoveWithCombat(identity.ID, "camp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combat.Result != "victory" || state.Location.ID != "forest_edge" || state.AP != maxAP || state.MonsterCount != 0 || state.MonsterInterception == nil || state.MonsterInterception.Outcome != "intercepted" {
+		t.Fatalf("intercepted move state = %+v combat = %+v", state, combat)
+	}
+}
+
+func TestMoveWithoutInterceptionConsumesRouteAPAndUpdatesLocation(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "move-safe-store", "move-safe-store@example.com", "Move")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLocationMonsterPopulation(t, db, "camp", 0, now.Unix())
+	state, combat, err := store.MoveWithCombat(identity.ID, "forest_edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combat.Result != "" || state.Location.ID != "forest_edge" || state.AP != maxAP-20 || state.MonsterInterception == nil || state.MonsterInterception.Outcome != "not_intercepted" {
+		t.Fatalf("safe move state = %+v combat = %+v", state, combat)
+	}
+}
+
+func TestConcurrentAttacksCannotWinTheLastMonsterTwice(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	first, err := store.UpsertIdentity("issuer", "attack-concurrent-first-store", "first-store@example.com", "First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertIdentity("issuer", "attack-concurrent-second-store", "second-store@example.com", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []int64{first.ID, second.ID} {
+		if _, err := db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setLocationMonsterPopulation(t, db, "forest_edge", 1, now.Unix())
+	if _, err := db.Exec(`UPDATE monster_types SET max_hp = 1 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	store.combatRoll = func() int { return 0 }
+	type outcome struct {
+		combat CombatResult
+		err    error
+	}
+	results := make(chan outcome, 2)
+	for _, userID := range []int64{first.ID, second.ID} {
+		go func(userID int64) {
+			_, combat, attackErr := store.Attack(userID)
+			results <- outcome{combat: combat, err: attackErr}
+		}(userID)
+	}
+	wins, empty := 0, 0
+	for range 2 {
+		result := <-results
+		if result.err == nil && result.combat.Result == "victory" {
+			wins++
+		}
+		if errors.Is(result.err, ErrNoMonster) {
+			empty++
+		}
+	}
+	if wins != 1 || empty != 1 {
+		t.Fatalf("concurrent outcomes = wins %d empty %d", wins, empty)
+	}
+}
+
+func TestCombinedInterceptionChanceUsesConfiguredFormula(t *testing.T) {
+	for _, test := range []struct {
+		chance int
+		count  int
+		want   int
+	}{
+		{chance: 0, count: 3, want: 0},
+		{chance: 1000, count: 1, want: 1000},
+		{chance: 1000, count: 2, want: 1900},
+		{chance: 1000, count: 3, want: 2710},
+		{chance: 3333, count: 2, want: 5556},
+		{chance: 10000, count: 3, want: 10000},
+	} {
+		if got := combinedInterceptionChanceBPS(test.chance, test.count); got != test.want {
+			t.Fatalf("combinedInterceptionChanceBPS(%d, %d) = %d, want %d", test.chance, test.count, got, test.want)
+		}
+	}
+}
+
 func TestPlayerProfileInitializesUnnamedAndPersistsAcrossReads(t *testing.T) {
 	store, db := newTestStore(t)
 	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-profile", "player@example.com", "Google Name")
