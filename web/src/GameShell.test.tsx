@@ -61,15 +61,6 @@ describe("GameShell", () => {
     expect(rows[1]).not.toHaveTextContent("Unknown 9");
   });
 
-  it("does not fabricate HP when the backend omits it", () => {
-    const playerWithoutHP = { ...player, hp: undefined } as unknown as typeof player;
-
-    render(<GameShell player={playerWithoutHP} tabContent={tabContent} />);
-
-    expect(screen.getByLabelText("目前 HP undefined")).not.toHaveTextContent("HP 0");
-    expect(screen.queryByLabelText("目前 HP 0")).not.toBeInTheDocument();
-  });
-
   it("provides four labeled native navigation buttons with selected state and focus", () => {
     const onTabChange = vi.fn();
     render(<GameShell player={player} tabContent={tabContent} onTabChange={onTabChange} />);

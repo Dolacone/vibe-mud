@@ -168,5 +168,5 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Minor] REQ-005.19 要求 intercepted Move response 包含 Combat 與最新 state，但 server tests 沒有呼叫 intercepted Move endpoint。現有 Store 與 frontend 測試無法在 handler 遺漏 `combat` 時失敗。
 - [x] [Major] REQ-025.17 只需要依序交接實際 settlement computations。`PlayerState` 同時保存 singular `MonsterSettlement` 與 plural `MonsterSettlements`，logger 還為 singular 缺值捏造結果。刪除重複欄位與 fallback，改用單一 ordered collection。
 - [x] [Major] REQ-025.10 要求使用公式所得的總攔截率，REQ-025.17 要求記錄該機率。實際抽選使用 `CombinedChance`，log 卻使用截斷的 `CombinedChanceBPS`。`PerMonsterChance` 與 `CombinedChance` 兩個欄位目前沒有 reader。保留一套準確且會被記錄的機率欄位，刪除重複 representation。
-- [ ] [Major] REQ-012.4 只要求顯示後端回傳的 HP。`GameShell.test.tsx` 強制繞過 required type 與 response validator，把 HP cast 成 `undefined`，再固定 `HP undefined` 行為。這個測試不覆蓋任何 copied criterion。刪除測試，不得為缺少 HP 增加 fallback。
+- [x] [Major] REQ-012.4 只要求顯示後端回傳的 HP。`GameShell.test.tsx` 強制繞過 required type 與 response validator，把 HP cast 成 `undefined`，再固定 `HP undefined` 行為。這個測試不覆蓋任何 copied criterion。刪除測試，不得為缺少 HP 增加 fallback。
 - [x] [Major] REQ-026.12 只需要一次均勻整數抽選。`damageRandom` 已保證回傳 non-nil function，但 `damageRoll` 又加入不可到達的 nil fallback。刪除重複 defensive branch。
