@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -15,6 +15,7 @@ source_paths:
   - internal/authapi/server.go
   - web/src/auth.ts
   - web/src/App.test.tsx
+  - web/src/GameShell.tsx
   - web/src/auth.test.ts
 req_ref: REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, REQ-026
 base_branch: main
@@ -127,7 +128,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
   - REQ-026.31: `attack` 必須屬於 Action，並透過專用 endpoint 接受空 JSON object。前端不得指定 Monster type、AP 成本、傷害、掉落或戰鬥結果。
   - REQ-026.32: Backend 必須把 `attack` 與攔截戰鬥的 success 或 failure access 結果寫入 stdout，並包含 user ID、Location、action、outcome、拒絕原因與 request ID。
 
-- [ ] Task 5 [parallel: no]: Display authoritative HP in `web/src/GameShell.tsx`. Display Monster count, backend-gated Attack, and one combat transcript in `web/src/App.tsx`. Apply returned state without reload. Add component tests for Attack and intercepted Move.
+- [x] Task 5 [parallel: no]: Display authoritative HP in `web/src/GameShell.tsx`. Display Monster count, backend-gated Attack, and one combat transcript in `web/src/App.tsx`. Apply returned state without reload. Add component tests for Attack and intercepted Move.
   - REQ-012.3: 第一排必須依序顯示目前 AP、目前 HP 與 `Weight <current>/<max>`，不得顯示玩家名稱。
   - REQ-012.4: 第一排必須顯示後端回傳的目前 HP，不得顯示 placeholder 或前端推算值。
   - REQ-012.22: 前端只能顯示後端依 REQ-018 回傳的 Action、target、method 與 recipe，不得自行補回不可用選項。

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { build, contributeConstruction, contributeExtensionConstruction, convert, craft, drop, gather, getCurrentUser, installExtension, move, pickup, removeExtension, repairBuilding, rest, updatePlayerName, type AuthResult, type BuildResult, type ConversionMethod, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerNameResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
+import { attack, build, contributeConstruction, contributeExtensionConstruction, convert, craft, drop, gather, getCurrentUser, installExtension, move, pickup, removeExtension, repairBuilding, rest, updatePlayerName, type AttackResult, type AuthResult, type BuildResult, type Combat, type ConversionMethod, type ConvertResult, type CraftResult, type CurrentUser, type GatherResult, type ItemStatus, type MoveResult, type PlayerNameResult, type PlayerState, type RepairResult, type RestResult, type TransferAssetType, type TransferRequest, type TransferResult } from "./auth";
 import GameShell, { type GameShellTab } from "./GameShell";
 
 type PageState = AuthResult | { status: "loading" };
-type ActionState = RestResult | MoveResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | TransferResult | { status: "idle" } | { status: "pending" };
-type ActionKind = "rest" | "move" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | "install-extension" | "contribute-extension-construction" | "remove-extension" | "repair-building" | "drop" | "pickup" | null;
+type ActionState = RestResult | MoveResult | AttackResult | GatherResult | ConvertResult | CraftResult | BuildResult | RepairResult | TransferResult | { status: "idle" } | { status: "pending" };
+type ActionKind = "rest" | "move" | "attack" | "gather" | "convert" | "craft" | "build" | "contribute-construction" | "install-extension" | "contribute-extension-construction" | "remove-extension" | "repair-building" | "drop" | "pickup" | null;
 type ActiveActionKind = Exclude<ActionKind, null>;
 
 function TableScroll({ children }: { children: ReactNode }) {
@@ -26,6 +26,7 @@ function actionError(action: Exclude<ActionState, { status: "idle" } | { status:
 
 function actionFailurePrefix(kind: ActiveActionKind) {
   if (kind === "move") return "Move failed";
+  if (kind === "attack") return "Attack failed";
   if (kind === "gather") return "Gather failed";
   if (kind === "convert") return "Convert failed";
   if (kind === "craft") return "Craft failed";
@@ -43,6 +44,7 @@ function ActionFeedback({ action, actionKind, currentUser }: { action: ActionSta
   if (action.status === "success") {
     if (actionKind === "rest") return <p role="status">Rest succeeded. AP: {currentUser.ap}</p>;
     if (actionKind === "move") return <p role="status">Move succeeded. Current location: {currentUser.location.display_name}</p>;
+    if (actionKind === "attack") return <p role="status">Attack succeeded.</p>;
     if (actionKind === "gather") return <p role="status">Gather succeeded.</p>;
     if (actionKind === "convert") return <><p role="status">Convert succeeded.</p><p role="status">Essence: {"essence_quantity" in action ? action.essence_quantity ?? 0 : 0}</p></>;
     if (actionKind === "craft") return <p role="status">Craft succeeded.</p>;
@@ -60,7 +62,13 @@ function ActionFeedback({ action, actionKind, currentUser }: { action: ActionSta
   return <p role="alert">{actionFailurePrefix(actionKind)}: {message}</p>;
 }
 
-function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMove, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onMove: (target: string) => void; feedback: ReactNode }) {
+function CombatTranscript({ combat }: { combat: Combat | null }) {
+  if (combat === null) return null;
+  const drops = combat.drops.length === 0 ? "None" : combat.drops.map((drop) => `${drop.item.display_name}: ${drop.quantity}`).join(", ");
+  return <section aria-labelledby="combat-heading"><h2 id="combat-heading">Combat</h2><TableScroll><table aria-label="Combat transcript"><caption>{combat.monster.display_name}</caption><thead><tr><th scope="col">Attacker</th><th scope="col">Damage</th><th scope="col">Target remaining HP</th></tr></thead><tbody>{combat.events.map((event, index) => <tr key={`${event.attacker}-${index}`}><th scope="row">{event.attacker}</th><td>{event.damage}</td><td>{event.target_remaining_hp}</td></tr>)}</tbody><tfoot><tr><th scope="row">Result</th><td colSpan={2}>{combat.result}</td></tr><tr><th scope="row">Drops</th><td colSpan={2}>{drops}</td></tr></tfoot></table></TableScroll></section>;
+}
+
+function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMove, combat, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onMove: (target: string) => void; combat: Combat | null; feedback: ReactNode }) {
   const movePending = actionPending && pendingActionKind === "move";
   return (
     <section aria-labelledby="map-heading">
@@ -77,12 +85,14 @@ function MapTab({ currentUser, actionPending, pendingActionKind, hasAction, onMo
         </TableScroll>
       </section>
       {feedback}
+      <CombatTranscript combat={combat} />
     </section>
   );
 }
 
-function AreaTab({ currentUser, actionPending, pendingActionKind, hasAction, onGather, onBuild, onInstall, onBuildingAction, onRepair, onTransfer, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onGather: () => void; onBuild: (recipeID: string) => void; onInstall: (buildingID: number, slotIndex: number, definitionID: string) => void; onBuildingAction: (kind: "contribute-construction" | "contribute-extension-construction" | "remove-extension", request: () => Promise<BuildResult>) => void; onRepair: (buildingID: number) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; feedback: ReactNode }) {
+function AreaTab({ currentUser, actionPending, pendingActionKind, hasAction, onGather, onBuild, onInstall, onBuildingAction, onRepair, onTransfer, onAttack, combat, feedback }: { currentUser: CurrentUser; actionPending: boolean; pendingActionKind: ActionKind; hasAction: (name: string) => boolean; onGather: () => void; onBuild: (recipeID: string) => void; onInstall: (buildingID: number, slotIndex: number, definitionID: string) => void; onBuildingAction: (kind: "contribute-construction" | "contribute-extension-construction" | "remove-extension", request: () => Promise<BuildResult>) => void; onRepair: (buildingID: number) => void; onTransfer: (operation: "drop" | "pickup", request: TransferRequest) => void; onAttack: () => void; combat: Combat | null; feedback: ReactNode }) {
   const gatherPending = actionPending && pendingActionKind === "gather";
+  const attackPending = actionPending && pendingActionKind === "attack";
   const buildPending = actionPending && pendingActionKind === "build";
   const contributePending = actionPending && pendingActionKind === "contribute-construction";
   const extensionContributePending = actionPending && pendingActionKind === "contribute-extension-construction";
@@ -91,6 +101,11 @@ function AreaTab({ currentUser, actionPending, pendingActionKind, hasAction, onG
   return (
     <section aria-labelledby="area-heading">
       <h1 id="area-heading">地區</h1>
+      <section aria-labelledby="monster-heading">
+        <h2 id="monster-heading">Monsters</h2>
+        <p>Monster count: {currentUser.monster_count}</p>
+        {hasAction("attack") && <button type="button" onClick={onAttack} disabled={actionPending}>{attackPending ? "Attacking..." : "Attack"}</button>}
+      </section>
       <section aria-labelledby="gather-heading">
         <h2 id="gather-heading">Gather</h2>
         <TableScroll>
@@ -140,6 +155,7 @@ function AreaTab({ currentUser, actionPending, pendingActionKind, hasAction, onG
         </TableScroll>
       </section>
       {feedback}
+      <CombatTranscript combat={combat} />
     </section>
   );
 }
@@ -330,10 +346,10 @@ function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onU
     }
   };
 
-  const applyPlayerActionResult = (next: MoveResult | GatherResult | ConvertResult | CraftResult) => {
-    if (next.status === "success" || next.status === "insufficient") {
-      applyPlayerState(next);
-    } else if (next.status === "invalid" && next.state) {
+  const applyPlayerActionResult = (next: MoveResult | AttackResult | GatherResult | ConvertResult | CraftResult) => {
+    if ((next.status === "success" || next.status === "insufficient") && "location" in next && next.location) {
+      applyPlayerState(next as PlayerState);
+    } else if (next.status === "invalid" && "state" in next && next.state) {
       applyPlayerState(next.state);
     }
   };
@@ -344,6 +360,7 @@ function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onU
     }
   });
   const handleMove = (target: string) => runAction("move", () => move(target), applyPlayerActionResult);
+  const handleAttack = () => runAction("attack", attack, applyPlayerActionResult);
   const handleGather = () => runAction("gather", gather, applyPlayerActionResult);
   const handleConvert = (methodID: string, quantity: number, providerID?: number) => runAction("convert", () => convert(methodID, quantity, providerID), applyPlayerActionResult);
   const handleLegacyConvert = () => runAction("convert", () => convert(fetch), applyPlayerActionResult);
@@ -387,12 +404,14 @@ function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onU
   const hasAction = (name: string) => currentUser.available_actions.includes(name);
   const feedback = <ActionFeedback action={action} actionKind={actionKind} currentUser={currentUser} />;
   const tabFeedback = (tab: GameShellTab) => activeTab === tab ? feedback : null;
+  const combatFor = (kind: "move" | "attack"): Combat | null => actionKind === kind && action.status === "success" && "combat" in action && action.combat ? action.combat : null;
   const mapTab = <MapTab
     currentUser={currentUser}
     actionPending={actionPendingNow}
     pendingActionKind={actionKind}
     hasAction={hasAction}
     onMove={(target) => void handleMove(target)}
+    combat={combatFor("move")}
     feedback={tabFeedback("map")}
   />;
   const areaTab = <AreaTab
@@ -406,6 +425,8 @@ function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onU
     onBuildingAction={(kind, request) => void applyBuildingAction(kind, request)}
     onRepair={(buildingID) => void handleRepair(buildingID)}
     onTransfer={(operation, request) => void handleTransfer(operation, request)}
+    onAttack={() => void handleAttack()}
+    combat={combatFor("attack")}
     feedback={tabFeedback("area")}
   />;
   const itemsTab = <ItemsTab
@@ -436,7 +457,7 @@ function AuthenticatedPage({ user, onUnauthenticated }: { user: CurrentUser; onU
     character: characterTab,
   } satisfies Record<GameShellTab, ReactNode>;
 
-  return <GameShell player={{ ap: currentUser.ap, carried_weight: currentUser.carried_weight, movement_weight_threshold: currentUser.movement_weight_threshold, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
+  return <GameShell player={{ ap: currentUser.ap, hp: currentUser.hp, carried_weight: currentUser.carried_weight, movement_weight_threshold: currentUser.movement_weight_threshold, resources: currentUser.resources }} activeTab={activeTab} onTabChange={setActiveTab} tabContent={tabContent} />;
 }
 
 export default function App() {
