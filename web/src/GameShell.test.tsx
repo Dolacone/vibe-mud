@@ -5,6 +5,7 @@ import "./styles.css";
 
 const player = {
   ap: 27,
+  hp: 100,
   carried_weight: 750,
   movement_weight_threshold: 1000,
   resources: [
@@ -46,7 +47,7 @@ describe("GameShell", () => {
 
     expect(screen.getByLabelText("玩家狀態")).toBeInTheDocument();
     expect(screen.getByLabelText("目前 AP 27")).toBeInTheDocument();
-    expect(screen.getByLabelText("目前 HP 尚未實作")).toHaveTextContent("HP --");
+    expect(screen.getByLabelText("目前 HP 100")).toHaveTextContent("HP 100");
     expect(screen.getByLabelText("Weight 750/1000")).toBeInTheDocument();
 
     const rows = screen.getAllByLabelText(/核心狀態|Resource 持有量/);

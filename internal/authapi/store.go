@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ var (
 	ErrSessionNotFound             = errors.New("session not found")
 	ErrSessionExpired              = errors.New("session expired")
 	ErrInsufficientAP              = errors.New("insufficient action points")
+	ErrNoMonster                   = errors.New("no monsters available")
 	ErrOverweight                  = errors.New("player is overweight")
 	ErrRouteNotFound               = errors.New("route not found")
 	ErrGatheringNotFound           = errors.New("gathering not found")
@@ -53,9 +55,13 @@ var (
 )
 
 type Store struct {
-	db          *sql.DB
-	now         func() time.Time
-	essenceRoll func() int
+	db            *sql.DB
+	now           func() time.Time
+	essenceRoll   func() int
+	monsterRoll   func() int
+	combatRoll    func() int
+	combatIntn    func(int) int
+	interceptRoll func() float64
 }
 
 type Identity struct {
@@ -86,9 +92,77 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+type PlayerCombatDefinition struct {
+	ID                        int
+	MaxHP                     int
+	HPRecoveryIntervalSeconds int
+	BaseAttackPower           int
+}
+
+type PlayerHP struct {
+	UserID        int64
+	HP            int
+	FullTimestamp time.Time
+}
+
+type CombatEvent struct {
+	Attacker          string
+	Damage            int
+	TargetRemainingHP int
+}
+
+type CombatMonster struct {
+	TypeID      int64
+	DisplayName string
+}
+
+type CombatDrop struct {
+	Item     Item
+	Quantity int
+}
+
+type CombatDropCalculation struct {
+	ItemID    string
+	ChanceBPS int
+	Quantity  int
+	Outcome   string
+}
+
+type CombatResult struct {
+	Monster          CombatMonster
+	Events           []CombatEvent
+	Result           string
+	Drops            []CombatDrop
+	DropCalculations []CombatDropCalculation
+}
+
+type MonsterInterceptionComputation struct {
+	LocationID       string
+	MonsterCount     int
+	PerMonsterChance float64
+	CombinedChance   float64
+	Outcome          string
+}
+
+type MonsterSettlementComputation struct {
+	LocationID         string
+	Intervals          uint64
+	SpawnChanceBPS     int
+	MonsterCountBefore int
+	MonsterCountAfter  int
+	Outcome            string
+}
+
 type Location struct {
 	ID          string
 	DisplayName string
+}
+
+type LocationMonsterState struct {
+	LocationID   string
+	MonsterCount int
+	SettledAt    time.Time
+	Computation  *MonsterSettlementComputation
 }
 
 type Route struct {
@@ -287,6 +361,9 @@ type RepairComputation struct {
 
 type PlayerState struct {
 	Location                         Location
+	MonsterCount                     int
+	HP                               int
+	AttackAPCost                     int `json:"-"`
 	Routes                           []Route
 	AP                               int
 	Inventory                        []InventoryItem
@@ -305,13 +382,16 @@ type PlayerState struct {
 	RepairComputation                *RepairComputation
 	CarriedWeight                    int
 	MovementWeightThreshold          int
-	ItemDurabilityComputations       []ItemDurabilityComputation `json:"-"`
-	ItemDurabilityCleanups           []ItemDurabilityCleanup     `json:"-"`
+	ItemDurabilityComputations       []ItemDurabilityComputation     `json:"-"`
+	ItemDurabilityCleanups           []ItemDurabilityCleanup         `json:"-"`
+	MonsterSettlements               []*MonsterSettlementComputation `json:"-"`
+	MonsterInterception              *MonsterInterceptionComputation `json:"-"`
 }
 
 const (
 	maxAP                            = 3000
 	apRecoveryTime                   = time.Minute
+	defaultActiveAttackAPCost        = 30
 	buildingDefaultDurability        = 7 * 24 * time.Hour
 	buildingDefaultDurabilitySeconds = int64(buildingDefaultDurability / time.Second)
 	buildingRepairDuration           = time.Hour
@@ -380,6 +460,16 @@ CREATE TABLE IF NOT EXISTS player_ap (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	full_timestamp INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS player_combat_definitions (
+	id INTEGER PRIMARY KEY CHECK (id > 0),
+	max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+	hp_recovery_interval_seconds INTEGER NOT NULL CHECK (hp_recovery_interval_seconds > 0),
+	base_attack_power INTEGER NOT NULL CHECK (base_attack_power > 0)
+);
+CREATE TABLE IF NOT EXISTS player_hp (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	full_timestamp INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS locations (
 	id TEXT PRIMARY KEY,
 	display_name TEXT NOT NULL
@@ -393,6 +483,37 @@ CREATE TABLE IF NOT EXISTS routes (
 CREATE TABLE IF NOT EXISTS player_locations (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	location_id TEXT NOT NULL REFERENCES locations(id)
+);
+CREATE TABLE IF NOT EXISTS monster_types (
+	id INTEGER PRIMARY KEY CHECK (id > 0),
+	display_name TEXT NOT NULL,
+	max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+	attack_power INTEGER NOT NULL CHECK (attack_power > 0)
+);
+CREATE TABLE IF NOT EXISTS monster_drop_rules (
+	monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	chance_bps INTEGER NOT NULL CHECK (chance_bps BETWEEN 0 AND 10000),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (monster_type_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS location_monster_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	spawn_interval_seconds INTEGER NOT NULL CHECK (spawn_interval_seconds > 0),
+	spawn_chance_bps INTEGER NOT NULL CHECK (spawn_chance_bps BETWEEN 0 AND 10000),
+	max_monsters INTEGER NOT NULL CHECK (max_monsters >= 0),
+	intercept_chance_bps INTEGER NOT NULL CHECK (intercept_chance_bps BETWEEN 0 AND 10000)
+);
+CREATE TABLE IF NOT EXISTS location_monster_encounters (
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+	encounter_weight INTEGER NOT NULL CHECK (encounter_weight > 0),
+	PRIMARY KEY (location_id, monster_type_id)
+);
+CREATE TABLE IF NOT EXISTS location_monster_populations (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	monster_count INTEGER NOT NULL CHECK (monster_count >= 0),
+	settled_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS items (
 	id TEXT PRIMARY KEY,
@@ -596,7 +717,8 @@ INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES
 	('wood_component', 'Wood Component', 10);
 INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
 	('wood_essence_t1', 'Wood Essence T1', 1, 3600),
-	('sawmill_package_t1', 'Sawmill Package T1', 10, 3600);
+	('sawmill_package_t1', 'Sawmill Package T1', 10, 3600),
+	('rat_tail', 'Rat Tail', 1, 3600);
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
@@ -612,6 +734,33 @@ INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, q
 	('wood_component', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_combat_definitions (id, max_hp, hp_recovery_interval_seconds, base_attack_power)
+VALUES (1, 100, 60, 3);
+INSERT OR IGNORE INTO monster_types (id, display_name, max_hp, attack_power)
+VALUES (1, 'Forest Rat', 10, 2);
+INSERT OR IGNORE INTO monster_drop_rules (monster_type_id, item_id, chance_bps, quantity)
+VALUES (1, 'rat_tail', 5000, 1);
+INSERT OR IGNORE INTO location_monster_rules (location_id, spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps) VALUES
+	('camp', 1800, 0, 0, 0),
+	('forest_edge', 1800, 5000, 5, 1000);
+INSERT OR IGNORE INTO location_monster_encounters (location_id, monster_type_id, encounter_weight)
+VALUES ('forest_edge', 1, 1);
+INSERT OR IGNORE INTO location_monster_populations (location_id, monster_count, settled_at)
+SELECT id, 0, ? FROM locations;`, migrationNow.Unix()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed monster state: %w", err)
+	}
+	if _, err := tx.Exec(`
+UPDATE location_monster_rules
+SET spawn_chance_bps = 5000, max_monsters = 5
+WHERE location_id = 'forest_edge';
+UPDATE location_monster_populations
+SET monster_count = 5
+WHERE location_id = 'forest_edge' AND monster_count > 5`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("apply forest edge monster test values: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES
@@ -644,6 +793,12 @@ SELECT id, ? FROM identities`, time.Now().UTC().Unix()); err != nil {
 		return nil, fmt.Errorf("backfill player AP: %w", err)
 	}
 	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_hp (user_id, full_timestamp)
+SELECT id, ? FROM identities`, migrationNow.Unix()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player HP: %w", err)
+	}
+	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities`); err != nil {
 		_ = tx.Rollback()
@@ -659,7 +814,7 @@ SELECT id, ? FROM identities`, migrationNow.Unix()); err != nil {
 		return nil, fmt.Errorf("commit auth store initialization: %w", err)
 	}
 	fmt.Fprintf(os.Stdout, "user_id=anonymous action=timestamp_migration outcome=success converted_values=%d request_id=unavailable\n", migratedTimestampValues)
-	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }}, nil
+	return &Store{db: db, now: time.Now, essenceRoll: func() int { return int(time.Now().UnixNano() % 10000) }, monsterRoll: func() int { return rand.Intn(10000) }, combatRoll: func() int { return rand.Intn(10000) }, combatIntn: rand.Intn, interceptRoll: rand.Float64}, nil
 }
 
 func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
@@ -675,6 +830,7 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		{table: "sessions", column: "created_at"},
 		{table: "player_profiles", column: "updated_at"},
 		{table: "player_ap", column: "full_timestamp"},
+		{table: "player_hp", column: "full_timestamp"},
 	}
 	var convertedValues int64
 	for _, timestampColumn := range timestampColumns {
@@ -952,6 +1108,12 @@ ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
 		return Identity{}, fmt.Errorf("initialize player AP: %w", err)
 	}
 	if _, err := tx.Exec(`
+INSERT INTO player_hp (user_id, full_timestamp) VALUES (?, ?)
+ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player HP: %w", err)
+	}
+	if _, err := tx.Exec(`
 INSERT INTO player_locations (user_id, location_id) VALUES (?, 'camp')
 ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 		_ = tx.Rollback()
@@ -1107,6 +1269,74 @@ func (s *Store) GetAP(userID int64) (int, error) {
 	return calculateAP(unixSeconds(fullTimestamp), s.now().UTC()), nil
 }
 
+func (s *Store) GetPlayerCombatDefinition() (PlayerCombatDefinition, error) {
+	var definition PlayerCombatDefinition
+	err := s.db.QueryRow(`
+SELECT id, max_hp, hp_recovery_interval_seconds, base_attack_power
+FROM player_combat_definitions WHERE id = 1`).Scan(
+		&definition.ID,
+		&definition.MaxHP,
+		&definition.HPRecoveryIntervalSeconds,
+		&definition.BaseAttackPower,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerCombatDefinition{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return PlayerCombatDefinition{}, fmt.Errorf("get player combat definition: %w", err)
+	}
+	return definition, nil
+}
+
+func (s *Store) GetPlayerHPState(userID int64) (PlayerHP, error) {
+	if userID <= 0 {
+		return PlayerHP{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	var hp PlayerHP
+	var fullTimestamp int64
+	err := s.db.QueryRow(`
+SELECT user_id, full_timestamp FROM player_hp WHERE user_id = ?`, userID).Scan(&hp.UserID, &fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerHP{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		return PlayerHP{}, fmt.Errorf("get player HP: %w", err)
+	}
+	hp.FullTimestamp = unixSeconds(fullTimestamp)
+	return hp, nil
+}
+
+func (s *Store) GetHP(userID int64) (int, error) {
+	hp, err := s.GetPlayerHPState(userID)
+	if err != nil {
+		return 0, err
+	}
+	definition, err := s.GetPlayerCombatDefinition()
+	if err != nil {
+		return 0, err
+	}
+	return calculateHP(hp.FullTimestamp, s.now().UTC(), definition.MaxHP, definition.HPRecoveryIntervalSeconds), nil
+}
+
+func (s *Store) GetLocationMonsterState(locationID string) (LocationMonsterState, error) {
+	if strings.TrimSpace(locationID) == "" {
+		return LocationMonsterState{}, fmt.Errorf("%w: location ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("begin location monster state read: %w", err)
+	}
+	state, err := settleLocationMonstersTx(tx, locationID, s.now().UTC(), s.monsterRoll)
+	if err != nil {
+		_ = tx.Rollback()
+		return LocationMonsterState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return LocationMonsterState{}, fmt.Errorf("commit location monster state read: %w", err)
+	}
+	return state, nil
+}
+
 func (s *Store) Rest(userID int64) (int, error) {
 	if userID <= 0 {
 		return 0, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
@@ -1177,16 +1407,22 @@ func (s *Store) GetPlayerState(userID int64) (PlayerState, error) {
 }
 
 func (s *Store) getPlayerStateTx(tx *sql.Tx, userID int64, now time.Time) (PlayerState, error) {
+	return s.getPlayerStateTxWithOptions(tx, userID, now, true, true)
+}
+
+func (s *Store) getPlayerStateTxWithOptions(tx *sql.Tx, userID int64, now time.Time, normalizeItems, settleMonsters bool) (PlayerState, error) {
 	state := PlayerState{Routes: make([]Route, 0), Inventory: make([]InventoryItem, 0), GroundItems: make([]GroundItem, 0), GroundResources: make([]GroundResource, 0), Resources: make([]PlayerResource, 0), ConversionMethods: make([]ConversionMethod, 0), CraftingRecipes: make([]CraftingRecipe, 0), BuildingRecipes: make([]BuildingRecipe, 0), BuildingExtensionDefinitions: make([]BuildingExtensionDefinition, 0), Buildings: make([]Building, 0), ItemDurabilityComputations: make([]ItemDurabilityComputation, 0), ItemDurabilityCleanups: make([]ItemDurabilityCleanup, 0), MovementWeightThreshold: movementWeightThreshold}
-	cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
-	if err != nil {
-		return PlayerState{}, err
+	if normalizeItems {
+		cleanups, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+		if err != nil {
+			return PlayerState{}, err
+		}
+		state.ItemDurabilityCleanups = cleanups
+		if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
+			return PlayerState{}, err
+		}
 	}
-	state.ItemDurabilityCleanups = cleanups
-	if err := deleteDestroyedBuildingsTx(tx, now); err != nil {
-		return PlayerState{}, err
-	}
-	err = tx.QueryRow(`
+	err := tx.QueryRow(`
 SELECT l.id, l.display_name
 FROM player_locations pl
 JOIN locations l ON l.id = pl.location_id
@@ -1196,6 +1432,18 @@ WHERE pl.user_id = ?`, userID).Scan(&state.Location.ID, &state.Location.DisplayN
 	}
 	if err != nil {
 		return PlayerState{}, fmt.Errorf("get player location: %w", err)
+	}
+	if settleMonsters {
+		monsterState, err := settleLocationMonstersTx(tx, state.Location.ID, now, s.monsterRoll)
+		if err != nil {
+			return PlayerState{}, err
+		}
+		state.MonsterCount = monsterState.MonsterCount
+		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
+	} else {
+		if err := tx.QueryRow(`SELECT monster_count FROM location_monster_populations WHERE location_id = ?`, state.Location.ID).Scan(&state.MonsterCount); err != nil {
+			return PlayerState{}, fmt.Errorf("get settled location monster population: %w", err)
+		}
 	}
 	var gathering GatheringOption
 	err = tx.QueryRow(`
@@ -1258,6 +1506,19 @@ ORDER BY pi.item_id, pi.durability_status`, userID)
 		return PlayerState{}, fmt.Errorf("get player AP: %w", err)
 	}
 	state.AP = calculateAP(unixSeconds(fullTimestamp), now)
+	definition, err := playerCombatDefinitionTx(tx)
+	if err != nil {
+		return PlayerState{}, err
+	}
+	var hpTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_hp WHERE user_id = ?`, userID).Scan(&hpTimestamp); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlayerState{}, ErrIdentityNotFound
+		}
+		return PlayerState{}, fmt.Errorf("get player HP: %w", err)
+	}
+	state.HP = calculateHP(unixSeconds(hpTimestamp), now, definition.MaxHP, definition.HPRecoveryIntervalSeconds)
+	state.AttackAPCost = defaultActiveAttackAPCost
 	resourceRows, err := tx.Query(`
 SELECT rt.id, rt.display_name, COALESCE(pr.quantity, 0)
 FROM resource_types rt
@@ -1424,6 +1685,423 @@ ORDER BY destination_id`, state.Location.ID)
 		return PlayerState{}, err
 	}
 	return state, nil
+}
+
+func settleLocationMonstersTx(tx *sql.Tx, locationID string, now time.Time, roll func() int) (LocationMonsterState, error) {
+	var state LocationMonsterState
+	var settledAt int64
+	computation := &MonsterSettlementComputation{LocationID: locationID, Outcome: "unchanged"}
+	err := tx.QueryRow(`
+SELECT monster_count, settled_at
+FROM location_monster_populations
+WHERE location_id = ?`, locationID).Scan(&state.MonsterCount, &settledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists int
+		if err := tx.QueryRow(`SELECT 1 FROM locations WHERE id = ?`, locationID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+			return LocationMonsterState{}, sql.ErrNoRows
+		} else if err != nil {
+			return LocationMonsterState{}, fmt.Errorf("find monster location: %w", err)
+		}
+		settledAt = now.Unix()
+		if _, err := tx.Exec(`
+INSERT INTO location_monster_populations (location_id, monster_count, settled_at)
+VALUES (?, 0, ?)`, locationID, settledAt); err != nil {
+			return LocationMonsterState{}, fmt.Errorf("initialize location monster population: %w", err)
+		}
+		state.MonsterCount = 0
+		computation.Outcome = "initialized"
+	} else if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("get location monster population: %w", err)
+	}
+	state.LocationID = locationID
+	state.SettledAt = unixSeconds(settledAt)
+	computation.MonsterCountBefore = state.MonsterCount
+
+	var intervalSeconds, spawnChanceBPS, maxMonsters int64
+	err = tx.QueryRow(`
+SELECT spawn_interval_seconds, spawn_chance_bps, max_monsters
+FROM location_monster_rules
+WHERE location_id = ?`, locationID).Scan(&intervalSeconds, &spawnChanceBPS, &maxMonsters)
+	if errors.Is(err, sql.ErrNoRows) {
+		computation.MonsterCountAfter = state.MonsterCount
+		state.Computation = computation
+		return state, nil
+	}
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("get location monster rule: %w", err)
+	}
+	computation.SpawnChanceBPS = int(spawnChanceBPS)
+	if state.MonsterCount > int(maxMonsters) {
+		state.MonsterCount = int(maxMonsters)
+	}
+	computation.MonsterCountAfter = state.MonsterCount
+
+	nowUnix := now.Unix()
+	if nowUnix <= settledAt {
+		state.Computation = computation
+		return state, nil
+	}
+	intervals := (nowUnix - settledAt) / intervalSeconds
+	if intervals == 0 {
+		state.Computation = computation
+		return state, nil
+	}
+	computation.Intervals = uint64(intervals)
+	if roll == nil {
+		roll = func() int { return rand.Intn(10000) }
+	}
+	for interval := int64(0); interval < intervals && state.MonsterCount < int(maxMonsters); interval++ {
+		if roll() < int(spawnChanceBPS) {
+			state.MonsterCount++
+		}
+	}
+	nextSettledAt := settledAt + intervals*intervalSeconds
+	result, err := tx.Exec(`
+UPDATE location_monster_populations
+SET monster_count = ?, settled_at = ?
+WHERE location_id = ? AND settled_at = ?`, state.MonsterCount, nextSettledAt, locationID, settledAt)
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("settle location monster population: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return LocationMonsterState{}, fmt.Errorf("check location monster settlement: %w", err)
+	}
+	if rows != 1 {
+		return LocationMonsterState{}, fmt.Errorf("location monster settlement lost update")
+	}
+	state.SettledAt = unixSeconds(nextSettledAt)
+	computation.MonsterCountAfter = state.MonsterCount
+	if state.MonsterCount != computation.MonsterCountBefore {
+		computation.Outcome = "spawned"
+	} else if state.MonsterCount >= int(maxMonsters) && maxMonsters > 0 {
+		computation.Outcome = "capped"
+	}
+	state.Computation = computation
+	return state, nil
+}
+
+func canAttack(monsterCount, ap, attackAPCost int) bool {
+	return monsterCount > 0 && ap >= attackAPCost
+}
+
+func normalizeCombatRoll(roll func() int) int {
+	if roll == nil {
+		return 0
+	}
+	value := roll() % 10000
+	if value < 0 {
+		value += 10000
+	}
+	return value
+}
+
+func damageRoll(attackPower int, intn func(int) int) int {
+	minimum := (attackPower + 1) / 2
+	if minimum < 1 {
+		minimum = 1
+	}
+	maximum := (attackPower * 3) / 2
+	if maximum < minimum {
+		maximum = minimum
+	}
+	span := maximum - minimum + 1
+	return minimum + intn(span)
+}
+
+func combinedInterceptionChance(perMonsterChanceBPS, monsterCount int) float64 {
+	if perMonsterChanceBPS <= 0 || monsterCount <= 0 {
+		return 0
+	}
+	if perMonsterChanceBPS >= 10000 {
+		return 1
+	}
+	return 1 - math.Pow(1-float64(perMonsterChanceBPS)/10000, float64(monsterCount))
+}
+
+type encounterMonster struct {
+	ID          int64
+	DisplayName string
+	MaxHP       int
+	AttackPower int
+	Weight      int
+}
+
+func selectEncounterMonsterTx(tx *sql.Tx, locationID string, intn func(int) int) (encounterMonster, error) {
+	rows, err := tx.Query(`
+SELECT mt.id, mt.display_name, mt.max_hp, mt.attack_power, e.encounter_weight
+FROM location_monster_encounters e
+JOIN monster_types mt ON mt.id = e.monster_type_id
+WHERE e.location_id = ?
+ORDER BY mt.id`, locationID)
+	if err != nil {
+		return encounterMonster{}, fmt.Errorf("get monster encounters: %w", err)
+	}
+	defer rows.Close()
+	encounters := make([]encounterMonster, 0)
+	totalWeight := 0
+	for rows.Next() {
+		var monster encounterMonster
+		if err := rows.Scan(&monster.ID, &monster.DisplayName, &monster.MaxHP, &monster.AttackPower, &monster.Weight); err != nil {
+			return encounterMonster{}, fmt.Errorf("scan monster encounter: %w", err)
+		}
+		totalWeight += monster.Weight
+		encounters = append(encounters, monster)
+	}
+	if err := rows.Err(); err != nil {
+		return encounterMonster{}, fmt.Errorf("read monster encounters: %w", err)
+	}
+	if totalWeight == 0 {
+		return encounterMonster{}, fmt.Errorf("location has no monster encounters")
+	}
+	selected := intn(totalWeight)
+	for _, monster := range encounters {
+		if selected < monster.Weight {
+			return monster, nil
+		}
+		selected -= monster.Weight
+	}
+	return encounterMonster{}, fmt.Errorf("select monster encounter")
+}
+
+func (s *Store) combatRandom() func() int {
+	if s.combatRoll != nil {
+		return s.combatRoll
+	}
+	return s.monsterRoll
+}
+
+func (s *Store) damageRandom() func(int) int {
+	if s.combatIntn != nil {
+		return s.combatIntn
+	}
+	return rand.Intn
+}
+
+func (s *Store) interceptionRandom() func() float64 {
+	if s.interceptRoll != nil {
+		return s.interceptRoll
+	}
+	return rand.Float64
+}
+
+func playerCombatDefinitionTx(tx *sql.Tx) (PlayerCombatDefinition, error) {
+	var definition PlayerCombatDefinition
+	err := tx.QueryRow(`
+SELECT id, max_hp, hp_recovery_interval_seconds, base_attack_power
+FROM player_combat_definitions WHERE id = 1`).Scan(
+		&definition.ID, &definition.MaxHP, &definition.HPRecoveryIntervalSeconds, &definition.BaseAttackPower,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerCombatDefinition{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return PlayerCombatDefinition{}, fmt.Errorf("get player combat definition: %w", err)
+	}
+	return definition, nil
+}
+
+func persistHPForValueTx(tx *sql.Tx, userID int64, hp int, definition PlayerCombatDefinition, now time.Time) error {
+	if hp < 1 {
+		hp = 1
+	}
+	if hp > definition.MaxHP {
+		hp = definition.MaxHP
+	}
+	fullTimestamp := now.Add(time.Duration(definition.MaxHP-hp) * time.Duration(definition.HPRecoveryIntervalSeconds) * time.Second).Unix()
+	if _, err := tx.Exec(`UPDATE player_hp SET full_timestamp = ? WHERE user_id = ?`, fullTimestamp, userID); err != nil {
+		return fmt.Errorf("persist player HP: %w", err)
+	}
+	return nil
+}
+
+func consumeAttackAPTx(tx *sql.Tx, userID int64, fullTimestamp int64, cost int, now time.Time) error {
+	fullAt := unixSeconds(fullTimestamp)
+	if fullAt.Before(now) {
+		fullAt = now
+	}
+	nextFullTimestamp := fullAt.Add(time.Duration(cost) * apRecoveryTime).Unix()
+	result, err := tx.Exec(`
+UPDATE player_ap SET full_timestamp = ?
+WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
+	if err != nil {
+		return fmt.Errorf("consume attack AP: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check attack AP: %w", err)
+	}
+	if rows != 1 {
+		return ErrInsufficientAP
+	}
+	return nil
+}
+
+func (s *Store) resolveCombatTx(tx *sql.Tx, userID int64, locationID string, now time.Time) (CombatResult, error) {
+	definition, err := playerCombatDefinitionTx(tx)
+	if err != nil {
+		return CombatResult{}, err
+	}
+	monster, err := selectEncounterMonsterTx(tx, locationID, s.damageRandom())
+	if err != nil {
+		return CombatResult{}, err
+	}
+	combat := CombatResult{Monster: CombatMonster{TypeID: monster.ID, DisplayName: monster.DisplayName}, Events: make([]CombatEvent, 0), Drops: make([]CombatDrop, 0), DropCalculations: make([]CombatDropCalculation, 0)}
+	var fullTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_hp WHERE user_id = ?`, userID).Scan(&fullTimestamp); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CombatResult{}, ErrIdentityNotFound
+		}
+		return CombatResult{}, fmt.Errorf("get player HP for combat: %w", err)
+	}
+	playerHP := calculateHP(unixSeconds(fullTimestamp), now, definition.MaxHP, definition.HPRecoveryIntervalSeconds)
+	monsterHP := monster.MaxHP
+	for playerHP > 0 && monsterHP > 0 {
+		damage := damageRoll(definition.BaseAttackPower, s.damageRandom())
+		monsterHP -= damage
+		if monsterHP < 0 {
+			monsterHP = 0
+		}
+		combat.Events = append(combat.Events, CombatEvent{Attacker: "player", Damage: damage, TargetRemainingHP: monsterHP})
+		if monsterHP == 0 {
+			combat.Result = "victory"
+			break
+		}
+		damage = damageRoll(monster.AttackPower, s.damageRandom())
+		playerHP -= damage
+		if playerHP < 0 {
+			playerHP = 0
+		}
+		combat.Events = append(combat.Events, CombatEvent{Attacker: "monster", Damage: damage, TargetRemainingHP: playerHP})
+		if playerHP == 0 {
+			combat.Result = "defeat"
+		}
+	}
+	if combat.Result == "defeat" {
+		if err := persistHPForValueTx(tx, userID, 1, definition, now); err != nil {
+			return CombatResult{}, err
+		}
+		return combat, nil
+	}
+	if len(combat.Events) > 1 {
+		if err := persistHPForValueTx(tx, userID, playerHP, definition, now); err != nil {
+			return CombatResult{}, err
+		}
+	}
+	result, err := tx.Exec(`
+UPDATE location_monster_populations
+SET monster_count = monster_count - 1
+WHERE location_id = ? AND monster_count > 0`, locationID)
+	if err != nil {
+		return CombatResult{}, fmt.Errorf("decrement location monster population: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return CombatResult{}, fmt.Errorf("check location monster decrement: %w", err)
+	}
+	if rows != 1 {
+		return CombatResult{}, ErrNoMonster
+	}
+	dropRows, err := tx.Query(`
+SELECT i.id, i.display_name, i.weight_units, i.max_durability_seconds, d.chance_bps, d.quantity
+FROM monster_drop_rules d
+JOIN items i ON i.id = d.item_id
+WHERE d.monster_type_id = ?
+ORDER BY i.id`, monster.ID)
+	if err != nil {
+		return CombatResult{}, fmt.Errorf("get monster drops: %w", err)
+	}
+	defer dropRows.Close()
+	for dropRows.Next() {
+		var drop CombatDrop
+		var chance int
+		if err := dropRows.Scan(&drop.Item.ID, &drop.Item.DisplayName, &drop.Item.WeightUnits, &drop.Item.MaxDurabilitySeconds, &chance, &drop.Quantity); err != nil {
+			return CombatResult{}, fmt.Errorf("scan monster drop: %w", err)
+		}
+		outcome := "not_dropped"
+		if normalizeCombatRoll(s.combatRandom()) < chance {
+			if err := addActiveItemHoldingTx(tx, "player_inventory", "user_id", userID, drop.Item.ID, drop.Quantity, now.Unix()+int64(drop.Item.MaxDurabilitySeconds)); err != nil {
+				return CombatResult{}, fmt.Errorf("add monster drop: %w", err)
+			}
+			combat.Drops = append(combat.Drops, drop)
+			outcome = "dropped"
+		}
+		combat.DropCalculations = append(combat.DropCalculations, CombatDropCalculation{ItemID: drop.Item.ID, ChanceBPS: chance, Quantity: drop.Quantity, Outcome: outcome})
+	}
+	if err := dropRows.Err(); err != nil {
+		return CombatResult{}, fmt.Errorf("read monster drops: %w", err)
+	}
+	return combat, nil
+}
+
+func (s *Store) Attack(userID int64) (PlayerState, CombatResult, error) {
+	if userID <= 0 {
+		return PlayerState{}, CombatResult{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlayerState{}, CombatResult{}, fmt.Errorf("begin attack: %w", err)
+	}
+	now := s.now().UTC()
+	locationID, err := playerLocationTx(tx, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	var fullTimestamp int64
+	if err := tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlayerState{}, CombatResult{}, ErrIdentityNotFound
+		}
+		return PlayerState{}, CombatResult{}, fmt.Errorf("get player AP for attack: %w", err)
+	}
+	if calculateAP(unixSeconds(fullTimestamp), now) < defaultActiveAttackAPCost {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, ErrInsufficientAP
+	}
+	monsterState, err := settleLocationMonstersTx(tx, locationID, now, s.monsterRoll)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	if monsterState.MonsterCount == 0 {
+		state, stateErr := s.getPlayerStateTxWithOptions(tx, userID, now, false, false)
+		if stateErr != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, CombatResult{}, stateErr
+		}
+		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
+		if err := tx.Commit(); err != nil {
+			return PlayerState{}, CombatResult{}, fmt.Errorf("commit empty attack settlement: %w", err)
+		}
+		return state, CombatResult{}, ErrNoMonster
+	}
+	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	if err := consumeAttackAPTx(tx, userID, fullTimestamp, defaultActiveAttackAPCost, now); err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	combat, err := s.resolveCombatTx(tx, userID, locationID, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	state, err := s.getPlayerStateTxWithOptions(tx, userID, now, true, false)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
+	prependItemDurabilityCleanups(&state, cleanupEvents)
+	if err := tx.Commit(); err != nil {
+		return PlayerState{}, CombatResult{}, fmt.Errorf("commit attack: %w", err)
+	}
+	return state, combat, nil
 }
 
 func carryingWeightTx(tx *sql.Tx, userID int64) (int, error) {
@@ -2274,31 +2952,36 @@ func requireResourceTx(tx *sql.Tx, resourceID string) error {
 }
 
 func (s *Store) Move(userID int64, targetID string) (PlayerState, error) {
+	state, _, err := s.MoveWithCombat(userID, targetID)
+	return state, err
+}
+
+func (s *Store) MoveWithCombat(userID int64, targetID string) (PlayerState, CombatResult, error) {
 	if userID <= 0 {
-		return PlayerState{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
 	}
 	if strings.TrimSpace(targetID) == "" {
-		return PlayerState{}, fmt.Errorf("%w: target is required", ErrInvalidArgument)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("%w: target is required", ErrInvalidArgument)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return PlayerState{}, fmt.Errorf("begin move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("begin move: %w", err)
 	}
 	now := s.now().UTC()
 	cleanupEvents, err := normalizeItemHoldingsWithMetadataTx(tx, now, userID)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return PlayerState{}, CombatResult{}, err
 	}
 	var originID string
 	err = tx.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&originID)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrIdentityNotFound
+		return PlayerState{}, CombatResult{}, ErrIdentityNotFound
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get player location for move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("get player location for move: %w", err)
 	}
 	var route Route
 	err = tx.QueryRow(`
@@ -2307,34 +2990,69 @@ FROM routes
 WHERE origin_id = ? AND destination_id = ?`, originID, targetID).Scan(&route.OriginID, &route.DestinationID, &route.APCost)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrRouteNotFound
+		return PlayerState{}, CombatResult{}, ErrRouteNotFound
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get route for move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("get route for move: %w", err)
 	}
 	var fullTimestamp int64
 	err = tx.QueryRow(`SELECT full_timestamp FROM player_ap WHERE user_id = ?`, userID).Scan(&fullTimestamp)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrIdentityNotFound
+		return PlayerState{}, CombatResult{}, ErrIdentityNotFound
 	}
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("get player AP for move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("get player AP for move: %w", err)
 	}
 	if calculateAP(unixSeconds(fullTimestamp), now) < route.APCost {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrInsufficientAP
+		return PlayerState{}, CombatResult{}, ErrInsufficientAP
 	}
 	carriedWeight, err := carryingWeightTx(tx, userID)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return PlayerState{}, CombatResult{}, err
 	}
 	if carriedWeight > movementWeightThreshold {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrOverweight
+		return PlayerState{}, CombatResult{}, ErrOverweight
+	}
+	monsterState, err := settleLocationMonstersTx(tx, originID, now, s.monsterRoll)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	var interceptChanceBPS int
+	err = tx.QueryRow(`SELECT intercept_chance_bps FROM location_monster_rules WHERE location_id = ?`, originID).Scan(&interceptChanceBPS)
+	if errors.Is(err, sql.ErrNoRows) {
+		interceptChanceBPS = 0
+	} else if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, fmt.Errorf("get move interception rule: %w", err)
+	}
+	combinedChance := combinedInterceptionChance(interceptChanceBPS, monsterState.MonsterCount)
+	interception := &MonsterInterceptionComputation{LocationID: originID, MonsterCount: monsterState.MonsterCount, PerMonsterChance: float64(interceptChanceBPS) / 10000, CombinedChance: combinedChance, Outcome: "not_intercepted"}
+	if combinedChance > 0 && s.interceptionRandom()() < combinedChance {
+		interception.Outcome = "intercepted"
+		combat, combatErr := s.resolveCombatTx(tx, userID, originID, now)
+		if combatErr != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, CombatResult{}, combatErr
+		}
+		state, stateErr := s.getPlayerStateTxWithOptions(tx, userID, now, true, false)
+		if stateErr != nil {
+			_ = tx.Rollback()
+			return PlayerState{}, CombatResult{}, stateErr
+		}
+		state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation}
+		state.MonsterInterception = interception
+		prependItemDurabilityCleanups(&state, cleanupEvents)
+		if err := tx.Commit(); err != nil {
+			return PlayerState{}, CombatResult{}, fmt.Errorf("commit intercepted move: %w", err)
+		}
+		return state, combat, nil
 	}
 	fullAt := unixSeconds(fullTimestamp)
 	if fullAt.Before(now) {
@@ -2346,43 +3064,50 @@ UPDATE player_ap SET full_timestamp = ?
 WHERE user_id = ? AND full_timestamp = ?`, nextFullTimestamp, userID, fullTimestamp)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("consume AP for move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("consume AP for move: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("check move AP: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("check move AP: %w", err)
 	}
 	if rows != 1 {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrInsufficientAP
+		return PlayerState{}, CombatResult{}, ErrInsufficientAP
 	}
 	result, err = tx.Exec(`
 UPDATE player_locations SET location_id = ?
 WHERE user_id = ? AND location_id = ?`, route.DestinationID, userID, originID)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("update player location: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("update player location: %w", err)
 	}
 	rows, err = result.RowsAffected()
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, fmt.Errorf("check player location update: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("check player location update: %w", err)
 	}
 	if rows != 1 {
 		_ = tx.Rollback()
-		return PlayerState{}, ErrRouteNotFound
+		return PlayerState{}, CombatResult{}, ErrRouteNotFound
 	}
-	state, err := s.getPlayerStateTx(tx, userID, now)
+	destinationMonsterState, err := settleLocationMonstersTx(tx, route.DestinationID, now, s.monsterRoll)
 	if err != nil {
 		_ = tx.Rollback()
-		return PlayerState{}, err
+		return PlayerState{}, CombatResult{}, err
 	}
+	state, err := s.getPlayerStateTxWithOptions(tx, userID, now, true, false)
+	if err != nil {
+		_ = tx.Rollback()
+		return PlayerState{}, CombatResult{}, err
+	}
+	state.MonsterSettlements = []*MonsterSettlementComputation{monsterState.Computation, destinationMonsterState.Computation}
+	state.MonsterInterception = interception
 	prependItemDurabilityCleanups(&state, cleanupEvents)
 	if err := tx.Commit(); err != nil {
-		return PlayerState{}, fmt.Errorf("commit move: %w", err)
+		return PlayerState{}, CombatResult{}, fmt.Errorf("commit move: %w", err)
 	}
-	return state, nil
+	return state, CombatResult{}, nil
 }
 
 func conversionMethodForID(tx *sql.Tx, methodID string) (ConversionMethod, error) {
@@ -3570,6 +4295,25 @@ func calculateAP(fullTimestamp, now time.Time) int {
 		return 0
 	}
 	return maxAP - int(missing)
+}
+
+func calculateHP(fullTimestamp, now time.Time, maxHP, recoveryIntervalSeconds int) int {
+	if maxHP <= 0 || recoveryIntervalSeconds <= 0 {
+		return 1
+	}
+	remaining := fullTimestamp.Sub(now)
+	if remaining <= 0 {
+		return maxHP
+	}
+	interval := time.Duration(recoveryIntervalSeconds) * time.Second
+	missing := remaining / interval
+	if remaining%interval != 0 {
+		missing++
+	}
+	if missing >= time.Duration(maxHP-1) {
+		return 1
+	}
+	return maxHP - int(missing)
 }
 
 func (s *Store) GetIdentity(id int64) (Identity, error) {

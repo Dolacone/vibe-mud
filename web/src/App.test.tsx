@@ -12,6 +12,7 @@ vi.mock("./auth", async () => {
     updatePlayerName: vi.fn(),
     rest: vi.fn(),
     move: vi.fn(),
+    attack: vi.fn(),
     gather: vi.fn(),
     convert: vi.fn(),
     craft: vi.fn(),
@@ -30,6 +31,7 @@ const getCurrentUser = vi.mocked(auth.getCurrentUser);
 const updatePlayerName = vi.mocked(auth.updatePlayerName);
 const rest = vi.mocked(auth.rest);
 const move = vi.mocked(auth.move);
+const attack = vi.mocked(auth.attack);
 const gather = vi.mocked(auth.gather);
 const convert = vi.mocked(auth.convert);
 const craft = vi.mocked(auth.craft);
@@ -191,6 +193,8 @@ const completedSawmill = {
 const campState: auth.PlayerState = {
   available_actions: ["rest", "move", "convert", "craft", "build"],
   location: { id: "camp", display_name: "Camp" },
+  hp: 100,
+  monster_count: 0,
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
   carried_weight: 0,
@@ -237,6 +241,18 @@ const allGameplayState: auth.PlayerState = {
   buildings: [underConstruction, completedWithExtension],
 };
 
+const combat = {
+  monster: { display_name: "Forest Rat" },
+  events: [
+    { attacker: "Ada", damage: 3, target_remaining_hp: 7 },
+    { attacker: "Forest Rat", damage: 2, target_remaining_hp: 98 },
+    { attacker: "Ada", damage: 4, target_remaining_hp: 3 },
+    { attacker: "Ada", damage: 3, target_remaining_hp: 0 },
+  ],
+  result: "victory" as const,
+  drops: [{ item: { id: "rat_tail", display_name: "Rat Tail" }, quantity: 1 }],
+};
+
 const authenticated = (state: auth.PlayerState = campState, displayName = "Ada"): auth.AuthResult => ({ status: "authenticated", user: { id: 1, display_name: displayName, email: "ada@example.com", player_name: "Ada", ...state } });
 const namedUser = (): auth.CurrentUser => {
   const result = authenticated();
@@ -265,6 +281,7 @@ describe("App gameplay tab integration", () => {
     updatePlayerName.mockReset();
     rest.mockReset();
     move.mockReset();
+    attack.mockReset();
     gather.mockReset();
     convert.mockReset();
     craft.mockReset();
@@ -282,7 +299,7 @@ describe("App gameplay tab integration", () => {
     await renderAuthenticated();
 
     expect(screen.getByLabelText("目前 AP 3000")).toBeInTheDocument();
-    expect(screen.getByLabelText("目前 HP 尚未實作")).toHaveTextContent("HP --");
+    expect(screen.getByLabelText("目前 HP 100")).toHaveTextContent("HP 100");
     expect(screen.getByLabelText("Weight 0/1000")).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "主分頁" })).getAllByRole("button")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "地圖" })).toHaveAttribute("aria-current", "page");
@@ -505,6 +522,33 @@ describe("App gameplay tab integration", () => {
     expect(screen.getByLabelText("目前 AP 2980")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Available routes" })).toHaveTextContent("To camp (20 AP)");
     expect(move).toHaveBeenCalledWith("forest_edge");
+  });
+
+  it("shows the backend-gated Area attack and applies its combat state without reload", async () => {
+    const attackState = { ...forestState, available_actions: ["attack"], monster_count: 1 };
+    await renderAuthenticated(attackState);
+    await selectTab("地區");
+
+    expect(screen.getByText("Monster count: 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Attack" })).toBeEnabled();
+    attack.mockResolvedValue({ ...attackState, status: "success", hp: 98, ap: 2970, monster_count: 0, combat });
+
+    fireEvent.click(screen.getByRole("button", { name: "Attack" }));
+    await waitFor(() => expect(screen.getByRole("table", { name: "Combat transcript" })).toHaveTextContent("Forest Rat"));
+    expect(screen.getByLabelText("目前 HP 98")).toBeInTheDocument();
+    expect(screen.getByLabelText("目前 AP 2970")).toBeInTheDocument();
+    expect(screen.getByText("Monster count: 0")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Combat transcript" })).toHaveTextContent("Rat Tail: 1");
+  });
+
+  it("shows intercepted Move combat and keeps the player at the original location", async () => {
+    await renderAuthenticated();
+    move.mockResolvedValue({ ...campState, status: "success", hp: 98, monster_count: 0, combat });
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to forest_edge" }));
+    await waitFor(() => expect(screen.getByRole("table", { name: "Combat transcript" })).toHaveTextContent("Forest Rat"));
+    expect(screen.getByText("Current location: Camp")).toBeInTheDocument();
+    expect(screen.getByLabelText("目前 HP 98")).toBeInTheDocument();
   });
 
   it("applies authoritative weight updates in the fixed header", async () => {

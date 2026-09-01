@@ -17,6 +17,7 @@ const RESOURCE_ORDER = ["food", "wood", "stone", "metal", "fiber", "hide", "medi
 
 export type GameShellPlayer = {
   ap: number;
+  hp: number;
   carried_weight: number;
   movement_weight_threshold: number;
   resources: Resource[];
@@ -28,7 +29,6 @@ export type GameShellProps = {
   activeTab?: GameShellTab;
   defaultTab?: GameShellTab;
   onTabChange?: (tab: GameShellTab) => void;
-  hp?: number;
 };
 
 function orderedNonZeroResources(resources: Resource[]) {
@@ -50,7 +50,7 @@ function weightState(current: number, maximum: number) {
   return "red";
 }
 
-export function GameShell({ player, tabContent, activeTab, defaultTab = "map", onTabChange, hp }: GameShellProps) {
+export function GameShell({ player, tabContent, activeTab, defaultTab = "map", onTabChange }: GameShellProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<GameShellTab>(defaultTab);
   const selectedTab = activeTab ?? uncontrolledTab;
   const tabButtons = useRef<Partial<Record<GameShellTab, HTMLButtonElement>>>({});
@@ -77,8 +77,8 @@ export function GameShell({ player, tabContent, activeTab, defaultTab = "map", o
           <span className="game-shell__status-item" aria-label={`目前 AP ${player.ap}`}>
             <span aria-hidden="true">AP {player.ap}</span>
           </span>
-          <span className="game-shell__status-item" aria-label={hp === undefined ? "目前 HP 尚未實作" : `目前 HP ${hp}`}>
-            <span aria-hidden="true">HP {hp === undefined ? "--" : hp}</span>
+          <span className="game-shell__status-item" aria-label={`目前 HP ${player.hp}`}>
+            <span aria-hidden="true">HP {player.hp}</span>
           </span>
           <span className={`game-shell__status-item game-shell__status-item--weight game-shell__status-item--${currentWeightState}`} aria-label={weightLabel}>
             <span aria-hidden="true">{weightLabel}</span>

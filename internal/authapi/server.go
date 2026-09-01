@@ -65,6 +65,8 @@ type routeResponse struct {
 type playerStateResponse struct {
 	AvailableActions             []string                              `json:"available_actions"`
 	Location                     locationResponse                      `json:"location"`
+	HP                           int                                   `json:"hp"`
+	MonsterCount                 int                                   `json:"monster_count"`
 	Routes                       []routeResponse                       `json:"routes"`
 	AP                           int                                   `json:"ap"`
 	CarriedWeight                int                                   `json:"carried_weight"`
@@ -83,8 +85,37 @@ type playerStateResponse struct {
 }
 
 type moveResponse struct {
-	Error string `json:"error,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	Combat *combatResponse `json:"combat,omitempty"`
 	playerStateResponse
+}
+
+type attackResponse struct {
+	Error  string          `json:"error,omitempty"`
+	Combat *combatResponse `json:"combat,omitempty"`
+	playerStateResponse
+}
+
+type combatResponse struct {
+	Monster combatMonsterResponse `json:"monster"`
+	Events  []combatEventResponse `json:"events"`
+	Result  string                `json:"result"`
+	Drops   []combatDropResponse  `json:"drops"`
+}
+
+type combatMonsterResponse struct {
+	DisplayName string `json:"display_name"`
+}
+
+type combatEventResponse struct {
+	Attacker          string `json:"attacker"`
+	Damage            int    `json:"damage"`
+	TargetRemainingHP int    `json:"target_remaining_hp"`
+}
+
+type combatDropResponse struct {
+	Item     itemResponse `json:"item"`
+	Quantity int          `json:"quantity"`
 }
 
 type moveRequest struct {
@@ -246,6 +277,10 @@ const (
 	transferReasonExpiredItem        = "expired_item"
 
 	moveAction                       = "move"
+	attackAction                     = "attack"
+	attackReasonInvalidJSON          = "invalid_json"
+	attackReasonUnknownField         = "unknown_field"
+	attackReasonExtraValue           = "extra_json_value"
 	restAction                       = "rest"
 	moveReasonInvalidJSON            = "invalid_json"
 	moveReasonUnknownField           = "unknown_field"
@@ -387,6 +422,7 @@ func (s *Server) Routes(frontendFallback ...http.Handler) http.Handler {
 	r.Get("/api/me", s.me)
 	r.Put("/api/player/name", s.updatePlayerName)
 	r.Post("/api/actions/rest", s.requirePlayerName(s.rest))
+	r.Post("/api/actions/attack", s.requirePlayerName(s.attack))
 	r.Post("/api/actions/move", s.requirePlayerName(s.move))
 	r.Post("/api/actions/gather", s.requirePlayerName(s.gather))
 	r.Post("/api/actions/convert", s.requirePlayerName(s.convert))
@@ -526,6 +562,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	s.logCombatState(r, identity.ID, state)
 	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
 	s.logItemDurability(r, fmt.Sprintf("%d", identity.ID), state)
@@ -585,6 +622,7 @@ func (s *Server) updatePlayerName(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logAction(r, session.UserID, playerNameAction, "success")
 	s.logComputation(r, identity.ID, "ap_calculation", "success", state.AP)
+	s.logCombatState(r, identity.ID, state)
 	s.logCarryingWeightComputation(r, identity.ID, state)
 	s.logBuildingDurabilityComputation(r, identity.ID, state.Buildings)
 	s.logItemDurability(r, fmt.Sprintf("%d", identity.ID), state)
@@ -610,6 +648,9 @@ func (s *Server) requirePlayerName(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if profile.PlayerName == nil {
+			if r.URL.Path == "/api/actions/attack" {
+				s.logAttackFailure(r, session.UserID, "player_name_required")
+			}
 			s.writeError(w, http.StatusConflict, "player name required")
 			return
 		}
@@ -1331,7 +1372,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid action input")
 		return
 	}
-	state, err := s.store.Move(session.UserID, request.Target)
+	state, combat, err := s.store.MoveWithCombat(session.UserID, request.Target)
 	if errors.Is(err, ErrInsufficientAP) {
 		state, stateErr := s.store.GetPlayerState(session.UserID)
 		if stateErr != nil {
@@ -1369,8 +1410,50 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logComputation(r, session.UserID, "ap_calculation", "success", state.AP)
+	if combat.Result != "" {
+		s.setAccessLogMetadata(r, state.Location.ID, "monster_interception")
+		s.logCombat(r, session.UserID, moveAction, state, combat)
+	}
 	s.logAction(r, session.UserID, moveAction, "success")
-	s.writeJSON(w, http.StatusOK, s.playerStateResponse(r, session.UserID, state))
+	response := moveResponse{playerStateResponse: s.playerStateResponse(r, session.UserID, state)}
+	if combat.Result != "" {
+		response.Combat = combatResponseFromStore(combat)
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticatedSession(r)
+	if err != nil {
+		s.setAccessLogMetadata(r, "unknown", "authentication_required")
+		s.writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if reason := decodeAttackRequest(r.Body); reason != "" {
+		s.logAttackFailure(r, session.UserID, reason)
+		s.writeError(w, http.StatusBadRequest, "invalid action input")
+		return
+	}
+	state, combat, err := s.store.Attack(session.UserID)
+	if errors.Is(err, ErrInsufficientAP) {
+		s.logAttackFailure(r, session.UserID, "insufficient_ap")
+		s.writeError(w, http.StatusConflict, ErrInsufficientAP.Error())
+		return
+	}
+	if errors.Is(err, ErrNoMonster) {
+		s.logAttackFailure(r, session.UserID, "no_monsters")
+		s.writeJSON(w, http.StatusConflict, attackResponse{Error: ErrNoMonster.Error(), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
+		return
+	}
+	if err != nil {
+		s.logAttackFailure(r, session.UserID, "internal_error")
+		s.writeError(w, http.StatusInternalServerError, "action unavailable")
+		return
+	}
+	s.setAccessLogMetadata(r, state.Location.ID, "combat_completed")
+	s.logCombat(r, session.UserID, attackAction, state, combat)
+	s.logAction(r, session.UserID, attackAction, "success")
+	s.writeJSON(w, http.StatusOK, attackResponse{Combat: combatResponseFromStore(combat), playerStateResponse: s.playerStateResponse(r, session.UserID, state)})
 }
 
 func (s *Server) authenticatedSession(r *http.Request) (Session, error) {
@@ -1486,6 +1569,39 @@ func decodeMoveRequest(body io.Reader) (moveRequest, string) {
 		return moveRequest{}, moveReasonInvalidTarget
 	}
 	return request, ""
+}
+
+func decodeAttackRequest(body io.Reader) string {
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil {
+		return attackReasonInvalidJSON
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return attackReasonInvalidJSON
+	}
+	if decoder.More() {
+		var field string
+		if err := decoder.Decode(&field); err != nil {
+			return attackReasonInvalidJSON
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return attackReasonInvalidJSON
+		}
+		return attackReasonUnknownField
+	}
+	if token, err = decoder.Token(); err != nil {
+		return attackReasonInvalidJSON
+	} else if delim, ok = token.(json.Delim); !ok || delim != '}' {
+		return attackReasonInvalidJSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return attackReasonExtraValue
+	}
+	return ""
 }
 
 func decodeTransferRequest(body io.Reader) (transferRequest, string) {
@@ -2000,6 +2116,8 @@ func playerStateResponseFromStore(state PlayerState, userID int64) playerStateRe
 	return playerStateResponse{
 		AvailableActions:             availability.Actions,
 		Location:                     locationResponseFromStore(state.Location),
+		HP:                           state.HP,
+		MonsterCount:                 state.MonsterCount,
 		Routes:                       routeResponsesFromStore(state.Routes),
 		AP:                           state.AP,
 		CarriedWeight:                state.CarriedWeight,
@@ -2025,6 +2143,9 @@ func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerStat
 
 	if state.AP > 0 {
 		availability.Actions = append(availability.Actions, restAction)
+	}
+	if canAttack(state.MonsterCount, state.AP, state.AttackAPCost) {
+		availability.Actions = append(availability.Actions, attackAction)
 	}
 	availableRoutes := make([]Route, 0, len(state.Routes))
 	if state.CarriedWeight <= state.MovementWeightThreshold {
@@ -2267,10 +2388,23 @@ func conversionMethodResponsesFromStore(methods []ConversionMethod, providers ma
 }
 
 func (s *Server) playerStateResponse(r *http.Request, userID int64, state PlayerState) playerStateResponse {
+	s.logCombatState(r, userID, state)
 	s.logCarryingWeightComputation(r, userID, state)
 	s.logBuildingDurabilityComputation(r, userID, state.Buildings)
 	s.logItemDurability(r, fmt.Sprintf("%d", userID), state)
 	return playerStateResponseFromStore(state, userID)
+}
+
+func combatResponseFromStore(combat CombatResult) *combatResponse {
+	events := make([]combatEventResponse, 0, len(combat.Events))
+	for _, event := range combat.Events {
+		events = append(events, combatEventResponse{Attacker: event.Attacker, Damage: event.Damage, TargetRemainingHP: event.TargetRemainingHP})
+	}
+	drops := make([]combatDropResponse, 0, len(combat.Drops))
+	for _, drop := range combat.Drops {
+		drops = append(drops, combatDropResponse{Item: itemResponseFromStore(drop.Item), Quantity: drop.Quantity})
+	}
+	return &combatResponse{Monster: combatMonsterResponse{DisplayName: combat.Monster.DisplayName}, Events: events, Result: combat.Result, Drops: drops}
 }
 
 func itemDurabilityPercentage(status string, remaining *int, maximum int) int {
@@ -2592,6 +2726,8 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 
 func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metadata := &accessLogMetadata{}
+		r = r.WithContext(context.WithValue(r.Context(), accessLogMetadataContextKey{}, metadata))
 		recorder := &statusRecorder{ResponseWriter: w}
 		next.ServeHTTP(recorder, r)
 		userID := "anonymous"
@@ -2608,6 +2744,10 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		if status >= http.StatusBadRequest {
 			outcome = http.StatusText(status)
 		}
+		if metadata.LocationID != "" && metadata.Reason != "" {
+			fmt.Fprintf(os.Stdout, "user_id=%s action=%s location_id=%s outcome=%s reason=%s request_id=%s\n", userID, accessLogAction(r), metadata.LocationID, outcome, metadata.Reason, requestID(r))
+			return
+		}
 		s.logActionWithID(requestID(r), userID, accessLogAction(r), outcome)
 	})
 }
@@ -2617,6 +2757,8 @@ func accessLogAction(r *http.Request) string {
 		switch r.URL.Path {
 		case "/api/actions/rest":
 			return "rest"
+		case "/api/actions/attack":
+			return "attack"
 		case "/api/actions/move":
 			return "move"
 		case "/api/actions/gather":
@@ -2651,6 +2793,13 @@ func accessLogAction(r *http.Request) string {
 }
 
 type requestIDContextKey struct{}
+
+type accessLogMetadataContextKey struct{}
+
+type accessLogMetadata struct {
+	LocationID string
+	Reason     string
+}
 
 type statusRecorder struct {
 	http.ResponseWriter
@@ -2711,6 +2860,50 @@ func (s *Server) logComputation(r *http.Request, userID int64, action, outcome s
 	fmt.Fprintf(os.Stdout, "user_id=%d action=%s outcome=%s ap=%d request_id=%s\n", userID, action, outcome, ap, requestID(r))
 }
 
+func (s *Server) logCombatState(r *http.Request, userID int64, state PlayerState) {
+	fmt.Fprintf(os.Stdout, "user_id=%d action=hp_calculation location_id=%s outcome=success hp=%d request_id=%s\n", userID, sanitizeLogValue(state.Location.ID), state.HP, requestID(r))
+	fmt.Fprintf(os.Stdout, "user_id=%d action=monster_count_calculation location_id=%s outcome=success monster_count=%d request_id=%s\n", userID, sanitizeLogValue(state.Location.ID), state.MonsterCount, requestID(r))
+	s.logMonsterSettlement(r, userID, state)
+	if interception := state.MonsterInterception; interception != nil {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=monster_interception location_id=%s monster_count=%d per_monster_chance=%.10g combined_chance=%.10g outcome=%s request_id=%s\n", userID, sanitizeLogValue(interception.LocationID), interception.MonsterCount, interception.PerMonsterChance, interception.CombinedChance, sanitizeLogValue(interception.Outcome), requestID(r))
+	}
+}
+
+func (s *Server) logMonsterSettlement(r *http.Request, userID int64, state PlayerState) {
+	for _, settlement := range state.MonsterSettlements {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=monster_settlement location_id=%s intervals=%d spawn_chance_bps=%d monster_count_before=%d monster_count_after=%d outcome=%s request_id=%s\n", userID, sanitizeLogValue(settlement.LocationID), settlement.Intervals, settlement.SpawnChanceBPS, settlement.MonsterCountBefore, settlement.MonsterCountAfter, sanitizeLogValue(settlement.Outcome), requestID(r))
+	}
+}
+
+func (s *Server) logCombat(r *http.Request, userID int64, action string, state PlayerState, combat CombatResult) {
+	locationID := sanitizeLogValue(state.Location.ID)
+	fmt.Fprintf(os.Stdout, "user_id=%d action=encounter_selection location_id=%s outcome=success monster_type_id=%d monster_display_name=%q request_id=%s\n", userID, locationID, combat.Monster.TypeID, sanitizeLogDisplayName(combat.Monster.DisplayName), requestID(r))
+	for _, event := range combat.Events {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=damage_calculation location_id=%s outcome=success combat_action=%s attacker=%s damage=%d target_remaining_hp=%d request_id=%s\n", userID, locationID, sanitizeLogValue(action), sanitizeLogValue(event.Attacker), event.Damage, event.TargetRemainingHP, requestID(r))
+	}
+	for _, drop := range combat.DropCalculations {
+		fmt.Fprintf(os.Stdout, "user_id=%d action=drop_calculation location_id=%s outcome=%s combat_action=%s drop_item_id=%s drop_chance_bps=%d drop_quantity=%d request_id=%s\n", userID, locationID, sanitizeLogValue(drop.Outcome), sanitizeLogValue(action), sanitizeLogValue(drop.ItemID), drop.ChanceBPS, drop.Quantity, requestID(r))
+	}
+	fmt.Fprintf(os.Stdout, "user_id=%d action=%s location_id=%s outcome=%s hp=%d ap=%d monster_count=%d request_id=%s\n", userID, sanitizeLogValue(action), locationID, sanitizeLogValue(combat.Result), state.HP, state.AP, state.MonsterCount, requestID(r))
+}
+
+func (s *Server) logAttackFailure(r *http.Request, userID int64, reason string) {
+	locationID := "unknown"
+	if err := s.store.db.QueryRow(`SELECT location_id FROM player_locations WHERE user_id = ?`, userID).Scan(&locationID); err != nil {
+		locationID = "unknown"
+	}
+	s.setAccessLogMetadata(r, locationID, reason)
+}
+
+func (s *Server) setAccessLogMetadata(r *http.Request, locationID, reason string) {
+	metadata, ok := r.Context().Value(accessLogMetadataContextKey{}).(*accessLogMetadata)
+	if !ok {
+		return
+	}
+	metadata.LocationID = sanitizeLogValue(locationID)
+	metadata.Reason = sanitizeLogValue(reason)
+}
+
 func (s *Server) logConvertComputation(r *http.Request, userID int64, request convertRequest, resourceQuantity, essenceQuantity int, outcome string) {
 	fmt.Fprintf(os.Stdout, "user_id=%d action=convert method_id=%s quantity=%d resource_quantity=%d essence_quantity=%d essence_result=reported outcome=%s request_id=%s\n", userID, sanitizeLogValue(request.MethodID), request.Quantity, resourceQuantity, essenceQuantity, sanitizeLogValue(outcome), requestID(r))
 }
@@ -2758,6 +2951,19 @@ func sanitizeLogValue(value string) string {
 	}
 	for _, char := range value {
 		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return "unknown"
+		}
+	}
+	return value
+}
+
+func sanitizeLogDisplayName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 {
+		return "unknown"
+	}
+	for _, char := range value {
+		if char < 0x20 || char == '"' || char == '\\' {
 			return "unknown"
 		}
 	}
