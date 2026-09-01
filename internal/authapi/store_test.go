@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -381,11 +382,11 @@ func TestCombatCalculationsUseConfiguredEncounterAndDamageRanges(t *testing.T) {
 		want  int
 	}{
 		{power: 1, roll: 0, want: 1},
-		{power: 2, roll: 9999, want: 3},
+		{power: 2, roll: 2, want: 3},
 		{power: 3, roll: 0, want: 2},
-		{power: 3, roll: 9999, want: 4},
+		{power: 3, roll: 2, want: 4},
 	} {
-		if got := damageRoll(test.power, func() int { return test.roll }); got != test.want {
+		if got := damageRoll(test.power, func(span int) int { return test.roll }); got != test.want {
 			t.Fatalf("damageRoll(%d, %d) = %d, want %d", test.power, test.roll, got, test.want)
 		}
 	}
@@ -412,12 +413,16 @@ func TestAttackVictoryConsumesAPAndDropsDurableItemAtomically(t *testing.T) {
 		rolls = rolls[1:]
 		return value
 	}
+	store.combatIntn = func(int) int { return 0 }
 	state, combat, err := store.Attack(identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if combat.Result != "victory" || len(combat.Events) != 1 || combat.Events[0].Attacker != "player" || state.AP != maxAP-defaultActiveAttackAPCost || state.MonsterCount != 0 {
 		t.Fatalf("victory state = %+v combat = %+v", state, combat)
+	}
+	if state.MonsterSettlement == nil || state.MonsterSettlement.MonsterCountBefore != 1 || state.MonsterSettlement.MonsterCountAfter != 1 || len(state.MonsterSettlements) != 1 {
+		t.Fatalf("victory settlement = %+v/%+v", state.MonsterSettlement, state.MonsterSettlements)
 	}
 	if len(combat.Drops) != 1 || combat.Drops[0].Item.ID != "rat_tail" || inventoryQuantity(state, "rat_tail") != 1 {
 		t.Fatalf("victory drops = %+v inventory = %+v", combat.Drops, state.Inventory)
@@ -451,6 +456,7 @@ func TestAttackDefeatConsumesAPAndPreservesMonsterAtOneHP(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.combatRoll = func() int { return 0 }
+	store.combatIntn = func(int) int { return 0 }
 	state, combat, err := store.Attack(identity.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -528,6 +534,8 @@ func TestMoveInterceptionPreservesOriginAndDoesNotSpendAP(t *testing.T) {
 	}
 	store.monsterRoll = func() int { return 0 }
 	store.combatRoll = func() int { return 0 }
+	store.combatIntn = func(int) int { return 0 }
+	store.interceptRoll = func() float64 { return 0 }
 	state, combat, err := store.MoveWithCombat(identity.ID, "camp")
 	if err != nil {
 		t.Fatal(err)
@@ -553,6 +561,9 @@ func TestMoveWithoutInterceptionConsumesRouteAPAndUpdatesLocation(t *testing.T) 
 	if combat.Result != "" || state.Location.ID != "forest_edge" || state.AP != maxAP-20 || state.MonsterInterception == nil || state.MonsterInterception.Outcome != "not_intercepted" {
 		t.Fatalf("safe move state = %+v combat = %+v", state, combat)
 	}
+	if len(state.MonsterSettlements) != 2 || state.MonsterSettlements[0].LocationID != "camp" || state.MonsterSettlements[1].LocationID != "forest_edge" {
+		t.Fatalf("safe move settlements = %+v", state.MonsterSettlements)
+	}
 }
 
 func TestConcurrentAttacksCannotWinTheLastMonsterTwice(t *testing.T) {
@@ -577,6 +588,7 @@ func TestConcurrentAttacksCannotWinTheLastMonsterTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.combatRoll = func() int { return 0 }
+	store.combatIntn = func(int) int { return 0 }
 	type outcome struct {
 		combat CombatResult
 		err    error
@@ -607,17 +619,17 @@ func TestCombinedInterceptionChanceUsesConfiguredFormula(t *testing.T) {
 	for _, test := range []struct {
 		chance int
 		count  int
-		want   int
+		want   float64
 	}{
 		{chance: 0, count: 3, want: 0},
-		{chance: 1000, count: 1, want: 1000},
-		{chance: 1000, count: 2, want: 1900},
-		{chance: 1000, count: 3, want: 2710},
-		{chance: 3333, count: 2, want: 5556},
-		{chance: 10000, count: 3, want: 10000},
+		{chance: 1000, count: 1, want: 0.1},
+		{chance: 1000, count: 2, want: 0.19},
+		{chance: 1000, count: 3, want: 0.271},
+		{chance: 3333, count: 2, want: 1 - (1-0.3333)*(1-0.3333)},
+		{chance: 10000, count: 3, want: 1},
 	} {
-		if got := combinedInterceptionChanceBPS(test.chance, test.count); got != test.want {
-			t.Fatalf("combinedInterceptionChanceBPS(%d, %d) = %d, want %d", test.chance, test.count, got, test.want)
+		if got := combinedInterceptionChance(test.chance, test.count); math.Abs(got-test.want) > 1e-12 {
+			t.Fatalf("combinedInterceptionChance(%d, %d) = %f, want %f", test.chance, test.count, got, test.want)
 		}
 	}
 }

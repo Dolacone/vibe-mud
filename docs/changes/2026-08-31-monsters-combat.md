@@ -153,9 +153,9 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 ## Review Issues
 
 - [ ] [Major] REQ-018.18 要求 `attack` 依 Monster 數量與 AP 判定，但 `filterAvailableGameplayOptions` 從未呼叫 `canAttack` 或加入 `attack`。所有真實 player state 都會漏掉 `attack`，因此 REQ-022.6 的 `地區` 操作永遠不會出現。把判定接入 response filtering，並用 server response 測試取代目前只測未使用 helper 的測試。
-- [ ] [Major] REQ-025.17 要求記錄每次 Monster 生成計算，但 `Attack` 與 `MoveWithCombat` 先取得 settlement computation，再以 `getPlayerStateTx` 覆寫它。無 Monster 的 Attack 更直接回傳沒有 computation 的 state。`logMonsterSettlement` 隨後記錄第二次零間隔結算或捏造的 0 機率結果，遺失實際 interval、機率、前後數量與 outcome。保留並逐筆記錄本次 request 的實際結算，包含成功移動時的 origin 與 destination 結算。
-- [ ] [Major] REQ-025.10 要求總攔截率等於 `1 - (1 - 單隻攔截率)^N`，但 `combinedInterceptionChanceBPS` 向上取整後用一次 basis-point roll。5 隻 Monster、單隻 10% 時，要求值是 40.951%，實作值是 40.96%。刪除改變機率的向上取整，讓實際抽選符合公式。
-- [ ] [Major] REQ-026.12 要求傷害均勻抽選整數，但 `damageRoll` 把 10000 個 roll 直接切成傷害區間。MVP 攻擊力 3 的三個結果分別取得 3334、3333、3333 個 roll，並不均勻。改用無偏差的整數抽選。
+- [x] [Major] REQ-025.17 要求記錄每次 Monster 生成計算，但 `Attack` 與 `MoveWithCombat` 先取得 settlement computation，再以 `getPlayerStateTx` 覆寫它。無 Monster 的 Attack 更直接回傳沒有 computation 的 state。`logMonsterSettlement` 隨後記錄第二次零間隔結算或捏造的 0 機率結果，遺失實際 interval、機率、前後數量與 outcome。保留並逐筆記錄本次 request 的實際結算，包含成功移動時的 origin 與 destination 結算。
+- [x] [Major] REQ-025.10 要求總攔截率等於 `1 - (1 - 單隻攔截率)^N`，但 `combinedInterceptionChanceBPS` 向上取整後用一次 basis-point roll。5 隻 Monster、單隻 10% 時，要求值是 40.951%，實作值是 40.96%。刪除改變機率的向上取整，讓實際抽選符合公式。
+- [x] [Major] REQ-026.12 要求傷害均勻抽選整數，但 `damageRoll` 把 10000 個 roll 直接切成傷害區間。MVP 攻擊力 3 的三個結果分別取得 3334、3333、3333 個 roll，並不均勻。改用無偏差的整數抽選。
 - [ ] [Major] REQ-026.32 要求每個 `attack` failure access log 都包含 user ID、Location、action、outcome、拒絕原因與 request ID。未登入或 session 無效時，`requirePlayerName` 仍交給 `attack` 回傳 401，但沒有設定 Location 與拒絕原因。補齊 `unknown` Location 與 authentication failure reason，並加入 access log 測試。
 - [ ] [Major] REQ-012.4 要求顯示後端回傳的 HP，不得使用 placeholder 或前端推算值。`GameShellPlayer.hp` 卻是 optional，缺值時會顯示前端捏造的 `0`。刪除 fallback，並把 HP 改成 required state。
 - [ ] [Major] REQ-026.22 與 REQ-026.31 只需要單一 no-Monster error 與空 object validation。`ErrNoMonsters` alias 和 `attackReasonNonEmpty` 沒有任何 caller，也不服務 copied criterion 或既有 convention。刪除這兩個 dead paths。
