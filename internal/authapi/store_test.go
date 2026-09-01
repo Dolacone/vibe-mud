@@ -52,6 +52,158 @@ func inventoryQuantity(state PlayerState, itemID string) int {
 	return 0
 }
 
+func TestStoreInitializesMonsterAndCombatSchemaSeeds(t *testing.T) {
+	_, db := newTestStore(t)
+	for _, table := range []string{
+		"player_combat_definitions",
+		"player_hp",
+		"monster_types",
+		"monster_drop_rules",
+		"location_monster_rules",
+		"location_monster_encounters",
+		"location_monster_populations",
+	} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s count = %d, want 1", table, count)
+		}
+	}
+	var definition PlayerCombatDefinition
+	if err := db.QueryRow(`SELECT id, max_hp, hp_recovery_interval_seconds, base_attack_power FROM player_combat_definitions`).Scan(&definition.ID, &definition.MaxHP, &definition.HPRecoveryIntervalSeconds, &definition.BaseAttackPower); err != nil {
+		t.Fatal(err)
+	}
+	if definition != (PlayerCombatDefinition{ID: 1, MaxHP: 100, HPRecoveryIntervalSeconds: 60, BaseAttackPower: 3}) {
+		t.Fatalf("combat definition = %+v", definition)
+	}
+	var ratName, tailName string
+	var ratHP, ratAttack, tailWeight, tailChance, tailQuantity int
+	if err := db.QueryRow(`SELECT display_name, max_hp, attack_power FROM monster_types WHERE id = 1`).Scan(&ratName, &ratHP, &ratAttack); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT i.display_name, i.weight_units, d.chance_bps, d.quantity FROM monster_drop_rules d JOIN items i ON i.id = d.item_id WHERE d.monster_type_id = 1`).Scan(&tailName, &tailWeight, &tailChance, &tailQuantity); err != nil {
+		t.Fatal(err)
+	}
+	if ratName != "Forest Rat" || ratHP != 10 || ratAttack != 2 || tailName != "Rat Tail" || tailWeight != 1 || tailChance != 5000 || tailQuantity != 1 {
+		t.Fatalf("monster seed = %s %d %d, %s %d %d %d", ratName, ratHP, ratAttack, tailName, tailWeight, tailChance, tailQuantity)
+	}
+	var campInterval, campChance, campMax, campIntercept int
+	if err := db.QueryRow(`SELECT spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps FROM location_monster_rules WHERE location_id = 'camp'`).Scan(&campInterval, &campChance, &campMax, &campIntercept); err != nil {
+		t.Fatal(err)
+	}
+	if campInterval != 1800 || campChance != 0 || campMax != 0 || campIntercept != 0 {
+		t.Fatalf("camp rule = %d/%d/%d/%d", campInterval, campChance, campMax, campIntercept)
+	}
+	var forestInterval, forestChance, forestMax, forestIntercept, weight int
+	if err := db.QueryRow(`SELECT r.spawn_interval_seconds, r.spawn_chance_bps, r.max_monsters, r.intercept_chance_bps, e.encounter_weight FROM location_monster_rules r JOIN location_monster_encounters e ON e.location_id = r.location_id WHERE r.location_id = 'forest_edge' AND e.monster_type_id = 1`).Scan(&forestInterval, &forestChance, &forestMax, &forestIntercept, &weight); err != nil {
+		t.Fatal(err)
+	}
+	if forestInterval != 1800 || forestChance != 5000 || forestMax != 10 || forestIntercept != 1000 || weight != 1 {
+		t.Fatalf("forest rule = %d/%d/%d/%d weight=%d", forestInterval, forestChance, forestMax, forestIntercept, weight)
+	}
+}
+
+func TestStoreBackfillsFullHPForExistingAndNewPlayers(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "hp-existing", "existing@example.com", "Existing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fullTimestamp int64
+	if err := db.QueryRow(`SELECT full_timestamp FROM player_hp WHERE user_id = ?`, identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp != now.Unix() {
+		t.Fatalf("new player full timestamp = %d, want %d", fullTimestamp, now.Unix())
+	}
+	if _, err := db.Exec(`DELETE FROM player_hp WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT full_timestamp FROM player_hp WHERE user_id = ?`, identity.ID).Scan(&fullTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if fullTimestamp <= 0 {
+		t.Fatalf("existing player was not backfilled: %d", fullTimestamp)
+	}
+}
+
+func TestStoreDerivesHPFromFullTimestampAndCombatDefinition(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "hp-boundaries", "hp@example.com", "HP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		at   time.Time
+		want int
+	}{
+		{"full", now, 100},
+		{"one second before full", now.Add(time.Second), 99},
+		{"one interval before full", now.Add(60 * time.Second), 99},
+		{"one interval plus one second", now.Add(61 * time.Second), 98},
+		{"minimum", now.Add(99 * 60 * time.Second), 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := db.Exec(`UPDATE player_hp SET full_timestamp = ? WHERE user_id = ?`, test.at.Unix(), identity.ID); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.GetHP(identity.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("HP = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStorePersistsPlayerHPAndPopulationDefinitionsAcrossReload(t *testing.T) {
+	store, db := newTestStore(t)
+	now := time.Unix(1_700_000_123, 0).UTC()
+	store.now = func() time.Time { return now }
+	identity, err := store.UpsertIdentity("issuer", "hp-persist", "persist@example.com", "Persist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE player_hp SET full_timestamp = ? WHERE user_id = ?`, now.Add(3*time.Minute).Unix(), identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE location_monster_populations SET monster_count = 2, settled_at = ? WHERE location_id = 'forest_edge'`, now.Add(-time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.now = func() time.Time { return now }
+	hp, err := reloaded.GetPlayerHPState(identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp.FullTimestamp.Unix() != now.Add(3*time.Minute).Unix() {
+		t.Fatalf("reloaded HP timestamp = %d", hp.FullTimestamp.Unix())
+	}
+	var count int
+	var settledAt int64
+	if err := db.QueryRow(`SELECT monster_count, settled_at FROM location_monster_populations WHERE location_id = 'forest_edge'`).Scan(&count, &settledAt); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || settledAt != now.Add(-time.Hour).Unix() {
+		t.Fatalf("reloaded population = %d at %d", count, settledAt)
+	}
+}
+
 func TestPlayerProfileInitializesUnnamedAndPersistsAcrossReads(t *testing.T) {
 	store, db := newTestStore(t)
 	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-player-profile", "player@example.com", "Google Name")
@@ -466,7 +618,7 @@ func TestItemDefinitionsUseOneHourDurability(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	wantWeights := map[string]int{"wood": 100, "wood_component": 10, "wood_essence_t1": 1, "sawmill_package_t1": 10}
+	wantWeights := map[string]int{"wood": 100, "wood_component": 10, "wood_essence_t1": 1, "sawmill_package_t1": 10, "rat_tail": 1}
 	for rows.Next() {
 		var id string
 		var weightUnits, maxDurabilitySeconds int

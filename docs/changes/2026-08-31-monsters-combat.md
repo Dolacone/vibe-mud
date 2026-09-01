@@ -9,6 +9,8 @@ source_paths:
   - docs/changes/2026-08-31-monsters-combat.md
   - docs/schemas.md
   - docs/terminology.md
+  - internal/authapi/store.go
+  - internal/authapi/store_test.go
 req_ref: REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, REQ-026
 base_branch: main
 scope: "Tracks lazy Location Monster population, movement interception, automatic combat, HP recovery, drops, and the mobile interface."
@@ -44,7 +46,7 @@ REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, and REQ-026 are the source
 
 Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 
-- [ ] Task 1 [parallel: no]: Add only the SQLite definitions and Store state needed for player HP, Monster types, drops, Location rules, encounter weights, and aggregate Location populations in `internal/authapi/store.go`. Seed camp, forest_edge, Forest Rat, Rat Tail, and full HP for existing and new players. Add Store tests and update `docs/schemas.md` and `docs/terminology.md`.
+- [x] Task 1 [parallel: no]: Add only the SQLite definitions and Store state needed for player HP, Monster types, drops, Location rules, encounter weights, and aggregate Location populations in `internal/authapi/store.go`. Seed camp, forest_edge, Forest Rat, Rat Tail, and full HP for existing and new players. Add Store tests and update `docs/schemas.md` and `docs/terminology.md`.
   - REQ-025.1: 每個 Location 必須定義生成間隔秒數、單次生成機率、Monster 數量上限與單隻攔截機率。
   - REQ-025.2: 每個會生成 Monster 的 Location 必須用正整數外部鍵引用一種以上 Monster type，並為每種 type 定義正整數 encounter weight。
   - REQ-025.3: 系統必須依 Location 保存尚未抽選 type 的 Monster 總數與最近一次結算時間。

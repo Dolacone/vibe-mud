@@ -86,6 +86,19 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+type PlayerCombatDefinition struct {
+	ID                        int
+	MaxHP                     int
+	HPRecoveryIntervalSeconds int
+	BaseAttackPower           int
+}
+
+type PlayerHP struct {
+	UserID        int64
+	HP            int
+	FullTimestamp time.Time
+}
+
 type Location struct {
 	ID          string
 	DisplayName string
@@ -380,6 +393,16 @@ CREATE TABLE IF NOT EXISTS player_ap (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	full_timestamp INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS player_combat_definitions (
+	id INTEGER PRIMARY KEY CHECK (id > 0),
+	max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+	hp_recovery_interval_seconds INTEGER NOT NULL CHECK (hp_recovery_interval_seconds > 0),
+	base_attack_power INTEGER NOT NULL CHECK (base_attack_power > 0)
+);
+CREATE TABLE IF NOT EXISTS player_hp (
+	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+	full_timestamp INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS locations (
 	id TEXT PRIMARY KEY,
 	display_name TEXT NOT NULL
@@ -393,6 +416,37 @@ CREATE TABLE IF NOT EXISTS routes (
 CREATE TABLE IF NOT EXISTS player_locations (
 	user_id INTEGER PRIMARY KEY REFERENCES identities(id),
 	location_id TEXT NOT NULL REFERENCES locations(id)
+);
+CREATE TABLE IF NOT EXISTS monster_types (
+	id INTEGER PRIMARY KEY CHECK (id > 0),
+	display_name TEXT NOT NULL,
+	max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+	attack_power INTEGER NOT NULL CHECK (attack_power > 0)
+);
+CREATE TABLE IF NOT EXISTS monster_drop_rules (
+	monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+	item_id TEXT NOT NULL REFERENCES items(id),
+	chance_bps INTEGER NOT NULL CHECK (chance_bps BETWEEN 0 AND 10000),
+	quantity INTEGER NOT NULL CHECK (quantity > 0),
+	PRIMARY KEY (monster_type_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS location_monster_rules (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	spawn_interval_seconds INTEGER NOT NULL CHECK (spawn_interval_seconds > 0),
+	spawn_chance_bps INTEGER NOT NULL CHECK (spawn_chance_bps BETWEEN 0 AND 10000),
+	max_monsters INTEGER NOT NULL CHECK (max_monsters >= 0),
+	intercept_chance_bps INTEGER NOT NULL CHECK (intercept_chance_bps BETWEEN 0 AND 10000)
+);
+CREATE TABLE IF NOT EXISTS location_monster_encounters (
+	location_id TEXT NOT NULL REFERENCES locations(id),
+	monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+	encounter_weight INTEGER NOT NULL CHECK (encounter_weight > 0),
+	PRIMARY KEY (location_id, monster_type_id)
+);
+CREATE TABLE IF NOT EXISTS location_monster_populations (
+	location_id TEXT PRIMARY KEY REFERENCES locations(id),
+	monster_count INTEGER NOT NULL CHECK (monster_count >= 0),
+	settled_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS items (
 	id TEXT PRIMARY KEY,
@@ -596,7 +650,8 @@ INSERT OR IGNORE INTO items (id, display_name, weight_units) VALUES
 	('wood_component', 'Wood Component', 10);
 INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
 	('wood_essence_t1', 'Wood Essence T1', 1, 3600),
-	('sawmill_package_t1', 'Sawmill Package T1', 10, 3600);
+	('sawmill_package_t1', 'Sawmill Package T1', 10, 3600),
+	('rat_tail', 'Rat Tail', 1, 3600);
 INSERT OR IGNORE INTO gathering_rules (location_id, item_id, quantity, ap_cost) VALUES
 	('forest_edge', 'wood', 1, 10);
 INSERT OR IGNORE INTO conversion_rules (location_id, input_item_id, input_quantity, output_resource_id, resource_yield, ap_cost) VALUES
@@ -612,6 +667,23 @@ INSERT OR IGNORE INTO crafting_recipe_resource_inputs (recipe_id, resource_id, q
 	('wood_component', 'wood', 10);`); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed movement state: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_combat_definitions (id, max_hp, hp_recovery_interval_seconds, base_attack_power)
+VALUES (1, 100, 60, 3);
+INSERT OR IGNORE INTO monster_types (id, display_name, max_hp, attack_power)
+VALUES (1, 'Forest Rat', 10, 2);
+INSERT OR IGNORE INTO monster_drop_rules (monster_type_id, item_id, chance_bps, quantity)
+VALUES (1, 'rat_tail', 5000, 1);
+INSERT OR IGNORE INTO location_monster_rules (location_id, spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps) VALUES
+	('camp', 1800, 0, 0, 0),
+	('forest_edge', 1800, 5000, 10, 1000);
+INSERT OR IGNORE INTO location_monster_encounters (location_id, monster_type_id, encounter_weight)
+VALUES ('forest_edge', 1, 1);
+INSERT OR IGNORE INTO location_monster_populations (location_id, monster_count, settled_at)
+SELECT id, 0, ? FROM locations;`, migrationNow.Unix()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("seed monster state: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES
@@ -642,6 +714,12 @@ INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
 SELECT id, ? FROM identities`, time.Now().UTC().Unix()); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("backfill player AP: %w", err)
+	}
+	if _, err := tx.Exec(`
+INSERT OR IGNORE INTO player_hp (user_id, full_timestamp)
+SELECT id, ? FROM identities`, migrationNow.Unix()); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("backfill player HP: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
@@ -675,6 +753,7 @@ func migrateTimestampsToUnixSeconds(tx *sql.Tx) (int64, error) {
 		{table: "sessions", column: "created_at"},
 		{table: "player_profiles", column: "updated_at"},
 		{table: "player_ap", column: "full_timestamp"},
+		{table: "player_hp", column: "full_timestamp"},
 	}
 	var convertedValues int64
 	for _, timestampColumn := range timestampColumns {
@@ -952,6 +1031,12 @@ ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
 		return Identity{}, fmt.Errorf("initialize player AP: %w", err)
 	}
 	if _, err := tx.Exec(`
+INSERT INTO player_hp (user_id, full_timestamp) VALUES (?, ?)
+ON CONFLICT (user_id) DO NOTHING`, identity.ID, now); err != nil {
+		_ = tx.Rollback()
+		return Identity{}, fmt.Errorf("initialize player HP: %w", err)
+	}
+	if _, err := tx.Exec(`
 INSERT INTO player_locations (user_id, location_id) VALUES (?, 'camp')
 ON CONFLICT (user_id) DO NOTHING`, identity.ID); err != nil {
 		_ = tx.Rollback()
@@ -1105,6 +1190,55 @@ func (s *Store) GetAP(userID int64) (int, error) {
 		return 0, fmt.Errorf("get player AP: %w", err)
 	}
 	return calculateAP(unixSeconds(fullTimestamp), s.now().UTC()), nil
+}
+
+func (s *Store) GetPlayerCombatDefinition() (PlayerCombatDefinition, error) {
+	var definition PlayerCombatDefinition
+	err := s.db.QueryRow(`
+SELECT id, max_hp, hp_recovery_interval_seconds, base_attack_power
+FROM player_combat_definitions WHERE id = 1`).Scan(
+		&definition.ID,
+		&definition.MaxHP,
+		&definition.HPRecoveryIntervalSeconds,
+		&definition.BaseAttackPower,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerCombatDefinition{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return PlayerCombatDefinition{}, fmt.Errorf("get player combat definition: %w", err)
+	}
+	return definition, nil
+}
+
+func (s *Store) GetPlayerHPState(userID int64) (PlayerHP, error) {
+	if userID <= 0 {
+		return PlayerHP{}, fmt.Errorf("%w: user ID is required", ErrInvalidArgument)
+	}
+	var hp PlayerHP
+	var fullTimestamp int64
+	err := s.db.QueryRow(`
+SELECT user_id, full_timestamp FROM player_hp WHERE user_id = ?`, userID).Scan(&hp.UserID, &fullTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlayerHP{}, ErrIdentityNotFound
+	}
+	if err != nil {
+		return PlayerHP{}, fmt.Errorf("get player HP: %w", err)
+	}
+	hp.FullTimestamp = unixSeconds(fullTimestamp)
+	return hp, nil
+}
+
+func (s *Store) GetHP(userID int64) (int, error) {
+	hp, err := s.GetPlayerHPState(userID)
+	if err != nil {
+		return 0, err
+	}
+	definition, err := s.GetPlayerCombatDefinition()
+	if err != nil {
+		return 0, err
+	}
+	return calculateHP(hp.FullTimestamp, s.now().UTC(), definition.MaxHP, definition.HPRecoveryIntervalSeconds), nil
 }
 
 func (s *Store) Rest(userID int64) (int, error) {
@@ -3570,6 +3704,25 @@ func calculateAP(fullTimestamp, now time.Time) int {
 		return 0
 	}
 	return maxAP - int(missing)
+}
+
+func calculateHP(fullTimestamp, now time.Time, maxHP, recoveryIntervalSeconds int) int {
+	if maxHP <= 0 || recoveryIntervalSeconds <= 0 {
+		return 1
+	}
+	remaining := fullTimestamp.Sub(now)
+	if remaining <= 0 {
+		return maxHP
+	}
+	interval := time.Duration(recoveryIntervalSeconds) * time.Second
+	missing := remaining / interval
+	if remaining%interval != 0 {
+		missing++
+	}
+	if missing >= time.Duration(maxHP-1) {
+		return 1
+	}
+	return maxHP - int(missing)
 }
 
 func (s *Store) GetIdentity(id int64) (Identity, error) {

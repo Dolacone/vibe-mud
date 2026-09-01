@@ -886,7 +886,7 @@ oauth_attempts          OAuth 完成前的獨立暫存狀態
 
 Balance definition seeds 使用 `INSERT OR IGNORE`。Store 重複初始化不會覆寫既有 row，因此直接修改 AP 成本、capacity、產量、Essence 機率或 Building 耐久成本後，設定會跨重啟保留。Repository 要改變既有 row 的預設值時，必須另行提供明確 migration。
 
-Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `1000000000` 轉為 Unix seconds。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session 與 player AP 時間。
+Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `1000000000` 轉為 Unix seconds。已使用 Unix seconds 的值不會再次轉換。轉換涵蓋 identity、OAuth attempt、session、player AP 與 player HP 時間。
 
 ```sql
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
