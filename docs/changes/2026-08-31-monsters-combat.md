@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Done
+status: Ready-to-implement
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -53,7 +53,7 @@ REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, and REQ-026 are the source
 
 ## Tasks
 
-Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
+Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`; `Task 1 -> Task 6`.
 
 - [x] Task 1 [parallel: no]: Add only the SQLite definitions and Store state needed for player HP, Monster types, drops, Location rules, encounter weights, and aggregate Location populations in `internal/authapi/store.go`. Seed camp, forest_edge, Forest Rat, Rat Tail, and full HP for existing and new players. Add Store tests and update `docs/schemas.md` and `docs/terminology.md`.
   - REQ-025.1: 每個 Location 必須定義生成間隔秒數、單次生成機率、Monster 數量上限與單隻攔截機率。
@@ -152,6 +152,9 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Task separation] Task 4 依 REQ-025.17 與 REQ-026.29 記錄每次計算，但它只修改 `server.go` 與 `auth.ts`。Task 2 與 Task 3 未要求 `store.go` 提供 interval、機率、前後數量、type、傷害、掉落、HP 與 AP 的計算結果。加入最小資料交接，避免 Task 4 需要未規劃的跨 task 修改。
 - [x] [Docs follow-up] `docs/terminology.md` 的 Action 定義已修正，但同一條目的差異說明仍寫「Action 消耗 AP」。這仍與 REQ-005.16、REQ-026.6 及 REQ-026.19 的攔截分支不符。
 - [x] [Task separation follow-up] Task 3 只交接 REQ-026.29 的 Combat 計算值，未交接 REQ-025.17 要求的攔截機率與 outcome。Task 4 無法只修改 `server.go` 與 `auth.ts` 就記錄每次攔截計算。
+- [x] [Task separation] Dependency graph 未納入 Task 6。明確標示 Task 6 與已完成 tasks 的依賴關係，並讓 `[parallel]` 標記與該關係一致。
+- [x] [Docs] `docs/schemas.md` 的 `location_monster_rules` 說明已寫 `forest_edge` 上限為 5，但同文件的 seed SQL 仍寫 10。Task 6 必須讓說明與 SQL 一致，並依 repository rule 與 initialization 或 backfill 變更放在同一 commit。
+- [x] [MVP scope] `Follow-up MVP` 的 friendly editor 沒有 confirmed REQ trace，且導入未要求的編輯介面。從本 change doc 移除，不得列入本次實作。
 
 ## Review Issues
 
@@ -176,3 +179,8 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 ## Refactor
 
 未發現可在零行為變更下刪除的重複實作或更清楚的命名。`docs/architecture.md`、`docs/schemas.md` 與 `docs/terminology.md` 已依本 scope implementation 完成 alignment 檢查，無需更新。`doc_health_check.py` 通過，沒有 coverage、link 或 metadata findings。
+
+## Test Tuning
+
+- [ ] Task 6 [parallel: no]: Change only the `forest_edge` backend data definition and existing-database update to a 50% spawn chance and 5-Monster cap in `internal/authapi/store.go`. Update Store tests and `docs/schemas.md`.
+  - REQ-025.13: `forest_edge` 的生成間隔、生成機率、數量上限與單隻攔截機率必須由後端資料定義。
