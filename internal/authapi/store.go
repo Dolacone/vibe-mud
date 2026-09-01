@@ -29,7 +29,6 @@ var (
 	ErrSessionExpired              = errors.New("session expired")
 	ErrInsufficientAP              = errors.New("insufficient action points")
 	ErrNoMonster                   = errors.New("no monsters available")
-	ErrNoMonsters                  = ErrNoMonster
 	ErrOverweight                  = errors.New("player is overweight")
 	ErrRouteNotFound               = errors.New("route not found")
 	ErrGatheringNotFound           = errors.New("gathering not found")

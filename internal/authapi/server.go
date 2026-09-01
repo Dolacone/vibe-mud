@@ -281,7 +281,6 @@ const (
 	attackReasonInvalidJSON          = "invalid_json"
 	attackReasonUnknownField         = "unknown_field"
 	attackReasonExtraValue           = "extra_json_value"
-	attackReasonNonEmpty             = "non_empty_object"
 	restAction                       = "rest"
 	moveReasonInvalidJSON            = "invalid_json"
 	moveReasonUnknownField           = "unknown_field"
@@ -1426,6 +1425,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 func (s *Server) attack(w http.ResponseWriter, r *http.Request) {
 	session, err := s.authenticatedSession(r)
 	if err != nil {
+		s.setAccessLogMetadata(r, "unknown", "authentication_required")
 		s.writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -2143,6 +2143,9 @@ func filterAvailableGameplayOptions(state PlayerState, userID int64) (PlayerStat
 
 	if state.AP > 0 {
 		availability.Actions = append(availability.Actions, restAction)
+	}
+	if canAttack(state.MonsterCount, state.AP, state.AttackAPCost) {
+		availability.Actions = append(availability.Actions, attackAction)
 	}
 	availableRoutes := make([]Route, 0, len(state.Routes))
 	if state.CarriedWeight <= state.MovementWeightThreshold {
