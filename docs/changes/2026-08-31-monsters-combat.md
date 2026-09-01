@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -175,6 +175,11 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`; `Task 1 -> T
 - [x] [Major] REQ-026.12 只需要一次均勻整數抽選。`damageRandom` 已保證回傳 non-nil function，但 `damageRoll` 又加入不可到達的 nil fallback。刪除重複 defensive branch。
 - [x] [Major] REQ-026.8 要求「戰鬥開始時，系統必須依目前 Location 的 encounter weight 抽選一種 Monster type」。`selectEncounterMonsterTx` 先產生 10000 種結果，再用 `% totalWeight` 映射權重。當總權重不能整除 10000 時，較前面的區段會多取得結果。現有 1:2 測試設定實際得到 3334:6666，不是 1:2。改用以 `totalWeight` 為上限的均勻整數抽選，並讓測試在抽選分布被 modulo 扭曲時失敗。
 - [ ] [Minor] `source_paths` 漏列實際修改的 `requirements/BEHAVIOR.md`、`requirements/REQ-005.md`、`requirements/REQ-012.md`、`requirements/REQ-018.md`、`requirements/REQ-021.md`、`requirements/REQ-022.md`、`requirements/REQ-025.md` 與 `requirements/REQ-026.md`。
+- [ ] [Major] Task 1 的 copied REQ-025.13 仍要求 `forest_edge` 使用 10 隻上限，但 Task 6 的 copied REQ-025.13 已改為由後端資料定義提供，實作則改成 5 隻。change document 同時保留互斥的 copied criteria，無法據此確認 implementation coverage。更新舊 copy，讓同一 criterion 只保留目前已確認的行為。
+- [ ] [Major] REQ-025.3 要求依 Location 保存 Monster 總數，REQ-025.13 要求 `forest_edge` 數值由後端資料定義提供。`NewStore` 每次啟動都把符合舊值的 definition 改為 5，且不論 definition 是否更新都把 population 截成 5。直接編輯回 10 的 definition 無法跨重啟保留；未符合 migration 條件的 definition 也會失去大於 5 的已保存 population。把 legacy definition 更新做成一次性，並只在該 definition 實際降至 5 時截斷 population。加入保留非 legacy definition 與 population 的測試。
+- [ ] [Major] Task 6 的 copied REQ-025.13 要求 `forest_edge` 行為來自後端資料定義。`docs/schemas.md` 的 5 隻定義在 `059ad31`，SQLite initialization 與既有資料更新卻在 `50334f2`。這違反 schema 文件必須與 initialization 或 backfill 同 commit 的 repository rule，也讓兩個 commit 各自不一致。重建 commit 邊界，讓 schema 文件、Store 更新與測試位於同一 Task 6 commit。
+- [ ] [Major] Task 6 只以 copied REQ-025.13 支持 `forest_edge` 資料定義調整，但 `059ad31` 額外建立 `TODO.md` 並加入未確認的 friendly editor。Plan Review Issues 已確認該功能沒有 REQ trace，Task 6 也明確限制只改 Store、測試與 schema 文件。移除這個超出 REQ 的檔案。
+- [ ] [Minor] `source_paths` 除既有 requirements 漏項外，也漏列相對 `main` 實際新增的 `CHANGELOG.md` 與 `TODO.md`。
 
 ## Refactor
 
