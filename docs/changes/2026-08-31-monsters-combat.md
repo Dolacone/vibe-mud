@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Ready-to-review
+status: Reviewed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -171,3 +171,4 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Major] REQ-012.4 只要求顯示後端回傳的 HP。`GameShell.test.tsx` 強制繞過 required type 與 response validator，把 HP cast 成 `undefined`，再固定 `HP undefined` 行為。這個測試不覆蓋任何 copied criterion。刪除測試，不得為缺少 HP 增加 fallback。
 - [x] [Major] REQ-026.12 只需要一次均勻整數抽選。`damageRandom` 已保證回傳 non-nil function，但 `damageRoll` 又加入不可到達的 nil fallback。刪除重複 defensive branch。
 - [x] [Major] REQ-026.8 要求「戰鬥開始時，系統必須依目前 Location 的 encounter weight 抽選一種 Monster type」。`selectEncounterMonsterTx` 先產生 10000 種結果，再用 `% totalWeight` 映射權重。當總權重不能整除 10000 時，較前面的區段會多取得結果。現有 1:2 測試設定實際得到 3334:6666，不是 1:2。改用以 `totalWeight` 為上限的均勻整數抽選，並讓測試在抽選分布被 modulo 扭曲時失敗。
+- [ ] [Minor] `source_paths` 漏列實際修改的 `requirements/BEHAVIOR.md`、`requirements/REQ-005.md`、`requirements/REQ-012.md`、`requirements/REQ-018.md`、`requirements/REQ-021.md`、`requirements/REQ-022.md`、`requirements/REQ-025.md` 與 `requirements/REQ-026.md`。
