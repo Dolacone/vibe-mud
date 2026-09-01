@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS player_ap (
 
 ```sql
 CREATE TABLE IF NOT EXISTS player_combat_definitions (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY CHECK (id > 0),
     max_hp INTEGER NOT NULL CHECK (max_hp > 0),
     hp_recovery_interval_seconds INTEGER NOT NULL CHECK (hp_recovery_interval_seconds > 0),
     base_attack_power INTEGER NOT NULL CHECK (base_attack_power > 0)

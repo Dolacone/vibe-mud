@@ -162,7 +162,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Major] REQ-026.32 要求每個 `attack` failure access log 都包含 user ID、Location、action、outcome、拒絕原因與 request ID。未登入或 session 無效時，`requirePlayerName` 仍交給 `attack` 回傳 401，但沒有設定 Location 與拒絕原因。補齊 `unknown` Location 與 authentication failure reason，並加入 access log 測試。
 - [x] [Major] REQ-012.4 要求顯示後端回傳的 HP，不得使用 placeholder 或前端推算值。`GameShellPlayer.hp` 卻是 optional，缺值時會顯示前端捏造的 `0`。刪除 fallback，並把 HP 改成 required state。
 - [x] [Major] REQ-026.22 與 REQ-026.31 只需要單一 no-Monster error 與空 object validation。`ErrNoMonsters` alias 和 `attackReasonNonEmpty` 沒有任何 caller，也不服務 copied criterion 或既有 convention。刪除這兩個 dead paths。
-- [ ] [Major] REQ-026.25 只要求 Combat response 包含最新狀態，但 `docs/architecture.md` 把既有敘述擴張成所有 Action responses 都包含 authoritative state。Attack 的 insufficient-AP response 實際只有 error。刪除這項 REQ 外的廣泛承諾，或把敘述縮限至已要求且已實作的 response。
+- [x] [Major] REQ-026.25 只要求 Combat response 包含最新狀態，但 `docs/architecture.md` 把既有敘述擴張成所有 Action responses 都包含 authoritative state。Attack 的 insufficient-AP response 實際只有 error。刪除這項 REQ 外的廣泛承諾，或把敘述縮限至已要求且已實作的 response。
 - [x] [Minor] `source_paths` 漏列實際修改的 `web/src/App.tsx` 與 `web/src/GameShell.test.tsx`。
-- [ ] [Minor] `docs/schemas.md` 的 `player_combat_definitions.id` 漏掉實際 schema 的 `CHECK (id > 0)`。
+- [x] [Minor] `docs/schemas.md` 的 `player_combat_definitions.id` 漏掉實際 schema 的 `CHECK (id > 0)`。
 - [x] [Minor] REQ-005.19 要求 intercepted Move response 包含 Combat 與最新 state，但 server tests 沒有呼叫 intercepted Move endpoint。現有 Store 與 frontend 測試無法在 handler 遺漏 `combat` 時失敗。
