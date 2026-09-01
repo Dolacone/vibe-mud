@@ -1817,7 +1817,7 @@ type encounterMonster struct {
 	Weight      int
 }
 
-func selectEncounterMonsterTx(tx *sql.Tx, locationID string, roll func() int) (encounterMonster, error) {
+func selectEncounterMonsterTx(tx *sql.Tx, locationID string, intn func(int) int) (encounterMonster, error) {
 	rows, err := tx.Query(`
 SELECT mt.id, mt.display_name, mt.max_hp, mt.attack_power, e.encounter_weight
 FROM location_monster_encounters e
@@ -1844,7 +1844,7 @@ ORDER BY mt.id`, locationID)
 	if totalWeight == 0 {
 		return encounterMonster{}, fmt.Errorf("location has no monster encounters")
 	}
-	selected := normalizeCombatRoll(roll) % totalWeight
+	selected := intn(totalWeight)
 	for _, monster := range encounters {
 		if selected < monster.Weight {
 			return monster, nil
@@ -1932,7 +1932,7 @@ func (s *Store) resolveCombatTx(tx *sql.Tx, userID int64, locationID string, now
 	if err != nil {
 		return CombatResult{}, err
 	}
-	monster, err := selectEncounterMonsterTx(tx, locationID, s.combatRandom())
+	monster, err := selectEncounterMonsterTx(tx, locationID, s.damageRandom())
 	if err != nil {
 		return CombatResult{}, err
 	}

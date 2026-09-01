@@ -170,4 +170,4 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Major] REQ-025.10 要求使用公式所得的總攔截率，REQ-025.17 要求記錄該機率。實際抽選使用 `CombinedChance`，log 卻使用截斷的 `CombinedChanceBPS`。`PerMonsterChance` 與 `CombinedChance` 兩個欄位目前沒有 reader。保留一套準確且會被記錄的機率欄位，刪除重複 representation。
 - [x] [Major] REQ-012.4 只要求顯示後端回傳的 HP。`GameShell.test.tsx` 強制繞過 required type 與 response validator，把 HP cast 成 `undefined`，再固定 `HP undefined` 行為。這個測試不覆蓋任何 copied criterion。刪除測試，不得為缺少 HP 增加 fallback。
 - [x] [Major] REQ-026.12 只需要一次均勻整數抽選。`damageRandom` 已保證回傳 non-nil function，但 `damageRoll` 又加入不可到達的 nil fallback。刪除重複 defensive branch。
-- [ ] [Major] REQ-026.8 要求「戰鬥開始時，系統必須依目前 Location 的 encounter weight 抽選一種 Monster type」。`selectEncounterMonsterTx` 先產生 10000 種結果，再用 `% totalWeight` 映射權重。當總權重不能整除 10000 時，較前面的區段會多取得結果。現有 1:2 測試設定實際得到 3334:6666，不是 1:2。改用以 `totalWeight` 為上限的均勻整數抽選，並讓測試在抽選分布被 modulo 扭曲時失敗。
+- [x] [Major] REQ-026.8 要求「戰鬥開始時，系統必須依目前 Location 的 encounter weight 抽選一種 Monster type」。`selectEncounterMonsterTx` 先產生 10000 種結果，再用 `% totalWeight` 映射權重。當總權重不能整除 10000 時，較前面的區段會多取得結果。現有 1:2 測試設定實際得到 3334:6666，不是 1:2。改用以 `totalWeight` 為上限的均勻整數抽選，並讓測試在抽選分布被 modulo 扭曲時失敗。

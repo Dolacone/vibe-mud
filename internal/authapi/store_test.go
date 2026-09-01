@@ -357,7 +357,7 @@ func TestCombatCalculationsUseConfiguredEncounterAndDamageRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := selectEncounterMonsterTx(tx, "forest_edge", func() int { return 0 })
+	selected, err := selectEncounterMonsterTx(tx, "forest_edge", func(int) int { return 0 })
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -365,7 +365,7 @@ func TestCombatCalculationsUseConfiguredEncounterAndDamageRanges(t *testing.T) {
 	if selected.ID != 1 {
 		t.Fatalf("weighted roll 0 selected type %d, want 1", selected.ID)
 	}
-	selected, err = selectEncounterMonsterTx(tx, "forest_edge", func() int { return 1 })
+	selected, err = selectEncounterMonsterTx(tx, "forest_edge", func(bound int) int { return bound - 1 })
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
