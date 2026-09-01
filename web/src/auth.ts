@@ -153,9 +153,29 @@ export type Building = BuildingBase & (
   | { status: "completed" }
 );
 
+export type CombatEvent = {
+  attacker: string;
+  damage: number;
+  target_remaining_hp: number;
+};
+
+export type CombatDrop = {
+  item: Item;
+  quantity: number;
+};
+
+export type Combat = {
+  monster: { display_name: string };
+  events: CombatEvent[];
+  result: "victory" | "defeat";
+  drops: CombatDrop[];
+};
+
 export type PlayerState = {
   available_actions: string[];
   location: Location;
+  hp: number;
+  monster_count: number;
   routes: Route[];
   ap: number;
   carried_weight: number;
@@ -199,9 +219,16 @@ export type RestResult =
   | { status: "error"; error: Error };
 
 export type MoveResult =
-  | ({ status: "success" } & PlayerState)
+  | ({ status: "success"; combat?: Combat } & PlayerState)
   | ({ status: "insufficient"; error: string } & PlayerState)
   | ({ status: "invalid"; error: string; state?: PlayerState })
+  | { status: "unauthenticated" }
+  | { status: "error"; error: Error };
+
+export type AttackResult =
+  | ({ status: "success"; combat: Combat } & PlayerState)
+  | ({ status: "insufficient"; error: string } & Partial<PlayerState>)
+  | { status: "invalid"; error: string }
   | { status: "unauthenticated" }
   | { status: "error"; error: Error };
 
@@ -511,6 +538,26 @@ function isGroundResources(value: unknown): value is GroundResource[] {
   return new Set(ids).size === ids.length;
 }
 
+function isCombatEvent(value: unknown): value is CombatEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value as Record<string, unknown>;
+  return isString(event.attacker) && isPositiveInteger(event.damage) && isNonNegativeInteger(event.target_remaining_hp);
+}
+
+function isCombatDrop(value: unknown): value is CombatDrop {
+  if (typeof value !== "object" || value === null) return false;
+  const drop = value as Record<string, unknown>;
+  return isItem(drop.item) && isQuantity(drop.quantity);
+}
+
+function isCombat(value: unknown): value is Combat {
+  if (typeof value !== "object" || value === null) return false;
+  const combat = value as Record<string, unknown>;
+  if (typeof combat.monster !== "object" || combat.monster === null) return false;
+  const monster = combat.monster as Record<string, unknown>;
+  return isString(monster.display_name) && Array.isArray(combat.events) && combat.events.length > 0 && combat.events.every(isCombatEvent) && (combat.result === "victory" || combat.result === "defeat") && Array.isArray(combat.drops) && combat.drops.every(isCombatDrop);
+}
+
 function isGatheringOption(value: unknown): value is GatheringOption {
   if (typeof value !== "object" || value === null) return false;
   const option = value as Record<string, unknown>;
@@ -567,7 +614,7 @@ function isExtensionInstallationTarget(value: unknown): value is ExtensionInstal
   return isPositiveInteger(target.building_id) && isNonNegativeInteger(target.slot_index);
 }
 
-const gameplayActions = new Set(["rest", "move", "gather", "convert", "craft", "build", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"]);
+const gameplayActions = new Set(["rest", "move", "gather", "convert", "craft", "build", "attack", "contribute-construction", "repair-building", "install-extension", "contribute-extension-construction", "remove-extension"]);
 
 function isAvailableActions(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((action) => typeof action === "string" && gameplayActions.has(action)) && new Set(value).size === value.length;
@@ -584,6 +631,8 @@ function isPlayerState(value: unknown): value is PlayerState {
     Array.isArray(routes) &&
     routes.every(isRoute) &&
     routes.every((route) => route.origin_id === location.id) &&
+    isPositiveInteger(state.hp) && state.hp <= 100 &&
+    isNonNegativeInteger(state.monster_count) &&
     isAP(state.ap) &&
     isNonNegativeInteger(state.carried_weight) &&
     isPositiveInteger(state.movement_weight_threshold) &&
@@ -621,6 +670,8 @@ function currentUserFromResponse(body: CurrentUser): CurrentUser {
     email: body.email,
     player_name: body.player_name,
     available_actions: body.available_actions,
+    hp: body.hp,
+    monster_count: body.monster_count,
     ap: body.ap,
     carried_weight: body.carried_weight,
     movement_weight_threshold: body.movement_weight_threshold,
@@ -655,7 +706,9 @@ function isMoveError(value: unknown): value is { error: string } {
 }
 
 function isMoveStateResponse(value: unknown): value is PlayerState {
-  return isPlayerState(value);
+  if (!isPlayerState(value)) return false;
+  const body = value as Record<string, unknown>;
+  return !Object.hasOwn(body, "combat") || isCombat(body.combat);
 }
 
 function isMoveConflict(value: unknown): value is { error: string } & PlayerState {
@@ -885,6 +938,47 @@ export async function move(target: string, fetcher: typeof fetch = fetch): Promi
       status: "error",
       error: error instanceof Error ? error : new Error("move request failed"),
     };
+  }
+}
+
+export async function attack(fetcher: typeof fetch = fetch): Promise<AttackResult> {
+  try {
+    const response = await fetcher("/api/actions/attack", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    if (response.status === 401) return { status: "unauthenticated" };
+
+    if (response.status === 400) {
+      const body: unknown = await response.json();
+      if (!isMoveError(body)) return { status: "error", error: new Error("attack response is invalid") };
+      return { status: "invalid", error: body.error };
+    }
+
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      if (!isMoveError(body)) return { status: "error", error: new Error("attack response is invalid") };
+      if (isPlayerState(body)) {
+        const { error, ...state } = body as Record<string, unknown> & PlayerState;
+        return { status: "insufficient", error: error as string, ...(state as PlayerState) };
+      }
+      return { status: "insufficient", error: body.error };
+    }
+
+    if (response.status !== 200) {
+      return { status: "error", error: new Error(`attack request failed with status ${response.status}`) };
+    }
+
+    const body: unknown = await response.json();
+    if (!isPlayerState(body) || !Object.hasOwn(body as object, "combat") || !isCombat((body as Record<string, unknown>).combat)) {
+      return { status: "error", error: new Error("attack response is invalid") };
+    }
+    return { status: "success", ...body, combat: (body as Record<string, unknown>).combat as Combat };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error : new Error("attack request failed") };
   }
 }
 

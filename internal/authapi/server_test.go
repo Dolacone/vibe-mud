@@ -586,7 +586,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(meResponse.Body.Bytes(), &meBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(meBody) != 21 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["player_name"] != "Test Player 1" || meBody["ap"] != float64(maxAP) {
+	if len(meBody) != 23 || meBody["id"] != float64(identity.ID) || meBody["display_name"] != "Person" || meBody["email"] != "person@example.com" || meBody["player_name"] != "Test Player 1" || meBody["ap"] != float64(maxAP) {
 		t.Fatalf("GET /api/me JSON = %#v", meBody)
 	}
 	if actions, ok := meBody["available_actions"].([]any); !ok || !reflect.DeepEqual(actions, []any{"rest", "move"}) {
@@ -660,7 +660,7 @@ func TestMeAndRestReturnAPContractAndUseServerState(t *testing.T) {
 	if err := json.Unmarshal(restResponse.Body.Bytes(), &restBody); err != nil {
 		t.Fatal(err)
 	}
-	if len(restBody) != 17 || restBody["ap"] != float64(maxAP-1) {
+	if len(restBody) != 19 || restBody["ap"] != float64(maxAP-1) {
 		t.Fatalf("POST /api/actions/rest JSON = %#v", restBody)
 	}
 	if ap, err := store.GetAP(identity.ID); err != nil || ap != maxAP-1 {
@@ -3426,5 +3426,78 @@ INSERT INTO items (id, display_name, weight_units, max_durability_seconds) VALUE
 	ground := groundItems[0].(map[string]any)
 	if ground["durability_status"] != "active" || ground["durability_percentage"] != float64(34) {
 		t.Fatalf("ground percentage = %#v", ground)
+	}
+}
+
+func TestAttackAPIUsesEmptyObjectAndReturnsCombatState(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-attack-api", "attack@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameTestPlayer(t, store, identity)
+	if _, err := store.db.Exec(`UPDATE player_locations SET location_id = 'forest_edge' WHERE user_id = ?`, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE location_monster_populations SET monster_count = 1, settled_at = ? WHERE location_id = 'forest_edge'`, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE monster_types SET max_hp = 1 WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	store.combatRoll = func() int { return 0 }
+	if err := store.CreateSession(identity.ID, "attack-api-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/attack", strings.NewReader(`{}`))
+	request.Header.Set("X-Request-ID", "attack-api-request")
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "attack-api-session"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("attack status = %d: %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	combat, ok := body["combat"].(map[string]any)
+	if !ok || combat["result"] != "victory" {
+		t.Fatalf("attack combat = %#v", body["combat"])
+	}
+	if body["hp"] != float64(100) || body["ap"] != float64(maxAP-defaultActiveAttackAPCost) || body["monster_count"] != float64(0) {
+		t.Fatalf("attack state = %#v", body)
+	}
+}
+
+func TestAttackAPIRejectsNonEmptyObjectBeforeSettlement(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	server, store := newTestServer(t, &fakeProvider{}, &now)
+	identity, err := store.UpsertIdentity("https://accounts.google.com", "subject-attack-invalid", "attack-invalid@example.com", "Attack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameTestPlayer(t, store, identity)
+	if err := store.CreateSession(identity.ID, "attack-invalid-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var before int64
+	if err := store.db.QueryRow(`SELECT settled_at FROM location_monster_populations WHERE location_id = 'camp'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/actions/attack", strings.NewReader(`{"secret":"value"}`))
+	request.AddCookie(&http.Cookie{Name: defaultSessionCookieName, Value: "attack-invalid-session"})
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid action input\"}\n" {
+		t.Fatalf("attack rejection = %d/%q", response.Code, response.Body.String())
+	}
+	var after int64
+	if err := store.db.QueryRow(`SELECT settled_at FROM location_monster_populations WHERE location_id = 'camp'`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("invalid attack changed settlement timestamp from %d to %d", before, after)
 	}
 }

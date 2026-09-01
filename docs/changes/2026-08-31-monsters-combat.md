@@ -12,6 +12,10 @@ source_paths:
   - internal/authapi/store.go
   - internal/authapi/store_test.go
   - internal/authapi/server_test.go
+  - internal/authapi/server.go
+  - web/src/auth.ts
+  - web/src/App.test.tsx
+  - web/src/auth.test.ts
 req_ref: REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, REQ-026
 base_branch: main
 scope: "Tracks lazy Location Monster population, movement interception, automatic combat, HP recovery, drops, and the mobile interface."
@@ -108,7 +112,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
   - REQ-026.22: 合法 `attack` 具有 30 AP 時，後端必須先保存 Location Monster 時間結算；結算後 Monster 數量為 0 時必須拒絕戰鬥，不扣除 AP，也不修改 HP、Inventory 或戰鬥造成的 Monster 數量。
   - REQ-026.23: 多位玩家同時攻擊最後一隻 Monster 時，最多只能有一位玩家開始戰鬥並取得勝利掉落。
 
-- [ ] Task 4 [parallel: no]: Add the dedicated Attack endpoint, combat response, and required access/computation logs in `internal/authapi/server.go`. Extend `web/src/auth.ts` to send empty Attack input and parse Attack or intercepted Move results. Add server and frontend client tests for exact request, response, failure, state, and log behavior.
+- [x] Task 4 [parallel: no]: Add the dedicated Attack endpoint, combat response, and required access/computation logs in `internal/authapi/server.go`. Extend `web/src/auth.ts` to send empty Attack input and parse Attack or intercepted Move results. Add server and frontend client tests for exact request, response, failure, state, and log behavior.
   - REQ-018.5: 前端只能顯示後端回傳的 Action、target、method 與 recipe，不得自行推定或補回未回傳的選項。
   - REQ-018.6: 玩家無法執行的選項，其 identifier、顯示名稱、成本、inputs、output、機率與 capacity 都不得出現在前端可取得的回應中。
   - REQ-018.17: 未回傳的 Action、target、method 或 recipe 仍必須由後端拒絕直接提交，且不得修改任何狀態。

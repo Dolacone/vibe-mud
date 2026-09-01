@@ -191,6 +191,8 @@ const completedSawmill = {
 const campState: auth.PlayerState = {
   available_actions: ["rest", "move", "convert", "craft", "build"],
   location: { id: "camp", display_name: "Camp" },
+  hp: 100,
+  monster_count: 0,
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
   carried_weight: 0,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, updatePlayerName, type Building, type BuildingRecipe, type CraftingRecipe, type DropRequest, type PickupRequest, type PlayerState } from "./auth";
+import { attack, build, contributeConstruction, convert, craft, drop, gather, getCurrentUser, move, pickup, repairBuilding, rest, updatePlayerName, type Building, type BuildingRecipe, type CraftingRecipe, type DropRequest, type PickupRequest, type PlayerState } from "./auth";
 
 const resources = ["food", "wood", "stone", "metal", "fiber", "hide", "medicinal", "arcane"].map((id) => ({
   resource: { id, display_name: id[0].toUpperCase() + id.slice(1) },
@@ -69,6 +69,8 @@ const completedBuilding: Building = {
 const campState: PlayerState = {
   available_actions: ["rest", "move", "convert", "craft"],
   location: { id: "camp", display_name: "Camp" },
+  hp: 100,
+  monster_count: 0,
   routes: [{ origin_id: "camp", destination_id: "forest_edge", ap_cost: 20 }],
   ap: 3000,
   carried_weight: 0,
@@ -93,6 +95,8 @@ const campState: PlayerState = {
 const forestState: PlayerState = {
   available_actions: ["rest", "move", "gather", "craft", "build"],
   location: { id: "forest_edge", display_name: "Forest edge" },
+  hp: 100,
+  monster_count: 1,
   routes: [{ origin_id: "forest_edge", destination_id: "camp", ap_cost: 20 }],
   ap: 2980,
   carried_weight: 0,
@@ -317,6 +321,18 @@ describe("move", () => {
     });
   });
 
+  it("parses an intercepted combat transcript with authoritative state", async () => {
+    const combat = {
+      monster: { display_name: "Forest Rat" },
+      events: [{ attacker: "player", damage: 3, target_remaining_hp: 0 }],
+      result: "victory",
+      drops: [],
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...forestState, combat }), { status: 200 }));
+
+    await expect(move("camp", fetcher)).resolves.toEqual({ status: "success", ...forestState, combat });
+  });
+
   it("returns insufficient AP with the unchanged backend state", async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: "insufficient action points", ...campState, ap: 0 }), { status: 409 }),
@@ -381,6 +397,34 @@ describe("move", () => {
     const fetcher = vi.fn();
     await expect(move("  ", fetcher)).resolves.toEqual({ status: "invalid", error: "invalid target" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("attack", () => {
+  it("sends an empty object and parses combat with authoritative state", async () => {
+    const state = { ...forestState, available_actions: ["rest", "move", "attack"], monster_count: 0, ap: 2970 };
+    const combat = {
+      monster: { display_name: "Forest Rat" },
+      events: [{ attacker: "player", damage: 3, target_remaining_hp: 0 }],
+      result: "victory",
+      drops: [{ item: { id: "rat_tail", display_name: "Rat Tail" }, quantity: 1 }],
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...state, combat }), { status: 200 }));
+
+    await expect(attack(fetcher)).resolves.toEqual({ status: "success", ...state, combat });
+    expect(fetcher).toHaveBeenCalledWith("/api/actions/attack", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+  });
+
+  it("returns the authoritative state for a no-monster conflict", async () => {
+    const state = { ...forestState, monster_count: 0 };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "no monsters available", ...state }), { status: 409 }));
+
+    await expect(attack(fetcher)).resolves.toEqual({ status: "insufficient", error: "no monsters available", ...state });
   });
 });
 
