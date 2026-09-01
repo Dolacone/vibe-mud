@@ -1,7 +1,7 @@
 ---
 title: "SQLite Schemas"
 doc_type: schema
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-01
 source_paths:
   - internal/authapi/store.go
 ---
@@ -34,9 +34,16 @@ source_paths:
 | `oauth_attempts` | 保存尚未完成的 OAuth handshake。 | 登入開始時建立，完成時消耗，逾時後失效。 | 它只驗證一次 OAuth callback，不代表登入狀態。 |
 | `sessions` | 保存應用程式登入 session。 | OAuth 完成時建立，到期後失效。 | 它代表已登入瀏覽器，不保存 Google OAuth token。 |
 | `player_ap` | 保存玩家恢復至滿 AP 的時間。 | 身分建立時建立，消耗 AP 時更新。 | 它只保存 `full_timestamp`，不保存 AP 現值。 |
+| `player_combat_definitions` | 保存玩家 HP 與空手攻擊定義。 | Store 初始化時建立固定 seed。 | 它定義共用數值，不保存玩家 HP 狀態。 |
+| `player_hp` | 保存玩家恢復至滿 HP 的時間。 | 身分建立時建立，戰鬥受傷時更新。 | 它只保存 `full_timestamp`，不保存 HP 現值。 |
 | `locations` | 保存後端允許的位置。 | Store 初始化時建立固定 seed。 | 它定義位置，不保存玩家狀態。 |
 | `routes` | 保存後端允許的有向 Route 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義兩個位置間的通行規則，不保存玩家移動紀錄。 |
 | `player_locations` | 保存每位玩家的目前位置。 | 身分建立時建立，移動成功時更新。 | 它只保存目前狀態，不保存歷史軌跡。 |
+| `monster_types` | 保存 Monster type 的戰鬥定義。 | Store 初始化時建立固定 seed。 | 它定義 type，不保存 Location Monster。 |
+| `monster_drop_rules` | 保存 Monster type 的掉落規則。 | Store 初始化時建立固定 seed。 | 它定義掉落機率，不保存掉落結果。 |
+| `location_monster_rules` | 保存 Location 的生成與攔截規則。 | Store 初始化時建立固定 seed。 | 它定義規則，不保存目前數量。 |
+| `location_monster_encounters` | 保存 Location 可抽選的 Monster type 與權重。 | Store 初始化時建立固定 seed。 | 它定義戰鬥抽選，不保存已抽選 type。 |
+| `location_monster_populations` | 保存 Location Monster 總數與結算時間。 | 初始化、讀取與戰鬥時更新。 | 它保存未定 type 的總數，不建立個別 Monster。 |
 | `items` | 保存後端允許的 item 定義、單位重量與耐久上限。 | Store 初始化時建立固定 seed。 | 它定義 item，不保存玩家持有數量。 |
 | `gathering_rules` | 保存 Location 可產出的 item、quantity 與 AP 成本。 | Store 初始化時建立固定 seed。 | 它定義取得規則，不保存玩家執行紀錄。 |
 | `player_inventory` | 保存每位玩家的 Active 與 Expired item 堆疊。 | 取得、合併、失效、Drop 或保留期結束時更新。 | 它保存持有狀態，不定義 item 或 gathering 規則。 |
@@ -180,6 +187,34 @@ CREATE TABLE IF NOT EXISTS player_ap (
 
 計算範例：`full_timestamp` 已到時，玩家有 3000 AP。`full_timestamp` 還有 10 個完整分鐘才到時，玩家有 2990 AP。剩餘時間包含未完成分鐘時，該分鐘仍算缺少 1 AP。
 
+## player_combat_definitions
+
+用途：保存所有玩家共用的 HP 上限、HP 恢復間隔與空手攻擊力。
+
+```sql
+CREATE TABLE IF NOT EXISTS player_combat_definitions (
+    id INTEGER PRIMARY KEY,
+    max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+    hp_recovery_interval_seconds INTEGER NOT NULL CHECK (hp_recovery_interval_seconds > 0),
+    base_attack_power INTEGER NOT NULL CHECK (base_attack_power > 0)
+);
+```
+
+MVP 使用 ID 1、100 HP、每 60 秒恢復 1 HP，以及 3 點空手攻擊力。
+
+## player_hp
+
+用途：保存玩家恢復至滿 HP 的時間。系統依後端目前時間計算 HP，不保存 HP 現值。
+
+```sql
+CREATE TABLE IF NOT EXISTS player_hp (
+    user_id INTEGER PRIMARY KEY REFERENCES identities(id),
+    full_timestamp INTEGER NOT NULL
+);
+```
+
+`user_id` 保證每位玩家只有一筆 HP 狀態。`full_timestamp` 使用 UTC Unix seconds。
+
 ## locations
 
 用途：定義後端允許的位置。MVP 固定建立 `camp` 與 `forest_edge`。
@@ -237,9 +272,85 @@ CREATE TABLE IF NOT EXISTS player_locations (
 
 索引與約束：`user_id` 與 `location_id` 都受 foreign key 約束。新玩家與缺少位置的既有玩家使用 `camp`。
 
+## monster_types
+
+用途：保存戰鬥開始後載入的 Monster type 定義。
+
+```sql
+CREATE TABLE IF NOT EXISTS monster_types (
+    id INTEGER PRIMARY KEY CHECK (id > 0),
+    display_name TEXT NOT NULL,
+    max_hp INTEGER NOT NULL CHECK (max_hp > 0),
+    attack_power INTEGER NOT NULL CHECK (attack_power > 0)
+);
+```
+
+MVP 的 Forest Rat 使用 ID 1、10 HP 與 2 點攻擊力。
+
+## monster_drop_rules
+
+用途：保存 Monster type 勝利後逐項抽選的 Item 掉落規則。
+
+```sql
+CREATE TABLE IF NOT EXISTS monster_drop_rules (
+    monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+    item_id TEXT NOT NULL REFERENCES items(id),
+    chance_bps INTEGER NOT NULL CHECK (chance_bps >= 0 AND chance_bps <= 10000),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (monster_type_id, item_id)
+);
+```
+
+Forest Rat 的 Rat Tail 掉落率為 5000 basis points，quantity 為 1。
+
+## location_monster_rules
+
+用途：保存每個 Location 的生成週期、生成機率、數量上限與單隻攔截率。
+
+```sql
+CREATE TABLE IF NOT EXISTS location_monster_rules (
+    location_id TEXT PRIMARY KEY REFERENCES locations(id),
+    spawn_interval_seconds INTEGER NOT NULL CHECK (spawn_interval_seconds > 0),
+    spawn_chance_bps INTEGER NOT NULL CHECK (spawn_chance_bps >= 0 AND spawn_chance_bps <= 10000),
+    max_monsters INTEGER NOT NULL CHECK (max_monsters >= 0),
+    intercept_chance_bps INTEGER NOT NULL CHECK (intercept_chance_bps >= 0 AND intercept_chance_bps <= 10000)
+);
+```
+
+`camp` 使用 1800 秒、0%、0 隻與 0%。`forest_edge` 使用 1800 秒、50%、10 隻與 10%。
+
+## location_monster_encounters
+
+用途：保存 Location 在戰鬥開始時可抽選的 Monster type 與相對權重。
+
+```sql
+CREATE TABLE IF NOT EXISTS location_monster_encounters (
+    location_id TEXT NOT NULL REFERENCES locations(id),
+    monster_type_id INTEGER NOT NULL REFERENCES monster_types(id),
+    encounter_weight INTEGER NOT NULL CHECK (encounter_weight > 0),
+    PRIMARY KEY (location_id, monster_type_id)
+);
+```
+
+`forest_edge` 只 reference Forest Rat，權重為 1。
+
+## location_monster_populations
+
+用途：保存每個 Location 尚未抽選 type 的 Monster 總數與最近結算時間。
+
+```sql
+CREATE TABLE IF NOT EXISTS location_monster_populations (
+    location_id TEXT PRIMARY KEY REFERENCES locations(id),
+    monster_count INTEGER NOT NULL CHECK (monster_count >= 0),
+    settled_at INTEGER NOT NULL
+);
+```
+
+`settled_at` 使用 UTC Unix seconds。生成達到上限後仍推進完整週期，不保留待補抽週期。
+
 ## items
 
-用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 建立重 100 的 `wood`、重 10 的 `wood_component`、重 1 的 `wood_essence_t1` 與重 10 的 `sawmill_package_t1`。所有 Item 的測試耐久上限都是 3600 秒。
+用途：定義後端允許的 item、正整數單位重量與正整數耐久秒數上限。MVP 建立重 100 的 `wood`、重 10 的 `wood_component`、重 1 的 `wood_essence_t1`、重 10 的 `sawmill_package_t1` 與重 1 的 `rat_tail`。所有 Item 的測試耐久上限都是 3600 秒。
 
 ```sql
 CREATE TABLE IF NOT EXISTS items (
@@ -703,6 +814,7 @@ CREATE TABLE IF NOT EXISTS building_extensions (
 identities.id
 ├── sessions.user_id    多筆 session 對一位使用者
 ├── player_ap.user_id   一筆 AP 狀態對一位使用者
+├── player_hp.user_id   一筆 HP 狀態對一位使用者
 ├── player_locations.user_id  一個目前位置對一位使用者
 ├── player_inventory.user_id  玩家持有的 item quantity
 ├── player_resources.user_id  玩家持有的 typed Resource quantity
@@ -715,7 +827,10 @@ locations.id
 ├── gathering_rules.location_id  Gathering 所在位置
 ├── buildings.location_id        Building 所在位置
 ├── ground_items.location_id     公共地面 Item 所在位置
-└── ground_resources.location_id 公共地面 Resource 所在位置
+├── ground_resources.location_id 公共地面 Resource 所在位置
+├── location_monster_rules.location_id Monster 規則
+├── location_monster_encounters.location_id Monster type 抽選
+└── location_monster_populations.location_id Monster 總數
 
 items.id
 ├── gathering_rules.item_id       Gathering 產出的 item
@@ -726,7 +841,12 @@ items.id
 ├── crafting_recipe_item_inputs.item_id Crafting 消耗的 item
 ├── building_recipe_item_inputs.item_id Building recipe 消耗的 item
 ├── building_extension_definitions.package_item_id Extension 安裝 Package
-└── ground_items.item_id                 公共地面 Item type
+├── ground_items.item_id                 公共地面 Item type
+└── monster_drop_rules.item_id           Monster 掉落 Item
+
+monster_types.id
+├── monster_drop_rules.monster_type_id Drop rule
+└── location_monster_encounters.monster_type_id Location encounter
 
 resource_types.id
 ├── conversion_methods.output_resource_id Convert 產出的 Resource type
@@ -772,6 +892,12 @@ Store 初始化會辨識 nanosecond-scale 的既有時間值，再除以 `100000
 INSERT OR IGNORE INTO player_ap (user_id, full_timestamp)
 SELECT id, ? FROM identities;
 
+INSERT OR IGNORE INTO player_combat_definitions (id, max_hp, hp_recovery_interval_seconds, base_attack_power)
+VALUES (1, 100, 60, 3);
+
+INSERT OR IGNORE INTO player_hp (user_id, full_timestamp)
+SELECT id, ? FROM identities;
+
 INSERT OR IGNORE INTO player_locations (user_id, location_id)
 SELECT id, 'camp' FROM identities;
 
@@ -795,7 +921,24 @@ VALUES ('wood_component', 'Wood Component', 10, 3600);
 
 INSERT OR IGNORE INTO items (id, display_name, weight_units, max_durability_seconds) VALUES
 ('wood_essence_t1', 'Wood Essence T1', 1, 3600),
-('sawmill_package_t1', 'Sawmill Package T1', 10, 3600);
+('sawmill_package_t1', 'Sawmill Package T1', 10, 3600),
+('rat_tail', 'Rat Tail', 1, 3600);
+
+INSERT OR IGNORE INTO monster_types (id, display_name, max_hp, attack_power)
+VALUES (1, 'Forest Rat', 10, 2);
+
+INSERT OR IGNORE INTO monster_drop_rules (monster_type_id, item_id, chance_bps, quantity)
+VALUES (1, 'rat_tail', 5000, 1);
+
+INSERT OR IGNORE INTO location_monster_rules (location_id, spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps) VALUES
+('camp', 1800, 0, 0, 0),
+('forest_edge', 1800, 5000, 10, 1000);
+
+INSERT OR IGNORE INTO location_monster_encounters (location_id, monster_type_id, encounter_weight)
+VALUES ('forest_edge', 1, 1);
+
+INSERT OR IGNORE INTO location_monster_populations (location_id, monster_count, settled_at)
+SELECT id, 0, ? FROM locations;
 
 INSERT OR IGNORE INTO conversion_methods (id, display_name, ap_cost, input_item_id, max_input_quantity, output_resource_id, resource_quantity_per_input, essence_item_id, essence_chance_bps, essence_quantity)
 VALUES
@@ -837,6 +980,8 @@ VALUES ('sawmill_t1', 'sawmill_wood_t1', 60);
 ```
 
 Existing databases gain the Sawmill Package recipe and extension definition seeds during Store initialization. Existing identities, AP, locations, Inventory, and Resource quantities remain unchanged.
+
+Existing databases gain full-HP player rows, empty Location Monster populations, Monster rules, Forest Rat, Rat Tail, encounter weight, and drop definitions. Population settlement starts at migration time, so earlier downtime does not create Monsters.
 
 Store initialization also seeds the typed Convert methods, global hand method reference, Sawmill capability, Wood Essence T1, and Sawmill Package T1 only when each row is missing. Direct edits to existing definition rows persist across Store reinitialization.
 

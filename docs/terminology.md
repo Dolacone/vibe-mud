@@ -1,7 +1,7 @@
 ---
 title: "Game Terminology"
 doc_type: glossary
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-01
 source_paths: []
 scope: "Canonical game terms used by the application."
 ---
@@ -18,7 +18,7 @@ scope: "Canonical game terms used by the application."
 
 | 英文名稱 | 縮寫 | 中文名稱 | 對應 REQ |
 |---|---|---|---|
-| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-011](../requirements/REQ-011.md) |
+| [Action](#action) | - | 行動 | [REQ-003](../requirements/REQ-003.md)、[REQ-004](../requirements/REQ-004.md)、[REQ-005](../requirements/REQ-005.md)、[REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-011](../requirements/REQ-011.md)、[REQ-026](../requirements/REQ-026.md) |
 | [Action: rest](#action-rest) | - | 休息行動 | [REQ-004](../requirements/REQ-004.md) |
 | [Action: move](#action-move) | - | 移動行動 | [REQ-005](../requirements/REQ-005.md) |
 | [Action: gather](#action-gather) | - | 採集行動 | [REQ-006](../requirements/REQ-006.md) |
@@ -27,6 +27,7 @@ scope: "Canonical game terms used by the application."
 | [Action: build](#action-build) | - | 開始施工 | [REQ-010](../requirements/REQ-010.md) |
 | [Action: contribute construction](#action-contribute-construction) | - | 投入施工 AP | [REQ-010](../requirements/REQ-010.md) |
 | [Action: repair Building](#action-repair-building) | - | 維修建築 | [REQ-011](../requirements/REQ-011.md) |
+| [Action: attack](#action-attack) | - | 主動攻擊 | [REQ-026](../requirements/REQ-026.md) |
 | [Action Points](#action-points-ap) | AP | 行動力 | [REQ-003](../requirements/REQ-003.md) |
 | [Active Item](#active-item) | - | 有效物品 | [REQ-015](../requirements/REQ-015.md) |
 | [Building](#building) | - | 建築 | [REQ-010](../requirements/REQ-010.md) |
@@ -35,15 +36,20 @@ scope: "Canonical game terms used by the application."
 | [Building extension](#building-extension) | - | 建築擴充 | [REQ-016](../requirements/REQ-016.md) |
 | [Carrying weight](#carrying-weight) | - | 攜帶重量 | [REQ-014](../requirements/REQ-014.md) |
 | [Construction progress](#construction-progress) | - | 施工進度 | [REQ-010](../requirements/REQ-010.md) |
+| [Combat](#combat) | - | 戰鬥 | [REQ-026](../requirements/REQ-026.md) |
 | [Convert method](#convert-method) | - | 轉換方式 | [REQ-008](../requirements/REQ-008.md) |
 | [Essence](#essence) | - | 精華 | [REQ-008](../requirements/REQ-008.md) |
 | [Extension slot](#extension-slot) | - | 擴充建築欄位 | [REQ-016](../requirements/REQ-016.md) |
 | [Expired Item](#expired-item) | - | 失效物品 | [REQ-015](../requirements/REQ-015.md) |
 | [Ground assets](#ground-assets) | - | 地面資產 | [REQ-013](../requirements/REQ-013.md) |
+| [Hit Points](#hit-points-hp) | HP | 生命值 | [REQ-026](../requirements/REQ-026.md) |
 | [Inventory](#inventory) | - | 物品欄 | [REQ-006](../requirements/REQ-006.md)、[REQ-015](../requirements/REQ-015.md) |
 | [Item](#item) | - | 物品 | [REQ-006](../requirements/REQ-006.md)、[REQ-008](../requirements/REQ-008.md)、[REQ-009](../requirements/REQ-009.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-014](../requirements/REQ-014.md)、[REQ-015](../requirements/REQ-015.md) |
 | [Item durability](#item-durability) | - | 物品耐久度 | [REQ-015](../requirements/REQ-015.md) |
-| [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md) |
+| [Location](#location) | - | 位置 | [REQ-005](../requirements/REQ-005.md)、[REQ-010](../requirements/REQ-010.md)、[REQ-013](../requirements/REQ-013.md)、[REQ-025](../requirements/REQ-025.md) |
+| [Location Monster population](#location-monster-population) | - | 地區怪物數量 | [REQ-025](../requirements/REQ-025.md) |
+| [Monster](#monster) | - | 怪物 | [REQ-025](../requirements/REQ-025.md)、[REQ-026](../requirements/REQ-026.md) |
+| [Monster type](#monster-type) | - | 怪物種類 | [REQ-025](../requirements/REQ-025.md)、[REQ-026](../requirements/REQ-026.md) |
 | [Route](#route) | - | 路徑 | [REQ-005](../requirements/REQ-005.md) |
 | [Movement weight threshold](#movement-weight-threshold) | - | 移動負重門檻 | [REQ-014](../requirements/REQ-014.md) |
 | [Package Item](#package-item) | - | 擴充套件物品 | [REQ-016](../requirements/REQ-016.md) |
@@ -61,6 +67,54 @@ scope: "Canonical game terms used by the application."
 
 ## 名詞定義
 
+### Action: attack
+
+- 正式英文名稱：Action: attack
+- 中文名稱：主動攻擊
+- 定義：玩家消耗 30 AP，要求後端攻擊目前 Location 的一隻 Monster。
+- 對應行為：[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：主動 attack 消耗 AP。Move 攔截引發的 Combat 不消耗 AP。
+
+### Combat
+
+- 正式英文名稱：Combat
+- 中文名稱：戰鬥
+- 定義：後端在單一 request 內自動結算玩家與一種 Monster type 的交互攻擊。
+- 對應行為：[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：Combat 是結算流程。Action: attack 與 Move 攔截是兩種觸發方式。
+
+### Hit Points (HP)
+
+- 正式英文名稱：Hit Points
+- 中文名稱：生命值
+- 定義：玩家或 Monster 在 Combat 中可承受的傷害總量。
+- 對應行為：[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：HP 決定戰鬥存活。AP 決定玩家能否主動執行 Action。
+
+### Location Monster population
+
+- 正式英文名稱：Location Monster population
+- 中文名稱：地區怪物數量
+- 定義：Location 保存的未抽選 type Monster 總數。
+- 對應行為：[REQ-025 - Location Monster population](../requirements/REQ-025.md)
+- 與相似名詞的差異：Population 只保存數量。Monster type 在 Combat 開始時才抽選。
+
+### Monster
+
+- 正式英文名稱：Monster
+- 中文名稱：怪物
+- 定義：由 Location population 提供並在 Combat 中與玩家交戰的敵對單位。
+- 對應行為：[REQ-025 - Location Monster population](../requirements/REQ-025.md)、[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：Monster 是可被消耗的數量。Monster type 是戰鬥定義。
+
+### Monster type
+
+- 正式英文名稱：Monster type
+- 中文名稱：怪物種類
+- 定義：定義 Monster 的顯示名稱、HP、攻擊力與掉落規則。
+- 對應行為：[REQ-025 - Location Monster population](../requirements/REQ-025.md)、[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：Monster type 不在生成時保存。Combat 開始時依 Location encounter weight 抽選。
+
 ### Sawmill Package T1
 
 - 正式英文名稱：Sawmill Package T1
@@ -73,9 +127,9 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Action
 - 中文名稱：行動
-- 定義：玩家消耗 AP，要求後端執行的世界行為。後端只執行明確允許的 Action。
-- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-011 - Building durability and repair](../requirements/REQ-011.md)
-- 與相似名詞的差異：Action 消耗 AP。Transfer 搬移既有資產，不消耗 AP。
+- 定義：玩家要求後端執行的世界行為。成功 Action 依各自規則消耗 AP。
+- 對應行為：[REQ-003 - AP 計算](../requirements/REQ-003.md)、[REQ-004 - Action: rest](../requirements/REQ-004.md)、[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-006 - Gathering and inventory](../requirements/REQ-006.md)、[REQ-008 - Action: convert](../requirements/REQ-008.md)、[REQ-009 - Action: craft](../requirements/REQ-009.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-011 - Building durability and repair](../requirements/REQ-011.md)、[REQ-026 - Monster combat](../requirements/REQ-026.md)
+- 與相似名詞的差異：Action 依自身規則決定 AP 成本。Transfer 搬移既有資產，不消耗 AP。
 
 ### Action: rest
 
@@ -89,7 +143,7 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Action: move
 - 中文名稱：移動行動
-- 定義：玩家沿後端允許的 Route 前往 target Location，並消耗該 Route 的 AP 成本。
+- 定義：玩家沿後端允許的 Route 前往 target Location。未被 Monster 攔截時消耗 Route AP。
 - 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)
 - 與相似名詞的差異：`move` 是 Action。Route 是允許這個 Action 的有向通行規則。
 
@@ -274,8 +328,8 @@ scope: "Canonical game terms used by the application."
 
 - 正式英文名稱：Location
 - 中文名稱：位置
-- 定義：後端允許玩家停留、建立 Building，並累積公共地面資產的遊戲地點。
-- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)
+- 定義：後端允許玩家停留、建立 Building，並累積公共地面資產與 Monster population 的遊戲地點。
+- 對應行為：[REQ-005 - Action: move](../requirements/REQ-005.md)、[REQ-010 - Building construction](../requirements/REQ-010.md)、[REQ-013 - Ground asset transfers](../requirements/REQ-013.md)、[REQ-025 - Location Monster population](../requirements/REQ-025.md)
 - 與相似名詞的差異：Location 保存地點範圍與公共世界狀態。Route 描述兩個 Location 間的允許移動方向。
 
 ### Route
