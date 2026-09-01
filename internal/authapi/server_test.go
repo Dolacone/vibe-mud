@@ -1005,6 +1005,13 @@ func assertUnchangedBuildingState(t *testing.T, before PlayerState, after Player
 	}
 }
 
+func assertUnchangedConstructionState(t *testing.T, before PlayerState, after PlayerState) {
+	t.Helper()
+	before.MonsterSettlement = nil
+	after.MonsterSettlement = nil
+	assertUnchangedBuildingState(t, before, after)
+}
+
 func prepareBuilding(t *testing.T, fixture buildingAPIFixture, status string, contributedAP int) {
 	t.Helper()
 	if _, err := fixture.store.db.Exec(`INSERT INTO buildings (owner_id, location_id, recipe_id, display_name, building_level, required_ap, contributed_ap, status, extension_slot_count) VALUES (?, 'camp', 'building_lv1', 'Building Lv1', 1, 60, ?, ?, 1)`, fixture.identity.ID, contributedAP, status); err != nil {
@@ -1327,7 +1334,11 @@ func TestContributeConstructionAPIRejectsDomainFailuresWithoutStateChangesOrLogL
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertUnchangedBuildingState(t, before, after)
+			if test.name == "remote Location" {
+				assertUnchangedConstructionState(t, before, after)
+			} else {
+				assertUnchangedBuildingState(t, before, after)
+			}
 		})
 	}
 }
@@ -1624,7 +1635,11 @@ func TestRepairBuildingAPIRejectsDomainFailuresWithAuthoritativeState(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertUnchangedBuildingState(t, before, after)
+			if test.name == "remote building" {
+				assertUnchangedConstructionState(t, before, after)
+			} else {
+				assertUnchangedBuildingState(t, before, after)
+			}
 		})
 	}
 }

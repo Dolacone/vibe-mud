@@ -11,6 +11,7 @@ source_paths:
   - docs/terminology.md
   - internal/authapi/store.go
   - internal/authapi/store_test.go
+  - internal/authapi/server_test.go
 req_ref: REQ-005, REQ-012, REQ-018, REQ-021, REQ-022, REQ-025, REQ-026
 base_branch: main
 scope: "Tracks lazy Location Monster population, movement interception, automatic combat, HP recovery, drops, and the mobile interface."

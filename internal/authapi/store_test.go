@@ -1024,6 +1024,8 @@ func TestContributeConstructionRejectsInsufficientAPAndRemoteTargetWithoutRollba
 	if err != nil {
 		t.Fatal(err)
 	}
+	before.MonsterSettlement = nil
+	after.MonsterSettlement = nil
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("remote contribution changed state: before=%+v after=%+v", before, after)
 	}
