@@ -744,13 +744,23 @@ INSERT OR IGNORE INTO monster_drop_rules (monster_type_id, item_id, chance_bps, 
 VALUES (1, 'rat_tail', 5000, 1);
 INSERT OR IGNORE INTO location_monster_rules (location_id, spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps) VALUES
 	('camp', 1800, 0, 0, 0),
-	('forest_edge', 1800, 5000, 10, 1000);
+	('forest_edge', 1800, 5000, 5, 1000);
 INSERT OR IGNORE INTO location_monster_encounters (location_id, monster_type_id, encounter_weight)
 VALUES ('forest_edge', 1, 1);
 INSERT OR IGNORE INTO location_monster_populations (location_id, monster_count, settled_at)
 SELECT id, 0, ? FROM locations;`, migrationNow.Unix()); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("seed monster state: %w", err)
+	}
+	if _, err := tx.Exec(`
+UPDATE location_monster_rules
+SET max_monsters = 5
+WHERE location_id = 'forest_edge' AND spawn_chance_bps = 5000 AND max_monsters = 10;
+UPDATE location_monster_populations
+SET monster_count = 5
+WHERE location_id = 'forest_edge' AND monster_count > 5;`); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("update forest edge monster cap: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES

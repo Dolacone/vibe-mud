@@ -101,8 +101,31 @@ func TestStoreInitializesMonsterAndCombatSchemaSeeds(t *testing.T) {
 	if err := db.QueryRow(`SELECT r.spawn_interval_seconds, r.spawn_chance_bps, r.max_monsters, r.intercept_chance_bps, e.encounter_weight FROM location_monster_rules r JOIN location_monster_encounters e ON e.location_id = r.location_id WHERE r.location_id = 'forest_edge' AND e.monster_type_id = 1`).Scan(&forestInterval, &forestChance, &forestMax, &forestIntercept, &weight); err != nil {
 		t.Fatal(err)
 	}
-	if forestInterval != 1800 || forestChance != 5000 || forestMax != 10 || forestIntercept != 1000 || weight != 1 {
+	if forestInterval != 1800 || forestChance != 5000 || forestMax != 5 || forestIntercept != 1000 || weight != 1 {
 		t.Fatalf("forest rule = %d/%d/%d/%d weight=%d", forestInterval, forestChance, forestMax, forestIntercept, weight)
+	}
+}
+
+func TestStoreUpdatesLegacyForestEdgeMonsterCapAndPopulation(t *testing.T) {
+	_, db := newTestStore(t)
+	if _, err := db.Exec(`UPDATE location_monster_rules SET max_monsters = 10 WHERE location_id = 'forest_edge' AND spawn_chance_bps = 5000`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE location_monster_populations SET monster_count = 8 WHERE location_id = 'forest_edge'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(db); err != nil {
+		t.Fatal(err)
+	}
+	var maxMonsters, monsterCount int
+	if err := db.QueryRow(`SELECT max_monsters FROM location_monster_rules WHERE location_id = 'forest_edge'`).Scan(&maxMonsters); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT monster_count FROM location_monster_populations WHERE location_id = 'forest_edge'`).Scan(&monsterCount); err != nil {
+		t.Fatal(err)
+	}
+	if maxMonsters != 5 || monsterCount != 5 {
+		t.Fatalf("forest edge legacy state = max %d, population %d; want 5, 5", maxMonsters, monsterCount)
 	}
 }
 
@@ -249,7 +272,7 @@ func TestLocationMonsterSettlementAdvancesDowntimeAtCapWithoutHistoricalRolls(t 
 	store, db := newTestStore(t)
 	start := time.Unix(1_700_000_000, 0).UTC()
 	store.now = func() time.Time { return start.Add(10 * 1800 * time.Second) }
-	setLocationMonsterPopulation(t, db, "forest_edge", 9, start.Unix())
+	setLocationMonsterPopulation(t, db, "forest_edge", 4, start.Unix())
 	var calls int
 	store.monsterRoll = func() int {
 		calls++
@@ -260,10 +283,10 @@ func TestLocationMonsterSettlementAdvancesDowntimeAtCapWithoutHistoricalRolls(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.MonsterCount != 10 || calls != 1 || !state.SettledAt.Equal(start.Add(10*1800*time.Second)) {
+	if state.MonsterCount != 5 || calls != 1 || !state.SettledAt.Equal(start.Add(10*1800*time.Second)) {
 		t.Fatalf("settlement = %+v, rolls = %d", state, calls)
 	}
-	if computation := state.Computation; computation == nil || computation.Intervals != 10 || computation.MonsterCountBefore != 9 || computation.MonsterCountAfter != 10 || computation.Outcome != "spawned" {
+	if computation := state.Computation; computation == nil || computation.Intervals != 10 || computation.MonsterCountBefore != 4 || computation.MonsterCountAfter != 5 || computation.Outcome != "spawned" {
 		t.Fatalf("settlement computation = %+v", state.Computation)
 	}
 
@@ -271,7 +294,7 @@ func TestLocationMonsterSettlementAdvancesDowntimeAtCapWithoutHistoricalRolls(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.MonsterCount != 10 || calls != 1 {
+	if state.MonsterCount != 5 || calls != 1 {
 		t.Fatalf("capped repeat settlement = %+v, rolls = %d", state, calls)
 	}
 }

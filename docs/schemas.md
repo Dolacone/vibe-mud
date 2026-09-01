@@ -317,7 +317,7 @@ CREATE TABLE IF NOT EXISTS location_monster_rules (
 );
 ```
 
-`camp` 使用 1800 秒、0%、0 隻與 0%。`forest_edge` 使用 1800 秒、50%、10 隻與 10%。
+`camp` 使用 1800 秒、0%、0 隻與 0%。`forest_edge` 使用 1800 秒、50%、5 隻與 10%。
 
 ## location_monster_encounters
 
@@ -932,7 +932,7 @@ VALUES (1, 'rat_tail', 5000, 1);
 
 INSERT OR IGNORE INTO location_monster_rules (location_id, spawn_interval_seconds, spawn_chance_bps, max_monsters, intercept_chance_bps) VALUES
 ('camp', 1800, 0, 0, 0),
-('forest_edge', 1800, 5000, 10, 1000);
+('forest_edge', 1800, 5000, 5, 1000);
 
 INSERT OR IGNORE INTO location_monster_encounters (location_id, monster_type_id, encounter_weight)
 VALUES ('forest_edge', 1, 1);

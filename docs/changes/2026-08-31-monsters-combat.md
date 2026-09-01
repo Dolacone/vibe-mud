@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Ready-to-implement
+status: Ready-to-review
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -182,5 +182,5 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`; `Task 1 -> T
 
 ## Test Tuning
 
-- [ ] Task 6 [parallel: no]: Change only the `forest_edge` backend data definition and existing-database update to a 50% spawn chance and 5-Monster cap in `internal/authapi/store.go`. Update Store tests and `docs/schemas.md`.
+- [x] Task 6 [parallel: no]: Change only the `forest_edge` backend data definition and existing-database update to a 50% spawn chance and 5-Monster cap in `internal/authapi/store.go`. Update Store tests and `docs/schemas.md`.
   - REQ-025.13: `forest_edge` 的生成間隔、生成機率、數量上限與單隻攔截機率必須由後端資料定義。
