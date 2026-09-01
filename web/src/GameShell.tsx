@@ -17,7 +17,7 @@ const RESOURCE_ORDER = ["food", "wood", "stone", "metal", "fiber", "hide", "medi
 
 export type GameShellPlayer = {
   ap: number;
-  hp?: number;
+  hp: number;
   carried_weight: number;
   movement_weight_threshold: number;
   resources: Resource[];
@@ -77,8 +77,8 @@ export function GameShell({ player, tabContent, activeTab, defaultTab = "map", o
           <span className="game-shell__status-item" aria-label={`目前 AP ${player.ap}`}>
             <span aria-hidden="true">AP {player.ap}</span>
           </span>
-          <span className="game-shell__status-item" aria-label={`目前 HP ${player.hp ?? 0}`}>
-            <span aria-hidden="true">HP {player.hp ?? 0}</span>
+          <span className="game-shell__status-item" aria-label={`目前 HP ${player.hp}`}>
+            <span aria-hidden="true">HP {player.hp}</span>
           </span>
           <span className={`game-shell__status-item game-shell__status-item--weight game-shell__status-item--${currentWeightState}`} aria-label={weightLabel}>
             <span aria-hidden="true">{weightLabel}</span>
