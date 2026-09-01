@@ -754,13 +754,13 @@ SELECT id, 0, ? FROM locations;`, migrationNow.Unix()); err != nil {
 	}
 	if _, err := tx.Exec(`
 UPDATE location_monster_rules
-SET max_monsters = 5
-WHERE location_id = 'forest_edge' AND spawn_chance_bps = 5000 AND max_monsters = 10;
+SET spawn_chance_bps = 5000, max_monsters = 5
+WHERE location_id = 'forest_edge';
 UPDATE location_monster_populations
 SET monster_count = 5
-WHERE location_id = 'forest_edge' AND monster_count > 5;`); err != nil {
+WHERE location_id = 'forest_edge' AND monster_count > 5`); err != nil {
 		_ = tx.Rollback()
-		return nil, fmt.Errorf("update forest edge monster cap: %w", err)
+		return nil, fmt.Errorf("apply forest edge monster test values: %w", err)
 	}
 	if _, err := tx.Exec(`
 INSERT OR IGNORE INTO building_recipes (id, display_name, building_level, required_ap, extension_slot_count) VALUES

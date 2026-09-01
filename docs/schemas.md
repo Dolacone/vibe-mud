@@ -983,7 +983,9 @@ Existing databases gain the Sawmill Package recipe and extension definition seed
 
 Existing databases gain full-HP player rows, empty Location Monster populations, Monster rules, Forest Rat, Rat Tail, encounter weight, and drop definitions. Population settlement starts at migration time, so earlier downtime does not create Monsters.
 
-Store initialization also seeds the typed Convert methods, global hand method reference, Sawmill capability, Wood Essence T1, and Sawmill Package T1 only when each row is missing. Direct edits to existing definition rows persist across Store reinitialization.
+Store initialization also seeds the typed Convert methods, global hand method reference, Sawmill capability, Wood Essence T1, and Sawmill Package T1 only when each row is missing.
+
+初始化會將既有 `forest_edge` rule 的 spawn chance 與 Monster population 套用為 5000 與 5。population 大於 5 時會降為 5。
 
 Existing Building recipes and rows gain a seven-day maximum durability snapshot. Existing completed Buildings receive an expiry seven days after migration. Existing under-construction Buildings keep a `NULL` expiry until completion.
 

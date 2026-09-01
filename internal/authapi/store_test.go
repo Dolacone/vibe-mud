@@ -106,9 +106,9 @@ func TestStoreInitializesMonsterAndCombatSchemaSeeds(t *testing.T) {
 	}
 }
 
-func TestStoreUpdatesLegacyForestEdgeMonsterCapAndPopulation(t *testing.T) {
+func TestStoreAppliesForestEdgeMonsterTestValuesAndClampsPopulation(t *testing.T) {
 	_, db := newTestStore(t)
-	if _, err := db.Exec(`UPDATE location_monster_rules SET max_monsters = 10 WHERE location_id = 'forest_edge' AND spawn_chance_bps = 5000`); err != nil {
+	if _, err := db.Exec(`UPDATE location_monster_rules SET spawn_chance_bps = 2500, max_monsters = 10 WHERE location_id = 'forest_edge'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE location_monster_populations SET monster_count = 8 WHERE location_id = 'forest_edge'`); err != nil {
@@ -117,15 +117,15 @@ func TestStoreUpdatesLegacyForestEdgeMonsterCapAndPopulation(t *testing.T) {
 	if _, err := NewStore(db); err != nil {
 		t.Fatal(err)
 	}
-	var maxMonsters, monsterCount int
-	if err := db.QueryRow(`SELECT max_monsters FROM location_monster_rules WHERE location_id = 'forest_edge'`).Scan(&maxMonsters); err != nil {
+	var spawnChance, maxMonsters, monsterCount int
+	if err := db.QueryRow(`SELECT spawn_chance_bps, max_monsters FROM location_monster_rules WHERE location_id = 'forest_edge'`).Scan(&spawnChance, &maxMonsters); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT monster_count FROM location_monster_populations WHERE location_id = 'forest_edge'`).Scan(&monsterCount); err != nil {
 		t.Fatal(err)
 	}
-	if maxMonsters != 5 || monsterCount != 5 {
-		t.Fatalf("forest edge legacy state = max %d, population %d; want 5, 5", maxMonsters, monsterCount)
+	if spawnChance != 5000 || maxMonsters != 5 || monsterCount != 5 {
+		t.Fatalf("forest edge state = chance %d, max %d, population %d; want 5000, 5, 5", spawnChance, maxMonsters, monsterCount)
 	}
 }
 
