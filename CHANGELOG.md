@@ -1,6 +1,12 @@
-<!-- last_reviewed: 2026-08-31 -->
+<!-- last_reviewed: 2026-09-01 -->
 
 # Changelog
+
+## 2026-09-01
+
+- Added timestamp-settled Location Monster populations.
+- Added active Attack and movement interception combat.
+- Added timestamp-derived HP, Monster drops, combat logs, and mobile combat UI.
 
 ## 2026-08-31
 
