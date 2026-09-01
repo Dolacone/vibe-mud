@@ -1,6 +1,6 @@
 ---
 title: "Location monsters and combat"
-status: Ready-to-review
+status: Issues-confirmed
 created: 2026-08-31
 doc_type: change
 last_reviewed: 2026-09-01
@@ -156,7 +156,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 ## Review Issues
 
 - [x] [Major] REQ-018.18 要求 `attack` 依 Monster 數量與 AP 判定，但 `filterAvailableGameplayOptions` 從未呼叫 `canAttack` 或加入 `attack`。所有真實 player state 都會漏掉 `attack`，因此 REQ-022.6 的 `地區` 操作永遠不會出現。把判定接入 response filtering，並用 server response 測試取代目前只測未使用 helper 的測試。
-- [x] [Major] REQ-025.17 要求記錄每次 Monster 生成計算，但 `Attack` 與 `MoveWithCombat` 先取得 settlement computation，再以 `getPlayerStateTx` 覆寫它。無 Monster 的 Attack 更直接回傳沒有 computation 的 state。`logMonsterSettlement` 隨後記錄第二次零間隔結算或捏造的 0 機率結果，遺失實際 interval、機率、前後數量與 outcome。保留並逐筆記錄本次 request 的實際結算，包含成功移動時的 origin 與 destination 結算。
+- [ ] [Major] REQ-025.17 要求記錄每次 Monster 生成計算。`MoveWithCombat` 已把 origin 與 destination 放入 `MonsterSettlements`，但 `logMonsterSettlement` 仍只讀指向 destination 的 singular `MonsterSettlement`。成功移動仍漏記 origin 結算，且沒有 server log test 會偵測遺漏。逐筆記錄本次 request 的實際結算，並測試兩個 Location 的 log。
 - [x] [Major] REQ-025.10 要求總攔截率等於 `1 - (1 - 單隻攔截率)^N`，但 `combinedInterceptionChanceBPS` 向上取整後用一次 basis-point roll。5 隻 Monster、單隻 10% 時，要求值是 40.951%，實作值是 40.96%。刪除改變機率的向上取整，讓實際抽選符合公式。
 - [x] [Major] REQ-026.12 要求傷害均勻抽選整數，但 `damageRoll` 把 10000 個 roll 直接切成傷害區間。MVP 攻擊力 3 的三個結果分別取得 3334、3333、3333 個 roll，並不均勻。改用無偏差的整數抽選。
 - [x] [Major] REQ-026.32 要求每個 `attack` failure access log 都包含 user ID、Location、action、outcome、拒絕原因與 request ID。未登入或 session 無效時，`requirePlayerName` 仍交給 `attack` 回傳 401，但沒有設定 Location 與拒絕原因。補齊 `unknown` Location 與 authentication failure reason，並加入 access log 測試。
@@ -166,3 +166,7 @@ Dependency graph: `Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5`.
 - [x] [Minor] `source_paths` 漏列實際修改的 `web/src/App.tsx` 與 `web/src/GameShell.test.tsx`。
 - [x] [Minor] `docs/schemas.md` 的 `player_combat_definitions.id` 漏掉實際 schema 的 `CHECK (id > 0)`。
 - [x] [Minor] REQ-005.19 要求 intercepted Move response 包含 Combat 與最新 state，但 server tests 沒有呼叫 intercepted Move endpoint。現有 Store 與 frontend 測試無法在 handler 遺漏 `combat` 時失敗。
+- [ ] [Major] REQ-025.17 只需要依序交接實際 settlement computations。`PlayerState` 同時保存 singular `MonsterSettlement` 與 plural `MonsterSettlements`，logger 還為 singular 缺值捏造結果。刪除重複欄位與 fallback，改用單一 ordered collection。
+- [ ] [Major] REQ-025.10 要求使用公式所得的總攔截率，REQ-025.17 要求記錄該機率。實際抽選使用 `CombinedChance`，log 卻使用截斷的 `CombinedChanceBPS`。`PerMonsterChance` 與 `CombinedChance` 兩個欄位目前沒有 reader。保留一套準確且會被記錄的機率欄位，刪除重複 representation。
+- [ ] [Major] REQ-012.4 只要求顯示後端回傳的 HP。`GameShell.test.tsx` 強制繞過 required type 與 response validator，把 HP cast 成 `undefined`，再固定 `HP undefined` 行為。這個測試不覆蓋任何 copied criterion。刪除測試，不得為缺少 HP 增加 fallback。
+- [ ] [Major] REQ-026.12 只需要一次均勻整數抽選。`damageRandom` 已保證回傳 non-nil function，但 `damageRoll` 又加入不可到達的 nil fallback。刪除重複 defensive branch。
